@@ -107,8 +107,13 @@ def quick_query(index_code=None):
             print()
 
 
-def run_pipeline():
-    """运行完整分析流程"""
+def run_pipeline(force_update=False):
+    """
+    运行完整分析流程
+
+    Args:
+        force_update: 是否强制完整更新（忽略增量检查）
+    """
     # 切换到 skill 目录
     script_dir = Path(__file__).parent.parent
     os.chdir(script_dir)
@@ -175,7 +180,7 @@ def run_pipeline():
     # 步骤 2: 获取数据
     print("\n[步骤 2/5] 获取指数数据...")
     try:
-        fetch_all_data('data/raw_data.csv')
+        fetch_all_data('data/raw_data.csv', force_update=force_update)
     except Exception as e:
         print(f"[ERROR] 数据获取失败: {e}")
         sys.exit(1)
@@ -261,7 +266,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py              # 运行完整分析流程
+  python main.py              # 运行完整分析流程（自动检查增量更新）
+  python main.py --force      # 强制完整更新所有历史数据
   python main.py --query      # 快速查询已有数据（所有指数）
   python main.py --query ZZ500   # 快速查询中证500
   python main.py --help       # 显示帮助信息
@@ -273,6 +279,8 @@ def main():
 
     parser.add_argument('--query', nargs='?', const='all',
                         help='快速查询模式：查看已有数据（可选指定 ZZ500 或 ZZ1000）')
+    parser.add_argument('--force', '-f', action='store_true',
+                        help='强制完整更新所有历史数据（忽略增量检查）')
 
     args = parser.parse_args()
 
@@ -283,7 +291,7 @@ def main():
         return
 
     # 否则执行完整分析流程
-    run_pipeline()
+    run_pipeline(force_update=args.force)
 
 
 if __name__ == '__main__':

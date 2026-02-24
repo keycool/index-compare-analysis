@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-0.2.0-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-0.3.0-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,8 +19,10 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v0.2.0)
+### 最新优化 (v0.3.0)
 
+- ✅ **智能增量更新**：自动检测本地数据与远程数据，只获取新增数据，大幅提升运行速度
+- ✅ **强制更新选项**：支持 `--force` 参数强制完整更新所有历史数据
 - ✅ 图表分位数标注优化：显示在图表下方中央，不遮挡内容
 - ✅ 红绿虚线精准匹配：标注显示范围内的最高点和最低点
 - ✅ 图表高度优化：增加底部空间，完整显示所有标注
@@ -65,6 +67,13 @@ TUSHARE_TOKEN=你的Token
 ```bash
 cd .claude/skills/index-compare
 python scripts/main.py
+```
+> 首次运行会获取全部历史数据，之后会自动检测增量更新，速度更快
+
+**强制完整更新**
+```bash
+# 强制重新获取所有历史数据
+python scripts/main.py --force
 ```
 
 **快速查询（查看已有数据）**
@@ -212,6 +221,12 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v0.3.0 (2026-02-24)
+- ✨ 新增智能增量更新功能：自动检测本地数据与远程数据状态
+- ✨ 新增 --force 参数：支持强制完整更新所有历史数据
+- ✨ 优化运行速度：数据已是最新时跳过获取，直接计算
+- 🔧 修复数据更新检测问题：确保获取最新交易日数据
 
 ### v0.2.0 (2026-02-12)
 - ✨ 新增自动清理临时文件功能

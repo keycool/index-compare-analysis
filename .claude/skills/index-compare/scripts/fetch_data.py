@@ -166,13 +166,13 @@ def get_index_data(pro, ts_code, start_date, end_date, config):
                 raise Exception(f"获取 {ts_code} 数据失败，已重试 {retry_times} 次")
 
 
-def fetch_all_data(output_path, start_date='20150101', token=None, force_update=False):
+def fetch_all_data(output_path, start_date='20070101', token=None, force_update=False):
     """
     获取所有指数数据（支持增量更新）
 
     Args:
         output_path: 输出文件路径
-        start_date: 开始日期，默认 2015-01-01
+        start_date: 开始日期，默认 2007-01-01（约19年历史数据）
         token: Tushare token（可选，默认从环境变量读取）
         force_update: 是否强制完整更新（忽略增量检查）
     """

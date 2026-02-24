@@ -125,8 +125,8 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000):
                 yanchor='top'
             )
         ],
-        margin=dict(l=50, r=50, t=50, b=80),
-        height=380,
+        margin=dict(l=50, r=50, t=50, b=90),
+        height=450,
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(17, 24, 39, 0.5)',
         font=dict(color='#94a3b8'),
@@ -194,8 +194,8 @@ def create_price_chart(df, indices_config, recent_days=1000):
             x=1,
             font=dict(color='#94a3b8', size=11)
         ),
-        margin=dict(l=60, r=60, t=60, b=50),
-        height=380,
+        margin=dict(l=60, r=60, t=60, b=60),
+        height=450,
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(17, 24, 39, 0.5)',
         font=dict(color='#94a3b8'),

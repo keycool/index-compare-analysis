@@ -2,130 +2,415 @@
 # -*- coding: utf-8 -*-
 """
 指数比价分析 - 主入口脚本
-一键执行完整分析流程
+一键执行完整分析流程，并输出结构化 JSON 结果。
 """
 
+import argparse
+import json
+import logging
 import os
 import sys
-import argparse
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-# 添加父目录到 Python 路径以支持模块导入
-script_dir = Path(__file__).parent.parent
-sys.path.insert(0, str(script_dir))
+import pandas as pd
+
+# 添加 skill 根目录到 Python 路径以支持模块导入
+SCRIPT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(SCRIPT_ROOT))
+
+from scripts.feishu import FeishuWebhook
+from scripts.lib.feishu_bitable import FeishuBitableClient
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
-def quick_query(index_code=None):
+def load_env_file() -> None:
+    """加载 .env 文件中的环境变量（若存在）。"""
+    env_path = SCRIPT_ROOT / ".env"
+    if not env_path.exists():
+        return
+
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            text = line.strip()
+            if not text or text.startswith("#") or "=" not in text:
+                continue
+            key, value = text.split("=", 1)
+            os.environ[key.strip()] = value.strip()
+
+
+def get_project_root() -> Path:
+    """项目根目录：CSI300 Relative Index。"""
+    return Path(__file__).resolve().parents[4]
+
+
+def get_excel_output_path() -> Path:
+    """获取输出 Excel 路径。"""
+    env_path = os.environ.get("INDEX_COMPARE_OUTPUT_PATH")
+    if env_path:
+        return Path(env_path)
+
+    return get_project_root() / "index_compare_enhanced.xlsx"
+
+
+def normalize_date_str(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce").dt.strftime("%Y-%m-%d")
+
+
+def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, Any]) -> pd.DataFrame:
     """
-    快速查询模式：读取已有数据并显示
-
-    Args:
-        index_code: 指数代码（'ZZ500', 'ZZ1000', 或 None 表示全部）
+    将处理后数据转换为统一导出结构（用于 Excel + 飞书多维表格）。
     """
-    import json
-    import pandas as pd
+    if processed_df.empty:
+        return pd.DataFrame()
 
-    # 切换到 skill 目录
+    df = processed_df.copy()
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    else:
+        df = df.reset_index().rename(columns={df.index.name or "index": "trade_date"})
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+
+    p500 = conclusions.get("ZZ500", {}).get("percentile", {}).get("value")
+    p1000 = conclusions.get("ZZ1000", {}).get("percentile", {}).get("value")
+    pa500 = conclusions.get("ZZA500", {}).get("percentile", {}).get("value")
+
+    d500 = conclusions.get("ZZ500", {}).get("deviation", {}).get("value")
+    d1000 = conclusions.get("ZZ1000", {}).get("deviation", {}).get("value")
+    da500 = conclusions.get("ZZA500", {}).get("deviation", {}).get("value")
+
+    export_df = pd.DataFrame(
+        {
+            "日期": df["trade_date"].dt.strftime("%Y-%m-%d"),
+            "沪深300": df.get("HS300"),
+            "中证500": df.get("ZZ500"),
+            "中证1000": df.get("ZZ1000"),
+            "中证A500": df.get("ZZA500"),
+            "上证综指": df.get("SHCI"),
+            "500/300比价": df.get("ZZ500_ratio"),
+            "1000/300比价": df.get("ZZ1000_ratio"),
+            "A500/300比价": df.get("ZZA500_ratio"),
+            "500分位": p500,
+            "1000分位": p1000,
+            "A500分位": pa500,
+            "500偏离(%)": d500,
+            "1000偏离(%)": d1000,
+            "A500偏离(%)": da500,
+        }
+    )
+
+    export_df["500建议"] = ""
+    export_df["1000建议"] = ""
+    export_df["A500建议"] = ""
+
+    if not export_df.empty:
+        latest_idx = export_df.index[-1]
+        export_df.loc[latest_idx, "500建议"] = conclusions.get("ZZ500", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "1000建议"] = conclusions.get("ZZ1000", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "A500建议"] = conclusions.get("ZZA500", {}).get("recommendation", {}).get("action", "")
+
+    export_df["数据源"] = "tushare"
+
+    number_cols = [
+        "沪深300",
+        "中证500",
+        "中证1000",
+        "中证A500",
+        "上证综指",
+        "500/300比价",
+        "1000/300比价",
+        "A500/300比价",
+        "500分位",
+        "1000分位",
+        "A500分位",
+        "500偏离(%)",
+        "1000偏离(%)",
+        "A500偏离(%)",
+    ]
+    for col in number_cols:
+        if col in export_df.columns:
+            export_df[col] = pd.to_numeric(export_df[col], errors="coerce")
+
+    export_df = export_df.sort_values("日期").drop_duplicates(subset=["日期"], keep="last")
+
+    ordered_cols = [
+        "日期",
+        "沪深300",
+        "中证500",
+        "中证1000",
+        "中证A500",
+        "上证综指",
+        "500/300比价",
+        "1000/300比价",
+        "A500/300比价",
+        "500分位",
+        "1000分位",
+        "A500分位",
+        "500偏离(%)",
+        "1000偏离(%)",
+        "A500偏离(%)",
+        "500建议",
+        "1000建议",
+        "A500建议",
+        "数据源",
+    ]
+    return export_df[ordered_cols]
+
+
+def save_to_excel(df_new: pd.DataFrame, output_path: Path) -> tuple[bool, pd.DataFrame, pd.DataFrame]:
+    """
+    追加模式保存，按日期去重，返回新增行用于飞书同步。
+    """
+    if df_new.empty:
+        logger.warning("导出数据为空，跳过 Excel 保存")
+        return False, pd.DataFrame(), pd.DataFrame()
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        df_existing = pd.DataFrame()
+        existing_dates: set[str] = set()
+
+        if output_path.exists():
+            try:
+                df_existing = pd.read_excel(output_path)
+                if "日期" in df_existing.columns:
+                    df_existing["日期"] = normalize_date_str(df_existing["日期"])
+                    existing_dates = set(df_existing["日期"].dropna().astype(str).tolist())
+                df_existing = df_existing.drop_duplicates(subset=["日期"], keep="last")
+                logger.info(f"已读取原有 Excel 数据: {len(df_existing)} 条")
+            except Exception as exc:
+                logger.warning(f"读取原有 Excel 失败，将创建新文件: {exc}")
+
+        df_new_local = df_new.copy()
+        df_new_local["日期"] = normalize_date_str(df_new_local["日期"])
+        df_new_records = df_new_local[~df_new_local["日期"].isin(existing_dates)].copy()
+
+        if not df_existing.empty:
+            df_merged = pd.concat([df_existing, df_new_local], ignore_index=True)
+            df_merged = df_merged.drop_duplicates(subset=["日期"], keep="last").sort_values("日期")
+        else:
+            df_merged = df_new_local.sort_values("日期")
+
+        df_merged.to_excel(output_path, index=False)
+
+        logger.info(
+            "Excel 保存成功: %s，合并后 %s 条，新增 %s 条",
+            output_path,
+            len(df_merged),
+            len(df_new_records),
+        )
+        return True, df_merged, df_new_records
+    except Exception as exc:
+        logger.error(f"保存 Excel 失败: {exc}")
+        return False, pd.DataFrame(), pd.DataFrame()
+
+
+def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
+    """同步记录到飞书多维表格。"""
+    required_env = ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_APP_TOKEN", "FEISHU_TABLE_ID"]
+    missing = [key for key in required_env if not os.environ.get(key)]
+    if missing:
+        message = f"配置不完整，缺少: {', '.join(missing)}"
+        logger.warning(f"飞书多维表格{message}，跳过同步")
+        return {
+            "success": False,
+            "message": message,
+            "synced": 0,
+            "failed": 0,
+            "total": 0,
+            "errors": [],
+        }
+
+    if df_sync.empty:
+        return {
+            "success": True,
+            "message": "无新增数据",
+            "synced": 0,
+            "failed": 0,
+            "total": 0,
+            "errors": [],
+        }
+
+    try:
+        client = FeishuBitableClient()
+
+        synced = 0
+        failed = 0
+        error_examples: list[Dict[str, str]] = []
+
+        for _, row in df_sync.iterrows():
+            payload = row.to_dict()
+            result = client.add_index_compare_record(payload)
+            if result.get("success"):
+                synced += 1
+                continue
+
+            failed += 1
+            error_message = result.get("message") or result.get("error") or "unknown error"
+            logger.warning("飞书多维表格同步失败: date=%s, error=%s", payload.get("日期"), error_message)
+            if len(error_examples) < 5:
+                error_examples.append({"date": str(payload.get("日期")), "error": str(error_message)})
+
+        total = len(df_sync)
+        success = failed == 0 and synced > 0
+        message = "ok" if success else f"部分或全部失败: 成功 {synced}/{total}"
+
+        return {
+            "success": success,
+            "message": message,
+            "synced": synced,
+            "failed": failed,
+            "total": total,
+            "errors": error_examples,
+        }
+    except Exception as exc:
+        logger.error(f"飞书多维表格同步异常: {exc}")
+        return {
+            "success": False,
+            "message": str(exc),
+            "synced": 0,
+            "failed": 0,
+            "total": len(df_sync),
+            "errors": [{"error": str(exc)}],
+        }
+
+
+def print_terminal_summary(latest_row: Dict[str, Any], conclusions: Dict[str, Any], report_file: str) -> None:
+    """打印简要结果摘要（保留原有终端体验）。"""
+    print("\n" + "=" * 60)
+    print("         [OK] 分析完成!")
+    print("=" * 60)
+
+    latest_date = latest_row.get("日期", "未知")
+    print(f"\n[DATA] 最新数据 ({latest_date}):")
+    print("+-------------+----------+----------+----------+")
+    print("| 指标        | 中证500  | 中证1000 | 中证A500 |")
+    print("+-------------+----------+----------+----------+")
+    print(
+        f"| 当前比价    | {float(latest_row.get('500/300比价', 0)):>8.4f} | "
+        f"{float(latest_row.get('1000/300比价', 0)):>8.4f} | "
+        f"{float(latest_row.get('A500/300比价', 0)):>8.4f} |"
+    )
+    print(
+        f"| 历史分位    | {float(latest_row.get('500分位', 0)):>7.1f}% | "
+        f"{float(latest_row.get('1000分位', 0)):>7.1f}% | "
+        f"{float(latest_row.get('A500分位', 0)):>7.1f}% |"
+    )
+    print(
+        f"| 30日偏离    | {float(latest_row.get('500偏离(%)', 0)):>+7.1f}% | "
+        f"{float(latest_row.get('1000偏离(%)', 0)):>+7.1f}% | "
+        f"{float(latest_row.get('A500偏离(%)', 0)):>+7.1f}% |"
+    )
+    print("+-------------+----------+----------+----------+")
+
+    print("\n[RECOMMEND] 配置建议:")
+    for code, name in [("ZZ500", "中证500"), ("ZZ1000", "中证1000"), ("ZZA500", "中证A500")]:
+        recommendation = conclusions.get(code, {}).get("recommendation", {})
+        action = recommendation.get("action", "-")
+        icon = recommendation.get("icon", "")
+        reasons = recommendation.get("reasons", [])
+        print(f"\n【{name}】{icon} {action}")
+        for reason in reasons:
+            print(f"  - {reason}")
+
+    print(f"\n[REPORT] 报告文件: {report_file}")
+
+
+def quick_query(index_code: Optional[str] = None) -> None:
+    """快速查询模式：读取已有数据并显示。"""
     script_dir = Path(__file__).parent.parent
     os.chdir(script_dir)
 
-    # 检查数据文件是否存在
-    conclusions_file = Path('data/conclusions.json')
-    processed_file = Path('data/processed_data.csv')
+    conclusions_file = Path("data/conclusions.json")
+    processed_file = Path("data/processed_data.csv")
 
-    if not conclusions_file.exists():
+    if not conclusions_file.exists() or not processed_file.exists():
         print("[错误] 数据文件不存在")
         print("\n请先运行完整分析生成数据:")
         print("  python scripts/main.py")
         sys.exit(1)
 
-    # 读取分析结论
-    with open(conclusions_file, 'r', encoding='utf-8') as f:
+    with open(conclusions_file, "r", encoding="utf-8") as f:
         conclusions = json.load(f)
 
-    # 读取处理后的数据（获取更新时间）
-    if processed_file.exists():
-        df = pd.read_csv(processed_file, parse_dates=['trade_date'])
-        latest_date = df.iloc[-1]['trade_date'].strftime('%Y-%m-%d')
-    else:
-        latest_date = "未知"
+    df = pd.read_csv(processed_file, parse_dates=["trade_date"])
+    latest_date = df.iloc[-1]["trade_date"].strftime("%Y-%m-%d")
 
-    # 验证指数代码
-    valid_codes = ['ZZ500', 'ZZ1000', 'ZZA500']
+    valid_codes = ["ZZ500", "ZZ1000", "ZZA500"]
     if index_code and index_code not in valid_codes:
         print(f"[错误] 指数代码 {index_code} 不存在")
         print(f"\n支持的代码: {', '.join(valid_codes)}")
         sys.exit(1)
 
-    # 打印标题
     print("=" * 60)
     print("         指数比价快速查询")
     print("=" * 60)
     print(f"数据更新时间: {latest_date}")
     print()
 
-    # 如果指定了特定指数，只显示该指数
-    if index_code:
-        display_codes = [index_code]
-    else:
-        display_codes = valid_codes
+    display_codes = [index_code] if index_code else valid_codes
 
-    # 显示数据摘要表格
     if len(display_codes) > 1:
         print("最新数据:")
         print("┌─────────────┬──────────┬──────────┬──────────┐")
         print("│ 指标        │ 中证500  │ 中证1000 │ 中证A500 │")
         print("├─────────────┼──────────┼──────────┼──────────┤")
 
-        zz500 = conclusions.get('ZZ500', {})
-        zz1000 = conclusions.get('ZZ1000', {})
-        zza500 = conclusions.get('ZZA500', {})
+        zz500 = conclusions.get("ZZ500", {})
+        zz1000 = conclusions.get("ZZ1000", {})
+        zza500 = conclusions.get("ZZA500", {})
 
-        print(f"│ 当前比价    │ {zz500.get('current_ratio', 0):>8.4f} │ {zz1000.get('current_ratio', 0):>8.4f} │ {zza500.get('current_ratio', 0):>8.4f} │")
-        print(f"│ 历史分位    │ {zz500.get('percentile', {}).get('value', 0):>7.1f}% │ {zz1000.get('percentile', {}).get('value', 0):>7.1f}% │ {zza500.get('percentile', {}).get('value', 0):>7.1f}% │")
-        print(f"│ 30日偏离    │ {zz500.get('deviation', {}).get('value', 0):>+7.1f}% │ {zz1000.get('deviation', {}).get('value', 0):>+7.1f}% │ {zza500.get('deviation', {}).get('value', 0):>+7.1f}% │")
+        print(
+            f"│ 当前比价    │ {zz500.get('current_ratio', 0):>8.4f} │ "
+            f"{zz1000.get('current_ratio', 0):>8.4f} │ {zza500.get('current_ratio', 0):>8.4f} │"
+        )
+        print(
+            f"│ 历史分位    │ {zz500.get('percentile', {}).get('value', 0):>7.1f}% │ "
+            f"{zz1000.get('percentile', {}).get('value', 0):>7.1f}% │ "
+            f"{zza500.get('percentile', {}).get('value', 0):>7.1f}% │"
+        )
+        print(
+            f"│ 30日偏离    │ {zz500.get('deviation', {}).get('value', 0):>+7.1f}% │ "
+            f"{zz1000.get('deviation', {}).get('value', 0):>+7.1f}% │ "
+            f"{zza500.get('deviation', {}).get('value', 0):>+7.1f}% │"
+        )
 
-        zz500_rec = zz500.get('recommendation', {})
-        zz1000_rec = zz1000.get('recommendation', {})
-        zza500_rec = zza500.get('recommendation', {})
-        zz500_text = f"{zz500_rec.get('icon', '')} {zz500_rec.get('action', '')}"
-        zz1000_text = f"{zz1000_rec.get('icon', '')} {zz1000_rec.get('action', '')}"
-        zza500_text = f"{zza500_rec.get('icon', '')} {zza500_rec.get('action', '')}"
-
+        zz500_text = f"{zz500.get('recommendation', {}).get('icon', '')} {zz500.get('recommendation', {}).get('action', '')}"
+        zz1000_text = f"{zz1000.get('recommendation', {}).get('icon', '')} {zz1000.get('recommendation', {}).get('action', '')}"
+        zza500_text = f"{zza500.get('recommendation', {}).get('icon', '')} {zza500.get('recommendation', {}).get('action', '')}"
         print(f"│ 配置建议    │ {zz500_text:^8} │ {zz1000_text:^8} │ {zza500_text:^8} │")
         print("└─────────────┴──────────┴──────────┴──────────┘")
         print()
 
-    # 显示详细分析摘要
     for code in display_codes:
-        if code in conclusions:
-            data = conclusions[code]
-            print(data.get('summary', ''))
-            print()
-            print("-" * 60)
-            print()
+        print(conclusions.get(code, {}).get("summary", ""))
+        print()
+        print("-" * 60)
+        print()
 
 
-def run_pipeline(force_update=False):
-    """
-    运行完整分析流程
+def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
+    """运行完整分析流程并返回结构化结果。"""
+    os.chdir(SCRIPT_ROOT)
 
-    Args:
-        force_update: 是否强制完整更新（忽略增量检查）
-    """
-    # 切换到 skill 目录
-    script_dir = Path(__file__).parent.parent
-    os.chdir(script_dir)
+    load_env_file()
 
     # 自动清理临时文件
     try:
         from scripts.cleanup import cleanup_temp_files
+
         deleted_count, triggered = cleanup_temp_files(max_files=20)
         if triggered:
             print(f"[清理] 已清理 {deleted_count} 个临时文件")
     except Exception:
-        pass  # 清理失败不影响主流程
+        pass
 
     print("=" * 60)
     print("         指数比价分析 (Index Compare)")
@@ -133,22 +418,8 @@ def run_pipeline(force_update=False):
     print(f"执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    # 检查环境变量
-    print("\n[步骤 1/5] 检查环境配置...")
-    token = os.environ.get('TUSHARE_TOKEN')
-
-    # 如果环境变量未设置，尝试从 .env 文件读取
-    if not token:
-        env_file = Path('.env')
-        if env_file.exists():
-            with open(env_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('TUSHARE_TOKEN='):
-                        token = line.split('=', 1)[1].strip()
-                        os.environ['TUSHARE_TOKEN'] = token
-                        break
-
+    print("\n[步骤 1/7] 检查环境配置...")
+    token = os.environ.get("TUSHARE_TOKEN")
     if not token:
         print("错误: 未设置 TUSHARE_TOKEN 环境变量")
         print("\n请按以下方式设置:")
@@ -160,139 +431,147 @@ def run_pipeline(force_update=False):
         sys.exit(1)
     print("[OK] Token 已配置")
 
-    # 导入模块
     try:
         from scripts.fetch_data import fetch_all_data
         from scripts.calculate import process_data
         from scripts.analyze import analyze
         from scripts.generate_report import generate_report
-    except ImportError as e:
-        print(f"[ERROR] 导入模块失败: {e}")
-        print("请确保已安装所有依赖: pip install tushare pandas numpy plotly scipy")
+    except ImportError as exc:
+        print(f"[ERROR] 导入模块失败: {exc}")
+        print("请确保已安装所有依赖: pip install tushare pandas numpy plotly scipy requests")
         sys.exit(1)
 
-    # 加载配置获取报告目录
-    import json
-    with open('config.json', 'r', encoding='utf-8') as f:
+    with open("config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
-    report_dir = config['output']['report_dir']
+    report_dir = config["output"]["report_dir"]
 
-    # 步骤 2: 获取数据
-    print("\n[步骤 2/5] 获取指数数据...")
+    print("\n[步骤 2/7] 获取指数数据...")
     try:
-        fetch_all_data('data/raw_data.csv', force_update=force_update)
-    except Exception as e:
-        print(f"[ERROR] 数据获取失败: {e}")
+        fetch_all_data("data/raw_data.csv", force_update=force_update)
+    except Exception as exc:
+        print(f"[ERROR] 数据获取失败: {exc}")
         sys.exit(1)
 
-    # 步骤 3: 计算比价
-    print("\n[步骤 3/5] 计算比价指标...")
+    print("\n[步骤 3/7] 计算比价指标...")
     try:
-        process_data('data/raw_data.csv', 'data/processed_data.csv')
-    except Exception as e:
-        print(f"[ERROR] 比价计算失败: {e}")
+        process_data("data/raw_data.csv", "data/processed_data.csv")
+    except Exception as exc:
+        print(f"[ERROR] 比价计算失败: {exc}")
         sys.exit(1)
 
-    # 步骤 4: 智能分析
-    print("\n[步骤 4/5] 生成智能分析...")
+    print("\n[步骤 4/7] 生成智能分析...")
     try:
-        analyze('data/analysis_results.json', 'data/conclusions.json')
-    except Exception as e:
-        print(f"[ERROR] 智能分析失败: {e}")
+        analyze("data/analysis_results.json", "data/conclusions.json")
+    except Exception as exc:
+        print(f"[ERROR] 智能分析失败: {exc}")
         sys.exit(1)
 
-    # 步骤 5: 生成报告
-    print("\n[步骤 5/5] 生成 HTML 报告...")
+    print("\n[步骤 5/7] 生成 HTML 报告...")
     try:
-        report_file = generate_report('data/processed_data.csv', 'data/conclusions.json', report_dir)
-    except Exception as e:
-        print(f"[ERROR] 报告生成失败: {e}")
+        report_file = generate_report("data/processed_data.csv", "data/conclusions.json", report_dir)
+    except Exception as exc:
+        print(f"[ERROR] 报告生成失败: {exc}")
         sys.exit(1)
 
-    # 读取并显示数据摘要
-    print("\n" + "=" * 60)
-    print("         [OK] 分析完成!")
-    print("=" * 60)
+    processed_df = pd.read_csv("data/processed_data.csv", parse_dates=["trade_date"])
+    with open("data/conclusions.json", "r", encoding="utf-8") as f:
+        conclusions = json.load(f)
 
-    try:
-        import pandas as pd
-        import json
+    print("\n[步骤 6/7] 保存 Excel（追加去重）...")
+    export_df = build_export_dataframe(processed_df, conclusions)
+    excel_output_path = get_excel_output_path()
+    excel_saved, _, new_rows_df = save_to_excel(export_df, excel_output_path)
 
-        # 读取处理后的数据
-        df = pd.read_csv('data/processed_data.csv', parse_dates=['trade_date'])
-        latest = df.iloc[-1]
+    print("\n[步骤 7/7] 同步飞书（Webhook + 多维表格）...")
 
-        # 读取分析结论
-        with open('data/conclusions.json', 'r', encoding='utf-8') as f:
-            conclusions = json.load(f)
+    latest_row: Dict[str, Any] = export_df.iloc[-1].to_dict() if not export_df.empty else {}
 
-        # 显示数据摘要
-        print(f"\n[DATA] 最新数据 ({latest['trade_date'].strftime('%Y-%m-%d')}):")
-        print("+-------------+----------+----------+----------+")
-        print("| 指标        | 中证500  | 中证1000 | 沪深300  |")
-        print("+-------------+----------+----------+----------+")
-        print(f"| 收盘价      | {latest['ZZ500']:>8.2f} | {latest['ZZ1000']:>8.2f} | {latest['HS300']:>8.2f} |")
-        print(f"| 比价        | {latest['ZZ500_ratio']:>8.4f} | {latest['ZZ1000_ratio']:>8.4f} | (基准)   |")
-        print(f"| 历史分位    | {latest['ZZ500_percentile']:>7.1f}% | {latest['ZZ1000_percentile']:>7.1f}% |    -     |")
-        print(f"| 30日偏离    | {latest['ZZ500_deviation']:>7.1f}% | {latest['ZZ1000_deviation']:>7.1f}% |    -     |")
-        print("+-------------+----------+----------+----------+")
+    feishu_sent = False
+    if os.environ.get("FEISHU_WEBHOOK_URL") and latest_row:
+        feishu = FeishuWebhook()
+        feishu_sent = feishu.send(latest_row, conclusions, title="指数比价分析")
 
-        # 显示配置建议
-        print("\n[RECOMMEND] 配置建议:")
-        for idx_name, conclusion in conclusions.items():
-            if idx_name in ['ZZ500', 'ZZ1000', 'ZZA500']:
-                name_map = {'ZZ500': '中证500', 'ZZ1000': '中证1000', 'ZZA500': '中证A500'}
-                name = name_map.get(idx_name, idx_name)
-                rec = conclusion.get('recommendation', {})
-                suggestion = rec.get('action', '标配')
-                icon = rec.get('icon', '')
-                print(f"\n【{name}】{icon} {suggestion}")
-                if 'reasons' in rec:
-                    for reason in rec['reasons']:
-                        print(f"  - {reason}")
+    bitable_result = {
+        "success": False,
+        "message": "未执行",
+        "synced": 0,
+        "failed": 0,
+        "total": 0,
+        "errors": [],
+    }
 
-    except Exception as e:
-        print(f"\n[WARN] 无法显示数据摘要: {e}")
+    if excel_saved:
+        bitable_result = sync_to_feishu_bitable(new_rows_df)
 
-    print(f"\n[REPORT] 报告文件: {report_file}")
-    print("\n提示: 用浏览器打开上述 HTML 文件查看交互式报告")
+    print_terminal_summary(latest_row, conclusions, report_file)
 
-    return report_file
+    core_success = not export_df.empty
+
+    result = {
+        "success": core_success,
+        "source": "tushare",
+        "record_count": int(len(export_df)),
+        "new_record_count": int(len(new_rows_df)),
+        "latest_date": latest_row.get("日期"),
+        "latest": latest_row,
+        "report_file": report_file,
+        "excel_saved": excel_saved,
+        "excel_path": str(excel_output_path) if excel_saved else None,
+        "feishu_sent": feishu_sent,
+        "bitable_synced": bitable_result.get("success", False),
+        "bitable_count": bitable_result.get("synced", 0),
+        "bitable_failed": bitable_result.get("failed", 0),
+        "bitable_total": bitable_result.get("total", 0),
+        "bitable_message": bitable_result.get("message", ""),
+        "bitable_errors": bitable_result.get("errors", []),
+    }
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description='指数比价分析工具 - 一键分析中证500/1000相对沪深300的比价关系',
+        description="指数比价分析工具 - 一体化流程（本地存储 + 飞书同步 + HTML报告）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py              # 运行完整分析流程（自动检查增量更新）
-  python main.py --force      # 强制完整更新所有历史数据
-  python main.py --query      # 快速查询已有数据（所有指数）
+  python main.py                 # 完整流程（自动增量更新）
+  python main.py --force         # 强制完整更新
+  python main.py --query         # 快速查询已有数据（所有指数）
   python main.py --query ZZ500   # 快速查询中证500
-  python main.py --help       # 显示帮助信息
-
-环境变量:
-  TUSHARE_TOKEN              # Tushare API Token (必需)
-        """
+""",
     )
 
-    parser.add_argument('--query', nargs='?', const='all',
-                        help='快速查询模式：查看已有数据（可选指定 ZZ500 或 ZZ1000）')
-    parser.add_argument('--force', '-f', action='store_true',
-                        help='强制完整更新所有历史数据（忽略增量检查）')
+    parser.add_argument(
+        "--query",
+        nargs="?",
+        const="all",
+        help="快速查询模式：查看已有数据（可选指定 ZZ500/ZZ1000/ZZA500）",
+    )
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="强制完整更新所有历史数据（忽略增量检查）",
+    )
 
     args = parser.parse_args()
 
-    # 如果是查询模式，执行查询后直接返回
     if args.query is not None:
-        query_target = None if args.query == 'all' else args.query
+        query_target = None if args.query == "all" else args.query
         quick_query(query_target)
         return
 
-    # 否则执行完整分析流程
     run_pipeline(force_update=args.force)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
+
+
+
+
+
+
+

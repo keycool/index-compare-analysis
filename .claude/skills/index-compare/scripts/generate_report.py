@@ -10,6 +10,7 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
+from typing import Any, Dict, List
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -214,6 +215,123 @@ def create_price_chart(df, indices_config, recent_days=1000):
     return fig
 
 
+
+def get_equity_premium_json_path() -> Path:
+    """获取 Equity Risk Premium 的 dashboard 数据文件路径。"""
+    env_path = os.environ.get('INDEX_COMPARE_ERP_JSON_PATH')
+    if env_path:
+        return Path(env_path)
+
+    # E:/vibe coding/ERP Investment System/Equity Risk Premium/dashboard/data/equity_premium.json
+    project_root = Path(__file__).resolve().parents[5]
+    return project_root / 'Equity Risk Premium' / 'dashboard' / 'data' / 'equity_premium.json'
+
+
+def load_equity_premium_records() -> List[Dict[str, Any]]:
+    """加载股权溢价仪表盘数据。"""
+    json_path = get_equity_premium_json_path()
+    if not json_path.exists():
+        return []
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+        records = payload.get('records', []) if isinstance(payload, dict) else []
+        return records if isinstance(records, list) else []
+    except Exception:
+        return []
+
+
+def create_equity_premium_chart(records, recent_days=1000):
+    """
+    创建股权溢价时序图（合并视图）
+    """
+    if not records:
+        return None
+
+    df = pd.DataFrame(records)
+    required = {'date', 'equity_premium'}
+    if not required.issubset(set(df.columns)):
+        return None
+
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.dropna(subset=['date']).sort_values('date')
+    if df.empty:
+        return None
+
+    recent_df = df.tail(recent_days)
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=recent_df['date'],
+        y=recent_df['equity_premium'],
+        mode='lines',
+        name='股权溢价指数',
+        line=dict(color='#3ec3ff', width=2.5),
+        hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>'
+    ))
+
+    if 'earnings_yield' in recent_df.columns:
+        fig.add_trace(go.Scatter(
+            x=recent_df['date'],
+            y=recent_df['earnings_yield'],
+            mode='lines',
+            name='盈利收益率',
+            line=dict(color='#ffb85c', width=1.6),
+            hovertemplate='日期: %{x}<br>盈利收益率: %{y:.2f}%<extra></extra>'
+        ))
+
+    if 'bond_yield' in recent_df.columns:
+        fig.add_trace(go.Scatter(
+            x=recent_df['date'],
+            y=recent_df['bond_yield'],
+            mode='lines',
+            name='10年国债收益率',
+            line=dict(color='#26c281', width=1.6),
+            hovertemplate='日期: %{x}<br>10年国债收益率: %{y:.2f}%<extra></extra>'
+        ))
+
+    fig.add_hline(
+        y=0,
+        line_dash='dash',
+        line_color='rgba(255,255,255,0.35)',
+        annotation_text='0轴',
+        annotation_position='right'
+    )
+
+    fig.update_layout(
+        title=dict(text=f'股权溢价合并视图（近{recent_days}交易日）', x=0.5, font=dict(size=14, color='#f1f5f9')),
+        xaxis_title='日期',
+        yaxis_title='百分比(%)',
+        hovermode='x unified',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(color='#94a3b8', size=11)
+        ),
+        margin=dict(l=60, r=60, t=60, b=60),
+        height=430,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(17, 24, 39, 0.5)',
+        font=dict(color='#94a3b8'),
+        xaxis=dict(
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.1)',
+            tickfont=dict(color='#64748b')
+        ),
+        yaxis=dict(
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.1)',
+            tickfont=dict(color='#64748b')
+        )
+    )
+
+    return fig
+
 def generate_html_report(df, conclusions, output_dir):
     """
     生成 HTML 报告
@@ -239,6 +357,14 @@ def generate_html_report(df, conclusions, output_dir):
     # 创建价格走势图
     price_chart = create_price_chart(df, indices_config, recent_days)
     price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
+
+    # 加载并合并股权溢价图（来自 Equity Risk Premium）
+    erp_records = load_equity_premium_records()
+    erp_chart = create_equity_premium_chart(erp_records, recent_days)
+    if erp_chart is not None:
+        erp_chart_html = erp_chart.to_html(full_html=False, include_plotlyjs=False)
+    else:
+        erp_chart_html = '<div style="padding: 20px; color: #94a3b8;">未检测到 Equity Risk Premium 数据文件，跳过合并图表。</div>'
 
     # 创建比价走势图（分开存储，用于并排布局）
     ratio_charts_html = []
@@ -965,6 +1091,17 @@ def generate_html_report(df, conclusions, output_dir):
             <div class="chart-wrapper">{price_chart_html}</div>
         </div>
 
+        <!-- 跨系统合并图表区域 -->
+        <div class="charts-section">
+            <div class="section-header">
+                <div class="section-title">
+                    <div class="section-icon">🔗</div>
+                    <h2>股权溢价合并视图（来自 Equity Risk Premium）</h2>
+                </div>
+            </div>
+            <div class="chart-wrapper">{erp_chart_html}</div>
+        </div>
+
         <!-- 比价图并排布局 -->
         <div class="charts-section">
             <div class="section-header">
@@ -1244,3 +1381,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+

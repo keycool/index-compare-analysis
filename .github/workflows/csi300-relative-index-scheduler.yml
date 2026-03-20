@@ -1,0 +1,98 @@
+name: csi300-relative-index-scheduler
+
+on:
+  schedule:
+    # GitHub cron uses UTC (Mon-Fri):
+    # 10:30 UTC = 18:30 Asia/Shanghai
+    - cron: "30 10 * * 1-5"
+    # 14:00 UTC = 22:00 Asia/Shanghai
+    - cron: "0 14 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: "Force full update (true/false)"
+        required: false
+        default: "false"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: csi300-relative-index-scheduler
+  cancel-in-progress: false
+
+jobs:
+  run-csi300-relative-index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install tushare pandas numpy plotly scipy requests openpyxl
+
+      - name: Run CSI300 Relative Index workflow
+        env:
+          FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
+
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+          # 优先使用 CSI_*，没有则回退 FEISHU_*
+          FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_APP_ID: ${{ secrets.CSI_FEISHU_APP_ID || secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.CSI_FEISHU_APP_SECRET || secrets.FEISHU_APP_SECRET }}
+          FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+
+          INDEX_COMPARE_OUTPUT_PATH: ${{ github.workspace }}/index_compare_enhanced.xlsx
+          # 可选：如你把 ERP 的 json 同步到本仓库，再配置这个变量
+          INDEX_COMPARE_ERP_JSON_PATH: ${{ vars.INDEX_COMPARE_ERP_JSON_PATH || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$FORCE_UPDATE" == "true" ]]; then
+            python .claude/skills/index-compare/scripts/main.py --force
+          else
+            python .claude/skills/index-compare/scripts/main.py
+          fi
+
+      - name: Show latest date in output file
+        if: success()
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          p = "index_compare_enhanced.xlsx"
+          df = pd.read_excel(p)
+          print(f"[CHECK] Output rows: {len(df)}")
+          if "日期" in df.columns and len(df) > 0:
+              print(f"[CHECK] Output latest date: {df['日期'].iloc[-1]}")
+          else:
+              print("[CHECK] Column 日期 not found or no rows")
+          PY
+
+      - name: Upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: csi300-relative-index-${{ github.run_id }}
+          path: |
+            index_compare_enhanced.xlsx
+            reports/index_compare_*.html
+            .claude/skills/index-compare/data/*.json
+            .claude/skills/index-compare/data/*.csv
+          if-no-files-found: warn
+          retention-days: 7

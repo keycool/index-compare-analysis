@@ -213,7 +213,7 @@ def save_to_excel(df_new: pd.DataFrame, output_path: Path) -> tuple[bool, pd.Dat
 
 
 def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
-    """同步记录到飞书多维表格。"""
+    """同步记录到飞书多维表格（按日期 upsert）。"""
     required_env = ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_APP_TOKEN", "FEISHU_TABLE_ID"]
     missing = [key for key in required_env if not os.environ.get(key)]
     if missing:
@@ -225,31 +225,43 @@ def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
             "synced": 0,
             "failed": 0,
             "total": 0,
+            "created": 0,
+            "updated": 0,
             "errors": [],
         }
 
     if df_sync.empty:
         return {
             "success": True,
-            "message": "无新增数据",
+            "message": "无可同步数据",
             "synced": 0,
             "failed": 0,
             "total": 0,
+            "created": 0,
+            "updated": 0,
             "errors": [],
         }
 
     try:
         client = FeishuBitableClient()
+        date_index = client.get_date_record_index()
 
         synced = 0
         failed = 0
+        created = 0
+        updated = 0
         error_examples: list[Dict[str, str]] = []
 
         for _, row in df_sync.iterrows():
             payload = row.to_dict()
-            result = client.add_index_compare_record(payload)
+            result = client.upsert_index_compare_record(payload, date_index=date_index)
             if result.get("success"):
                 synced += 1
+                op = result.get("operation")
+                if op == "created":
+                    created += 1
+                elif op == "updated":
+                    updated += 1
                 continue
 
             failed += 1
@@ -268,6 +280,8 @@ def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
             "synced": synced,
             "failed": failed,
             "total": total,
+            "created": created,
+            "updated": updated,
             "errors": error_examples,
         }
     except Exception as exc:
@@ -278,6 +292,8 @@ def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
             "synced": 0,
             "failed": 0,
             "total": len(df_sync),
+            "created": 0,
+            "updated": 0,
             "errors": [{"error": str(exc)}],
         }
 
@@ -497,6 +513,8 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "synced": 0,
         "failed": 0,
         "total": 0,
+        "created": 0,
+        "updated": 0,
         "errors": [],
     }
 
@@ -522,6 +540,8 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "bitable_count": bitable_result.get("synced", 0),
         "bitable_failed": bitable_result.get("failed", 0),
         "bitable_total": bitable_result.get("total", 0),
+        "bitable_created": bitable_result.get("created", 0),
+        "bitable_updated": bitable_result.get("updated", 0),
         "bitable_message": bitable_result.get("message", ""),
         "bitable_errors": bitable_result.get("errors", []),
     }
@@ -568,6 +588,10 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
 
 

@@ -1,0 +1,60 @@
+{
+  "indices": {
+    "HS300": {
+      "code": "000300.SH",
+      "name": "沪深300",
+      "role": "benchmark",
+      "description": "大盘蓝筹股代表，作为比价基准"
+    },
+    "ZZ500": {
+      "code": "000905.SH",
+      "name": "中证500",
+      "role": "target",
+      "description": "中盘股代表，剔除沪深300后的前500只股票"
+    },
+    "ZZ1000": {
+      "code": "000852.SH",
+      "name": "中证1000",
+      "role": "target",
+      "description": "小盘股代表，剔除中证800后的前1000只股票"
+    },
+    "ZZA500": {
+      "code": "000510.SH",
+      "name": "中证A500",
+      "role": "target",
+      "description": "A股核心资产代表，覆盖沪深300之外的优质中大盘股"
+    },
+    "SHCI": {
+      "code": "000001.SH",
+      "name": "上证综指",
+      "role": "reference",
+      "description": "市场整体参考指标"
+    }
+  },
+  "analysis": {
+    "ma_window": 30,
+    "recent_days": 2500,
+    "percentile_base": "all_history",
+    "trend_windows": [5, 10, 20],
+    "deviation_threshold": 0.05
+  },
+  "percentile_levels": {
+    "extreme_low": 15,
+    "low": 30,
+    "neutral_low": 40,
+    "neutral_high": 60,
+    "high": 70,
+    "extreme_high": 85
+  },
+  "output": {
+    "report_dir": "../../../reports",
+    "data_dir": "data",
+    "format": "html",
+    "auto_open": false
+  },
+  "api": {
+    "retry_times": 3,
+    "retry_interval": 2,
+    "timeout": 30
+  }
+}

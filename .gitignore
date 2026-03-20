@@ -26,3 +26,7 @@ __pycache__/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 保留运行必需配置
+!/.claude/skills/index-compare/config.json
+

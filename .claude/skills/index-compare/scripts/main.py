@@ -457,7 +457,7 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         print("请确保已安装所有依赖: pip install tushare pandas numpy plotly scipy requests")
         sys.exit(1)
 
-    with open("config.json", "r", encoding="utf-8") as f:
+    with open(SCRIPT_ROOT / "config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
     report_dir = config["output"]["report_dir"]
 

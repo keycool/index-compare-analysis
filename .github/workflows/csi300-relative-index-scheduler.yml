@@ -32,18 +32,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: .claude/skills/index-compare/requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install tushare pandas numpy plotly scipy requests openpyxl
+          pip install -r .claude/skills/index-compare/requirements.txt
 
       - name: Run CSI300 Relative Index workflow
         env:
@@ -86,7 +87,7 @@ jobs:
 
       - name: Upload result artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: csi300-relative-index-${{ github.run_id }}
           path: |
@@ -96,4 +97,3 @@ jobs:
             .claude/skills/index-compare/data/*.csv
           if-no-files-found: warn
           retention-days: 7
-

@@ -1,0 +1,7 @@
+tushare
+pandas
+numpy
+plotly
+scipy
+requests
+openpyxl

@@ -49,13 +49,17 @@ jobs:
       - name: Run CSI300 Relative Index workflow
         env:
           FORCE_UPDATE: ${{ github.event.inputs.force_update || 'false' }}
+          REQUIRE_BITABLE_SYNC: "true"
 
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
 
-          # 优先使用 CSI_*，没有则回退 FEISHU_*
           FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
-          FEISHU_APP_ID: ${{ secrets.CSI_FEISHU_APP_ID || secrets.FEISHU_APP_ID }}
-          FEISHU_APP_SECRET: ${{ secrets.CSI_FEISHU_APP_SECRET || secrets.FEISHU_APP_SECRET }}
+
+          # 按你的要求：ID/SECRET 继续沿用原有统一配置
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+
+          # 多维表格使用 CSI 新配置（未配则回退旧值，避免中断）
           FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
           FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 

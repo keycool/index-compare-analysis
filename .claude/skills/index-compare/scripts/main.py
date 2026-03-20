@@ -546,6 +546,25 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "bitable_errors": bitable_result.get("errors", []),
     }
 
+    require_bitable_sync = str(os.environ.get("REQUIRE_BITABLE_SYNC", "false")).lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+
+    if require_bitable_sync:
+        has_new_rows = int(len(new_rows_df)) > 0
+        sync_ok = bool(bitable_result.get("success", False))
+        synced_count = int(bitable_result.get("synced", 0) or 0)
+
+        if has_new_rows and (not sync_ok or synced_count < int(len(new_rows_df))):
+            result["success"] = False
+            result["error"] = (
+                f"要求飞书多维表格同步成功，但本次新增 {len(new_rows_df)} 条，仅成功 {synced_count} 条"
+            )
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return result
 
@@ -583,19 +602,11 @@ def main() -> None:
         quick_query(query_target)
         return
 
-    run_pipeline(force_update=args.force)
+    result = run_pipeline(force_update=args.force)
+
+    if not result.get("success", False):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-

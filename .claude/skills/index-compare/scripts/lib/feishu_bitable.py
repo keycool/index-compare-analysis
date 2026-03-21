@@ -4,6 +4,7 @@
 飞书多维表格 (Bitable) API 集成模块
 - 按日期做记录索引
 - 支持按日期 upsert（存在则更新，不存在则新增）
+- 支持批量创建/批量更新，失败自动回退单条
 """
 
 import math
@@ -22,6 +23,7 @@ class FeishuBitableClient:
     AUTH_ENDPOINT = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
     BITABLE_ENDPOINT = f"{BASE_URL}/bitable/v1"
     SH_TZ = timezone(timedelta(hours=8))
+    DEFAULT_BATCH_SIZE = 100
 
     def __init__(self):
         self.app_id = os.getenv("FEISHU_APP_ID")
@@ -73,6 +75,15 @@ class FeishuBitableClient:
     def _records_url(self, record_id: Optional[str] = None) -> str:
         base = f"{self.BITABLE_ENDPOINT}/apps/{self.app_token}/tables/{self.table_id}/records"
         return f"{base}/{record_id}" if record_id else base
+
+    def _records_batch_url(self, action: str) -> str:
+        return f"{self._records_url()}/{action}"
+
+    @staticmethod
+    def _chunk(items: List[dict], size: int):
+        chunk_size = max(1, int(size))
+        for i in range(0, len(items), chunk_size):
+            yield items[i : i + chunk_size]
 
     @staticmethod
     def _safe_float(value, default: float = 0.0) -> float:
@@ -268,54 +279,202 @@ class FeishuBitableClient:
             raise RuntimeError(f"更新记录失败: {data}")
         return data
 
+    def _batch_create_records(self, create_items: List[dict]) -> List[Optional[str]]:
+        """
+        批量创建记录。
+        create_items: [{"fields": {...}, "date_key": "YYYY-MM-DD"}, ...]
+        返回按输入顺序对齐的 record_id 列表（可能为 None）。
+        """
+        payload_records = [{"fields": item["fields"]} for item in create_items]
+        response = requests.post(
+            self._records_batch_url("batch_create"),
+            json={"records": payload_records},
+            headers=self._get_headers(),
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        if payload.get("code") != 0:
+            raise RuntimeError(f"批量新增失败: {payload}")
+
+        data = payload.get("data", {})
+        records = data.get("records") or data.get("items") or []
+
+        record_ids: List[Optional[str]] = [None] * len(create_items)
+        if isinstance(records, list):
+            for i, rec in enumerate(records[: len(create_items)]):
+                rid = rec.get("record_id")
+                if not rid and isinstance(rec.get("record"), dict):
+                    rid = rec.get("record", {}).get("record_id")
+                record_ids[i] = rid
+
+        return record_ids
+
+    def _batch_update_records(self, update_items: List[dict]) -> None:
+        """
+        批量更新记录。
+        update_items: [{"record_id": "recxx", "fields": {...}, "date_key": "YYYY-MM-DD"}, ...]
+        """
+        payload_records = [
+            {
+                "record_id": item["record_id"],
+                "fields": item["fields"],
+            }
+            for item in update_items
+        ]
+
+        response = requests.post(
+            self._records_batch_url("batch_update"),
+            json={"records": payload_records},
+            headers=self._get_headers(),
+            timeout=30,
+        )
+        response.raise_for_status()
+
+        payload = response.json()
+        if payload.get("code") != 0:
+            raise RuntimeError(f"批量更新失败: {payload}")
+
+    def upsert_index_compare_records(
+        self,
+        records: List[Dict[str, float | str]],
+        date_index: Optional[Dict[str, str]] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> Dict[str, object]:
+        """批量按日期 upsert。"""
+        self._validate_table()
+
+        if not records:
+            return {
+                "success": True,
+                "message": "无可同步数据",
+                "synced": 0,
+                "failed": 0,
+                "total": 0,
+                "created": 0,
+                "updated": 0,
+                "errors": [],
+            }
+
+        if date_index is None:
+            date_index = self.get_date_record_index()
+
+        create_items: List[dict] = []
+        update_items: List[dict] = []
+        failed = 0
+        errors: List[Dict[str, str]] = []
+
+        for record in records:
+            try:
+                date_key = self._to_date_key(record.get("日期"))
+                if not date_key:
+                    raise ValueError(f"无效日期: {record.get('日期')}")
+
+                fields = self._build_csi_fields(record)
+                existing_id = date_index.get(date_key)
+
+                if existing_id:
+                    update_items.append(
+                        {
+                            "date_key": date_key,
+                            "record_id": existing_id,
+                            "fields": fields,
+                            "raw_date": str(record.get("日期")),
+                        }
+                    )
+                else:
+                    create_items.append(
+                        {
+                            "date_key": date_key,
+                            "fields": fields,
+                            "raw_date": str(record.get("日期")),
+                        }
+                    )
+            except Exception as exc:
+                failed += 1
+                if len(errors) < 10:
+                    errors.append({"date": str(record.get("日期")), "error": str(exc)})
+
+        created = 0
+        updated = 0
+
+        # 批量更新（失败回退单条）
+        for chunk in self._chunk(update_items, batch_size):
+            try:
+                self._batch_update_records(chunk)
+                updated += len(chunk)
+            except Exception as chunk_exc:
+                for item in chunk:
+                    try:
+                        self._update_record(item["record_id"], item["fields"])
+                        updated += 1
+                    except Exception as row_exc:
+                        failed += 1
+                        if len(errors) < 10:
+                            errors.append({"date": item["raw_date"], "error": str(row_exc)})
+
+        # 批量创建（失败回退单条）
+        for chunk in self._chunk(create_items, batch_size):
+            try:
+                record_ids = self._batch_create_records(chunk)
+                created += len(chunk)
+                for i, item in enumerate(chunk):
+                    rid = record_ids[i] if i < len(record_ids) else None
+                    if rid:
+                        date_index[item["date_key"]] = rid
+            except Exception as chunk_exc:
+                for item in chunk:
+                    try:
+                        data = self._create_record(item["fields"])
+                        rid = data.get("data", {}).get("record", {}).get("record_id")
+                        if rid:
+                            date_index[item["date_key"]] = rid
+                        created += 1
+                    except Exception as row_exc:
+                        failed += 1
+                        if len(errors) < 10:
+                            errors.append({"date": item["raw_date"], "error": str(row_exc)})
+
+        total = len(records)
+        synced = created + updated
+        success = failed == 0 and synced > 0
+        message = "ok" if success else f"部分或全部失败: 成功 {synced}/{total}"
+
+        return {
+            "success": success,
+            "message": message,
+            "synced": synced,
+            "failed": failed,
+            "total": total,
+            "created": created,
+            "updated": updated,
+            "errors": errors,
+        }
+
     def upsert_index_compare_record(
         self,
         record: Dict[str, float | str],
         date_index: Optional[Dict[str, str]] = None,
     ) -> Dict[str, object]:
-        """
-        按日期 upsert：存在则更新，不存在则新增。
-        """
-        self._validate_table()
+        """兼容旧接口：单条按日期 upsert。"""
+        result = self.upsert_index_compare_records([record], date_index=date_index, batch_size=1)
 
-        try:
-            date_key = self._to_date_key(record.get("日期"))
-            if not date_key:
-                raise ValueError(f"无效日期: {record.get('日期')}")
-
-            fields = self._build_csi_fields(record)
-
-            if date_index is None:
-                date_index = self.get_date_record_index()
-
-            existing_record_id = date_index.get(date_key)
-
-            if existing_record_id:
-                self._update_record(existing_record_id, fields)
-                return {
-                    "success": True,
-                    "operation": "updated",
-                    "record_id": existing_record_id,
-                    "message": "已按日期更新飞书记录",
-                }
-
-            data = self._create_record(fields)
-            new_id = data.get("data", {}).get("record", {}).get("record_id")
-            if new_id:
-                date_index[date_key] = new_id
+        if result.get("synced", 0) > 0:
+            op = "updated" if result.get("updated", 0) > 0 else "created"
             return {
                 "success": True,
-                "operation": "created",
-                "record_id": new_id,
-                "message": "已新增飞书记录",
+                "operation": op,
+                "message": "已按日期 upsert 飞书记录",
             }
-        except Exception as exc:
-            return {
-                "success": False,
-                "operation": "failed",
-                "message": f"upsert失败: {exc}",
-                "error": str(exc),
-            }
+
+        err = result.get("errors", [{}])[0].get("error", result.get("message", "unknown error"))
+        return {
+            "success": False,
+            "operation": "failed",
+            "message": f"upsert失败: {err}",
+            "error": str(err),
+        }
 
     def query_records(self, filter_str: Optional[str] = None, limit: int = 100) -> List[Dict]:
         self._validate_table()
@@ -336,4 +495,3 @@ class FeishuBitableClient:
             raise RuntimeError(f"查询记录失败: {data}")
 
         return data.get("data", {}).get("items", [])
-

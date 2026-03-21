@@ -269,46 +269,8 @@ def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
 
     try:
         client = FeishuBitableClient()
-        date_index = client.get_date_record_index()
-
-        synced = 0
-        failed = 0
-        created = 0
-        updated = 0
-        error_examples: list[Dict[str, str]] = []
-
-        for _, row in df_sync.iterrows():
-            payload = row.to_dict()
-            result = client.upsert_index_compare_record(payload, date_index=date_index)
-            if result.get("success"):
-                synced += 1
-                op = result.get("operation")
-                if op == "created":
-                    created += 1
-                elif op == "updated":
-                    updated += 1
-                continue
-
-            failed += 1
-            error_message = result.get("message") or result.get("error") or "unknown error"
-            logger.warning("飞书多维表格同步失败: date=%s, error=%s", payload.get("日期"), error_message)
-            if len(error_examples) < 5:
-                error_examples.append({"date": str(payload.get("日期")), "error": str(error_message)})
-
-        total = len(df_sync)
-        success = failed == 0 and synced > 0
-        message = "ok" if success else f"部分或全部失败: 成功 {synced}/{total}"
-
-        return {
-            "success": success,
-            "message": message,
-            "synced": synced,
-            "failed": failed,
-            "total": total,
-            "created": created,
-            "updated": updated,
-            "errors": error_examples,
-        }
+        payloads = [row.to_dict() for _, row in df_sync.iterrows()]
+        return client.upsert_index_compare_records(payloads)
     except Exception as exc:
         logger.error(f"飞书多维表格同步异常: {exc}")
         return {

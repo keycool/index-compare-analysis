@@ -6,6 +6,7 @@
 - 支持按日期 upsert（存在则更新，不存在则新增）
 """
 
+import math
 import os
 import time
 from datetime import datetime
@@ -75,6 +76,25 @@ class FeishuBitableClient:
     @staticmethod
     def _to_ms_timestamp(date_str: str) -> int:
         return int(datetime.strptime(date_str, "%Y-%m-%d").timestamp() * 1000)
+
+    @staticmethod
+    def _safe_float(value, default: float = 0.0) -> float:
+        """将任意输入安全转换为有限浮点数，避免 NaN/Inf 导致 JSON 序列化失败。"""
+        if value is None:
+            return default
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(number):
+            return default
+        return number
+
+    @staticmethod
+    def _safe_text(value) -> str:
+        if value is None:
+            return ""
+        return str(value)
 
     @staticmethod
     def _normalize_date_value(value) -> Optional[int]:
@@ -159,22 +179,22 @@ class FeishuBitableClient:
 
         return {
             "日期": date_ts,
-            "中证500": float(record.get("中证500", 0) or 0),
-            "中证1000": float(record.get("中证1000", 0) or 0),
-            "中证A500": float(record.get("中证A500", 0) or 0),
-            "上证综指": float(record.get("上证综指", 0) or 0),
-            "500/300比价": float(record.get("500/300比价", 0) or 0),
-            "1000/300比价": float(record.get("1000/300比价", 0) or 0),
-            "A500/300比价": float(record.get("A500/300比价", 0) or 0),
-            "500分位": float(record.get("500分位", 0) or 0),
-            "1000分位": float(record.get("1000分位", 0) or 0),
-            "A500分位": float(record.get("A500分位", 0) or 0),
-            "500偏离(%)": float(record.get("500偏离(%)", 0) or 0),
-            "1000偏离(%)": float(record.get("1000偏离(%)", 0) or 0),
-            "A500偏离(%)": float(record.get("A500偏离(%)", 0) or 0),
-            "500建议": str(record.get("500建议", "")),
-            "1000建议": str(record.get("1000建议", "")),
-            "A500建议": str(record.get("A500建议", "")),
+            "中证500": FeishuBitableClient._safe_float(record.get("中证500"), 0.0),
+            "中证1000": FeishuBitableClient._safe_float(record.get("中证1000"), 0.0),
+            "中证A500": FeishuBitableClient._safe_float(record.get("中证A500"), 0.0),
+            "上证综指": FeishuBitableClient._safe_float(record.get("上证综指"), 0.0),
+            "500/300比价": FeishuBitableClient._safe_float(record.get("500/300比价"), 0.0),
+            "1000/300比价": FeishuBitableClient._safe_float(record.get("1000/300比价"), 0.0),
+            "A500/300比价": FeishuBitableClient._safe_float(record.get("A500/300比价"), 0.0),
+            "500分位": FeishuBitableClient._safe_float(record.get("500分位"), 0.0),
+            "1000分位": FeishuBitableClient._safe_float(record.get("1000分位"), 0.0),
+            "A500分位": FeishuBitableClient._safe_float(record.get("A500分位"), 0.0),
+            "500偏离(%)": FeishuBitableClient._safe_float(record.get("500偏离(%)"), 0.0),
+            "1000偏离(%)": FeishuBitableClient._safe_float(record.get("1000偏离(%)"), 0.0),
+            "A500偏离(%)": FeishuBitableClient._safe_float(record.get("A500偏离(%)"), 0.0),
+            "500建议": FeishuBitableClient._safe_text(record.get("500建议")),
+            "1000建议": FeishuBitableClient._safe_text(record.get("1000建议")),
+            "A500建议": FeishuBitableClient._safe_text(record.get("A500建议")),
         }
 
     def _create_record(self, fields: Dict[str, object]) -> Dict[str, object]:

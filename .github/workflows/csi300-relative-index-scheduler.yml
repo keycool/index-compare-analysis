@@ -28,7 +28,7 @@ concurrency:
 jobs:
   run-csi300-relative-index:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -101,3 +101,4 @@ jobs:
             .claude/skills/index-compare/data/*.csv
           if-no-files-found: warn
           retention-days: 7
+

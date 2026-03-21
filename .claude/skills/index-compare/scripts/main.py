@@ -63,6 +63,32 @@ def normalize_date_str(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce").dt.strftime("%Y-%m-%d")
 
 
+def calc_expanding_percentile(series: Optional[pd.Series], index: pd.Index) -> pd.Series:
+    """计算逐行历史分位（截至当日）。"""
+    if series is None:
+        return pd.Series([float("nan")] * len(index), index=index)
+
+    s = pd.to_numeric(series, errors="coerce")
+
+    def _percentile_last(window: pd.Series) -> float:
+        valid = window.dropna()
+        if valid.empty:
+            return float("nan")
+        return float((valid <= valid.iloc[-1]).mean() * 100)
+
+    return s.expanding(min_periods=1).apply(_percentile_last, raw=False)
+
+
+def calc_deviation_series(ratio_series: Optional[pd.Series], ma_series: Optional[pd.Series], index: pd.Index) -> pd.Series:
+    """计算逐行偏离度(%)。"""
+    if ratio_series is None or ma_series is None:
+        return pd.Series([float("nan")] * len(index), index=index)
+
+    ratio = pd.to_numeric(ratio_series, errors="coerce")
+    ma = pd.to_numeric(ma_series, errors="coerce")
+    deviation = (ratio - ma) / ma * 100
+    return deviation.where(ma.notna())
+
 def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, Any]) -> pd.DataFrame:
     """
     将处理后数据转换为统一导出结构（用于 Excel + 飞书多维表格）。
@@ -77,14 +103,13 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         df = df.reset_index().rename(columns={df.index.name or "index": "trade_date"})
         df["trade_date"] = pd.to_datetime(df["trade_date"])
 
-    p500 = conclusions.get("ZZ500", {}).get("percentile", {}).get("value")
-    p1000 = conclusions.get("ZZ1000", {}).get("percentile", {}).get("value")
-    pa500 = conclusions.get("ZZA500", {}).get("percentile", {}).get("value")
+    p500_series = calc_expanding_percentile(df.get("ZZ500_ratio"), df.index).round(1)
+    p1000_series = calc_expanding_percentile(df.get("ZZ1000_ratio"), df.index).round(1)
+    pa500_series = calc_expanding_percentile(df.get("ZZA500_ratio"), df.index).round(1)
 
-    d500 = conclusions.get("ZZ500", {}).get("deviation", {}).get("value")
-    d1000 = conclusions.get("ZZ1000", {}).get("deviation", {}).get("value")
-    da500 = conclusions.get("ZZA500", {}).get("deviation", {}).get("value")
-
+    d500_series = calc_deviation_series(df.get("ZZ500_ratio"), df.get("ZZ500_MA30"), df.index).round(2)
+    d1000_series = calc_deviation_series(df.get("ZZ1000_ratio"), df.get("ZZ1000_MA30"), df.index).round(2)
+    da500_series = calc_deviation_series(df.get("ZZA500_ratio"), df.get("ZZA500_MA30"), df.index).round(2)
     export_df = pd.DataFrame(
         {
             "日期": df["trade_date"].dt.strftime("%Y-%m-%d"),
@@ -96,12 +121,12 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "500/300比价": df.get("ZZ500_ratio"),
             "1000/300比价": df.get("ZZ1000_ratio"),
             "A500/300比价": df.get("ZZA500_ratio"),
-            "500分位": p500,
-            "1000分位": p1000,
-            "A500分位": pa500,
-            "500偏离(%)": d500,
-            "1000偏离(%)": d1000,
-            "A500偏离(%)": da500,
+            "500分位": p500_series,
+            "1000分位": p1000_series,
+            "A500分位": pa500_series,
+            "500偏离(%)": d500_series,
+            "1000偏离(%)": d1000_series,
+            "A500偏离(%)": da500_series,
         }
     )
 

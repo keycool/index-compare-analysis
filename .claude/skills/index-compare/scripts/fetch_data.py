@@ -259,10 +259,8 @@ def fetch_all_data(output_path, start_date='20070101', token=None, force_update=
         combined = combined.sort_index()
     else:
         combined = new_data
-
-    # 填补缺失值
-    combined = combined.ffill().bfill()
-
+    # 仅向前填充，避免将指数成立前区间错误回填为首个有效值
+    combined = combined.ffill()
     # 确保输出目录存在
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)

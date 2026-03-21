@@ -9,7 +9,7 @@
 import math
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -21,6 +21,7 @@ class FeishuBitableClient:
     BASE_URL = "https://open.feishu.cn/open-apis"
     AUTH_ENDPOINT = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
     BITABLE_ENDPOINT = f"{BASE_URL}/bitable/v1"
+    SH_TZ = timezone(timedelta(hours=8))
 
     def __init__(self):
         self.app_id = os.getenv("FEISHU_APP_ID")
@@ -74,10 +75,6 @@ class FeishuBitableClient:
         return f"{base}/{record_id}" if record_id else base
 
     @staticmethod
-    def _to_ms_timestamp(date_str: str) -> int:
-        return int(datetime.strptime(date_str, "%Y-%m-%d").timestamp() * 1000)
-
-    @staticmethod
     def _safe_float(value, default: float = 0.0) -> float:
         """将任意输入安全转换为有限浮点数，避免 NaN/Inf 导致 JSON 序列化失败。"""
         if value is None:
@@ -96,42 +93,90 @@ class FeishuBitableClient:
             return ""
         return str(value)
 
-    @staticmethod
-    def _normalize_date_value(value) -> Optional[int]:
-        """将飞书字段里的日期值归一化为毫秒时间戳。"""
+    @classmethod
+    def _parse_date_key(cls, text: str) -> Optional[str]:
+        s = text.strip()
+        if not s:
+            return None
+
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        return None
+
+    @classmethod
+    def _timestamp_to_date_key(cls, timestamp_value: int) -> Optional[str]:
+        """将秒/毫秒时间戳统一转换为日期键（YYYY-MM-DD，上海时区）。"""
+        try:
+            ts = int(timestamp_value)
+        except Exception:
+            return None
+
+        # 10位按秒处理，13位按毫秒处理
+        if abs(ts) < 10_000_000_000:
+            ts_ms = ts * 1000
+        else:
+            ts_ms = ts
+
+        try:
+            dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).astimezone(cls.SH_TZ)
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            return None
+
+    @classmethod
+    def _to_date_key(cls, value) -> Optional[str]:
+        """把飞书日期字段或输入日期统一归一化为 YYYY-MM-DD。"""
         if value is None:
             return None
 
         if isinstance(value, (int, float)):
-            return int(value)
+            if isinstance(value, float) and not math.isfinite(value):
+                return None
+            return cls._timestamp_to_date_key(int(value))
 
         if isinstance(value, str):
             text = value.strip()
             if not text:
                 return None
+
+            # 优先按日期字符串解析，兼容 YYYYMMDD / YYYY-MM-DD / YYYY/MM/DD
+            parsed = cls._parse_date_key(text)
+            if parsed:
+                return parsed
+
+            # 再回退到时间戳解析（秒/毫秒）
             if text.isdigit():
-                return int(text)
-            try:
-                return int(datetime.strptime(text, "%Y-%m-%d").timestamp() * 1000)
-            except Exception:
-                return None
+                return cls._timestamp_to_date_key(int(text))
+            return None
 
         if isinstance(value, dict):
-            # 兼容可能的结构化日期字段
             for k in ("value", "timestamp", "time", "date"):
                 if k in value:
-                    return FeishuBitableClient._normalize_date_value(value[k])
+                    return cls._to_date_key(value[k])
 
         if isinstance(value, list) and value:
-            return FeishuBitableClient._normalize_date_value(value[0])
+            return cls._to_date_key(value[0])
 
         return None
 
-    def get_date_record_index(self) -> Dict[int, str]:
-        """获取当前表中 日期 -> record_id 索引。"""
+    @classmethod
+    def _to_ms_timestamp(cls, date_str: str) -> int:
+        """将日期字符串统一转换为上海时区零点的毫秒时间戳（跨环境稳定）。"""
+        date_key = cls._to_date_key(date_str)
+        if not date_key:
+            raise ValueError(f"无效日期: {date_str}")
+
+        dt = datetime.strptime(date_key, "%Y-%m-%d").replace(tzinfo=cls.SH_TZ)
+        return int(dt.timestamp() * 1000)
+
+    def get_date_record_index(self) -> Dict[str, str]:
+        """获取当前表中 日期(YYYY-MM-DD) -> record_id 索引。"""
         self._validate_table()
 
-        index: Dict[int, str] = {}
+        index: Dict[str, str] = {}
         page_token = None
 
         while True:
@@ -157,9 +202,9 @@ class FeishuBitableClient:
             for item in items:
                 record_id = item.get("record_id")
                 fields = item.get("fields", {})
-                date_val = self._normalize_date_value(fields.get("日期"))
-                if record_id and date_val is not None:
-                    index[date_val] = record_id
+                date_key = self._to_date_key(fields.get("日期"))
+                if record_id and date_key:
+                    index[date_key] = record_id
 
             if not data.get("has_more"):
                 break
@@ -226,7 +271,7 @@ class FeishuBitableClient:
     def upsert_index_compare_record(
         self,
         record: Dict[str, float | str],
-        date_index: Optional[Dict[int, str]] = None,
+        date_index: Optional[Dict[str, str]] = None,
     ) -> Dict[str, object]:
         """
         按日期 upsert：存在则更新，不存在则新增。
@@ -234,16 +279,19 @@ class FeishuBitableClient:
         self._validate_table()
 
         try:
+            date_key = self._to_date_key(record.get("日期"))
+            if not date_key:
+                raise ValueError(f"无效日期: {record.get('日期')}")
+
             fields = self._build_csi_fields(record)
-            date_ts = int(fields["日期"])
 
             if date_index is None:
                 date_index = self.get_date_record_index()
 
-            existing_record_id = date_index.get(date_ts)
+            existing_record_id = date_index.get(date_key)
 
             if existing_record_id:
-                data = self._update_record(existing_record_id, fields)
+                self._update_record(existing_record_id, fields)
                 return {
                     "success": True,
                     "operation": "updated",
@@ -254,7 +302,7 @@ class FeishuBitableClient:
             data = self._create_record(fields)
             new_id = data.get("data", {}).get("record", {}).get("record_id")
             if new_id:
-                date_index[date_ts] = new_id
+                date_index[date_key] = new_id
             return {
                 "success": True,
                 "operation": "created",

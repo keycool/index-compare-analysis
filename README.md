@@ -242,6 +242,17 @@ python scripts/main.py --query ZZA500
 - `CSI_FEISHU_APP_TOKEN`
 - `CSI_FEISHU_TABLE_ID`
 
+## GitHub Pages
+
+主调度 workflow 成功后，会自动发布 GitHub Pages 站点：
+
+- 主页：最新合并报告 `index.html`
+- 数据：`/data/merged_signal.json`
+- 数据：`/data/erp_signal.json`
+- 数据：`/data/relative_signal.json`
+
+这样日常查看时可以直接访问固定 URL，而不需要每次手动下载 Actions artifact。
+
 ## 🧹 临时文件管理
 
 ### 自动清理

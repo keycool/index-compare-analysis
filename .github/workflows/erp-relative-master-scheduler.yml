@@ -27,6 +27,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -132,3 +134,79 @@ jobs:
             external/equity-risk-premium/dashboard/index.html
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Setup Pages
+        if: success()
+        uses: actions/configure-pages@v5
+
+      - name: Build Pages site
+        if: success()
+        run: |
+          python - << 'PY'
+          import json
+          import shutil
+          from pathlib import Path
+
+          workspace = Path.cwd()
+          site_dir = workspace / "site"
+          reports_dir = workspace / "csi300-relative-index" / "reports"
+          shared_dir = workspace / "shared"
+          dashboard_dir = workspace / "external" / "equity-risk-premium" / "dashboard" / "data"
+
+          site_dir.mkdir(parents=True, exist_ok=True)
+          (site_dir / ".nojekyll").write_text("", encoding="utf-8")
+
+          report_files = sorted(reports_dir.glob("index_compare_*.html"))
+          if not report_files:
+              raise FileNotFoundError(f"No report file found in {reports_dir}")
+
+          latest_report = max(report_files, key=lambda p: p.stat().st_mtime)
+          shutil.copy2(latest_report, site_dir / "index.html")
+
+          data_dir = site_dir / "data"
+          data_dir.mkdir(parents=True, exist_ok=True)
+
+          for path in shared_dir.glob("*.json"):
+              shutil.copy2(path, data_dir / path.name)
+
+          for name in ("equity_premium.json", "equity_premium.js"):
+              source = dashboard_dir / name
+              if source.exists():
+                  shutil.copy2(source, data_dir / name)
+
+          merged_path = shared_dir / "merged_signal.json"
+          summary = {
+              "latest_report": latest_report.name,
+              "generated_files": sorted([p.name for p in data_dir.glob("*")]),
+          }
+          if merged_path.exists():
+              try:
+                  summary["merged_signal"] = json.loads(merged_path.read_text(encoding="utf-8"))
+              except Exception:
+                  summary["merged_signal"] = {"error": "failed_to_parse"}
+
+          (site_dir / "site_manifest.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(f"[PAGES] Latest report: {latest_report}")
+          print(f"[PAGES] Site dir: {site_dir}")
+          PY
+
+      - name: Upload Pages artifact
+        if: success()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy-pages:
+    if: success()
+    needs: run-master-orchestrator
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -527,7 +527,8 @@ def generate_html_report(df, conclusions, output_dir):
     erp_records = load_equity_premium_records()
     macro_overview_chart = create_macro_overview_chart(erp_records, df, recent_days)
     if macro_overview_chart is not None:
-        macro_overview_html = macro_overview_chart.to_html(full_html=False, include_plotlyjs=False)
+        # 首屏第一张图需要负责加载 Plotly，否则容器先出现但图不会渲染。
+        macro_overview_html = macro_overview_chart.to_html(full_html=False, include_plotlyjs='cdn')
     else:
         macro_overview_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于合并展示的股权溢价数据，跳过宏观总览。</div>'
 
@@ -1269,8 +1270,8 @@ def generate_html_report(df, conclusions, output_dir):
                 <div class="section-title">
                     <div class="section-icon">◎</div>
                     <div>
-                        <h2>第一排：股权溢价指数与沪深300同屏总览</h2>
-                        <div class="overview-subtitle">先看股债性价比，再看市场基准位置。把 ERP 与沪深300 放在同一视角里，能更快判断当前市场是在估值修复、风险偏好回升，还是仍处于偏谨慎区间。</div>
+                        <h2>股权溢价指数</h2>
+                        <div class="overview-subtitle">溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。</div>
                     </div>
                 </div>
             </div>

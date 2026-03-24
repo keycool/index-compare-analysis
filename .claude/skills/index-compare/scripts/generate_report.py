@@ -216,6 +216,16 @@ def create_price_chart(df, indices_config, recent_days=1000):
 
 
 
+def get_merged_signal_path() -> Path:
+    """获取统一 merged signal 文件路径。"""
+    env_path = os.environ.get('INDEX_COMPARE_MERGED_SIGNAL_PATH')
+    if env_path:
+        return Path(env_path)
+
+    project_root = Path(__file__).resolve().parents[5]
+    return project_root / 'shared' / 'merged_signal.json'
+
+
 def get_equity_premium_signal_path() -> Path:
     """获取 ERP 标准共享信号文件路径。"""
     env_path = os.environ.get('INDEX_COMPARE_ERP_SIGNAL_PATH')
@@ -227,7 +237,24 @@ def get_equity_premium_signal_path() -> Path:
 
 
 def load_equity_premium_records() -> List[Dict[str, Any]]:
-    """优先加载 ERP 标准共享接口，兼容旧 dashboard 数据文件。"""
+    """优先加载 merged signal，其次 ERP signal，最后兼容旧 dashboard 文件。"""
+    merged_path = get_merged_signal_path()
+    if merged_path.exists():
+        try:
+            with open(merged_path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            if (
+                isinstance(payload, dict)
+                and payload.get('version') == '1.0'
+                and payload.get('signal_type') == 'erp_relative_merged'
+            ):
+                components = payload.get('components', {})
+                erp_component = components.get('erp', {}) if isinstance(components, dict) else {}
+                records = erp_component.get('records', [])
+                return records if isinstance(records, list) else []
+        except Exception:
+            return []
+
     signal_path = get_equity_premium_signal_path()
     if signal_path.exists():
         try:
@@ -352,6 +379,124 @@ def create_equity_premium_chart(records, recent_days=1000):
 
     return fig
 
+
+def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
+    """
+    创建宏观总览图：股权溢价指数与沪深300双轴同屏。
+    """
+    if not erp_records or index_df.empty or 'HS300' not in index_df.columns:
+        return None
+
+    erp_df = pd.DataFrame(erp_records)
+    required = {'date', 'equity_premium'}
+    if not required.issubset(set(erp_df.columns)):
+        return None
+
+    erp_df['date'] = pd.to_datetime(erp_df['date'], errors='coerce')
+    erp_df = erp_df.dropna(subset=['date']).sort_values('date')
+    if erp_df.empty:
+        return None
+
+    hs300_df = index_df.reset_index().rename(columns={index_df.index.name or 'index': 'date'})
+    hs300_df['date'] = pd.to_datetime(hs300_df['date'], errors='coerce')
+    hs300_df = hs300_df[['date', 'HS300']].dropna(subset=['date']).sort_values('date')
+
+    merged_df = pd.merge(erp_df[['date', 'equity_premium']], hs300_df, on='date', how='inner')
+    merged_df = merged_df.tail(recent_days)
+    if merged_df.empty:
+        return None
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['equity_premium'],
+            mode='lines',
+            name='股权溢价指数',
+            line=dict(color='#3ec3ff', width=2.8),
+            fill='tozeroy',
+            fillcolor='rgba(62, 195, 255, 0.10)',
+            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
+        ),
+        secondary_y=False,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['HS300'],
+            mode='lines',
+            name='沪深300',
+            line=dict(color='#fbbf24', width=2.2),
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+        ),
+        secondary_y=True,
+    )
+
+    latest_erp = merged_df['equity_premium'].iloc[-1]
+    latest_hs300 = merged_df['HS300'].iloc[-1]
+
+    fig.update_layout(
+        title=dict(
+            text=f'宏观总览：股权溢价指数 vs 沪深300（近{len(merged_df)}交易日）',
+            x=0.5,
+            font=dict(size=15, color='#f1f5f9'),
+        ),
+        hovermode='x unified',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            font=dict(color='#94a3b8', size=11),
+        ),
+        margin=dict(l=60, r=70, t=65, b=65),
+        height=480,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(17, 24, 39, 0.55)',
+        font=dict(color='#94a3b8'),
+        annotations=[
+            dict(
+                x=0.01,
+                y=1.12,
+                xref='paper',
+                yref='paper',
+                text=(
+                    f'最新股权溢价 <b style="color:#3ec3ff;">{latest_erp:.2f}%</b>'
+                    f' &nbsp;&nbsp;|&nbsp;&nbsp; 最新沪深300 <b style="color:#fbbf24;">{latest_hs300:,.2f}</b>'
+                ),
+                showarrow=False,
+                xanchor='left',
+                font=dict(size=12, color='#cbd5e1'),
+            )
+        ],
+        xaxis=dict(
+            gridcolor='rgba(255,255,255,0.05)',
+            linecolor='rgba(255,255,255,0.1)',
+            tickfont=dict(color='#64748b'),
+        ),
+    )
+
+    fig.update_yaxes(
+        title_text='股权溢价(%)',
+        secondary_y=False,
+        gridcolor='rgba(62,195,255,0.10)',
+        tickfont=dict(color='#7dd3fc'),
+        title_font=dict(color='#7dd3fc'),
+        zerolinecolor='rgba(255,255,255,0.14)',
+    )
+    fig.update_yaxes(
+        title_text='沪深300点位',
+        secondary_y=True,
+        gridcolor='rgba(255,255,255,0)',
+        tickfont=dict(color='#fcd34d'),
+        title_font=dict(color='#fcd34d'),
+    )
+
+    return fig
+
 def generate_html_report(df, conclusions, output_dir):
     """
     生成 HTML 报告
@@ -380,6 +525,12 @@ def generate_html_report(df, conclusions, output_dir):
 
     # 加载并合并股权溢价图（来自 Equity Risk Premium）
     erp_records = load_equity_premium_records()
+    macro_overview_chart = create_macro_overview_chart(erp_records, df, recent_days)
+    if macro_overview_chart is not None:
+        macro_overview_html = macro_overview_chart.to_html(full_html=False, include_plotlyjs=False)
+    else:
+        macro_overview_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于合并展示的股权溢价数据，跳过宏观总览。</div>'
+
     erp_chart = create_equity_premium_chart(erp_records, recent_days)
     if erp_chart is not None:
         erp_chart_html = erp_chart.to_html(full_html=False, include_plotlyjs=False)
@@ -785,6 +936,21 @@ def generate_html_report(df, conclusions, output_dir):
             margin-bottom: 20px;
         }}
 
+        .overview-section {{
+            background:
+                linear-gradient(135deg, rgba(62, 195, 255, 0.08), transparent 45%),
+                linear-gradient(215deg, rgba(251, 191, 36, 0.07), transparent 40%),
+                var(--bg-card);
+            border: 1px solid rgba(255,255,255,0.08);
+        }}
+
+        .overview-subtitle {{
+            color: var(--text-secondary);
+            font-size: 14px;
+            max-width: 840px;
+            line-height: 1.75;
+        }}
+
         .chart-wrapper:last-child {{
             margin-bottom: 0;
         }}
@@ -1097,7 +1263,21 @@ def generate_html_report(df, conclusions, output_dir):
             <p class="hero-subtitle">基于沪深300基准，分析中证500/1000相对估值水平与趋势，提供量化配置建议</p>
         </div>
 
-        <!-- 指标卡片 -->
+        <!-- 第一排：宏观总览 -->
+        <div class="charts-section overview-section">
+            <div class="section-header">
+                <div class="section-title">
+                    <div class="section-icon">◎</div>
+                    <div>
+                        <h2>第一排：股权溢价指数与沪深300同屏总览</h2>
+                        <div class="overview-subtitle">先看股债性价比，再看市场基准位置。把 ERP 与沪深300 放在同一视角里，能更快判断当前市场是在估值修复、风险偏好回升，还是仍处于偏谨慎区间。</div>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-wrapper">{macro_overview_html}</div>
+        </div>
+
+        <!-- 第二排开始：原 Index Report 主体 -->
         {cards_html}
 
         <!-- 图表区域 -->
@@ -1105,18 +1285,17 @@ def generate_html_report(df, conclusions, output_dir):
             <div class="section-header">
                 <div class="section-title">
                     <div class="section-icon">📈</div>
-                    <h2>价格走势</h2>
+                    <h2>指数价格走势</h2>
                 </div>
             </div>
             <div class="chart-wrapper">{price_chart_html}</div>
         </div>
 
-        <!-- 跨系统合并图表区域 -->
         <div class="charts-section">
             <div class="section-header">
                 <div class="section-title">
                     <div class="section-icon">🔗</div>
-                    <h2>股权溢价合并视图（来自 Equity Risk Premium）</h2>
+                    <h2>股权溢价补充视图</h2>
                 </div>
             </div>
             <div class="chart-wrapper">{erp_chart_html}</div>

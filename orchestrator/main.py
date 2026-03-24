@@ -99,30 +99,63 @@ def validate_signal(payload: dict[str, Any], expected_type: str, path: Path) -> 
         raise ValueError(f"{path} records 不是列表")
 
 
+def build_latest_snapshot(erp_payload: dict[str, Any], relative_payload: dict[str, Any], latest_date: str | None) -> dict[str, Any]:
+    """构造统一最新快照，供下游直接消费。"""
+    erp_latest = erp_payload.get("latest_signal", {})
+    relative_latest = relative_payload.get("latest_signal", {})
+
+    return {
+        "date": latest_date,
+        "erp": {
+            "equity_premium": erp_latest.get("equity_premium"),
+            "bond_yield": erp_latest.get("bond_yield"),
+            "pe_ttm": erp_latest.get("pe_ttm"),
+            "earnings_yield": erp_latest.get("earnings_yield"),
+            "csi300_close": erp_latest.get("csi300_close"),
+        },
+        "relative": {
+            "zz500_recommendation": relative_latest.get("zz500_recommendation"),
+            "zz1000_recommendation": relative_latest.get("zz1000_recommendation"),
+            "zza500_recommendation": relative_latest.get("zza500_recommendation"),
+        },
+    }
+
+
 def build_merged_signal(erp_payload: dict[str, Any], relative_payload: dict[str, Any]) -> dict[str, Any]:
     latest_dates = [d for d in [erp_payload.get("latest_date"), relative_payload.get("latest_date")] if d]
+    latest_date = min(latest_dates) if latest_dates else None
+    erp_records = erp_payload.get("records", [])
+    relative_records = relative_payload.get("records", [])
+
     return {
         "version": "1.0",
         "signal_type": "erp_relative_merged",
         "source": "CSI300 Relative Index Orchestrator",
         "generated_at": now_iso(),
-        "latest_date": min(latest_dates) if latest_dates else None,
+        "latest_date": latest_date,
         "record_count": {
-            "erp": erp_payload.get("record_count", 0),
-            "relative": relative_payload.get("record_count", 0),
+            "erp": len(erp_records),
+            "relative": len(relative_records),
         },
-        "signals": {
+        "components": {
             "erp": {
-                "path": str(ERP_SIGNAL),
                 "latest_date": erp_payload.get("latest_date"),
                 "latest_signal": erp_payload.get("latest_signal", {}),
+                "record_count": len(erp_records),
+                "records": erp_records,
             },
             "relative": {
-                "path": str(RELATIVE_SIGNAL),
                 "latest_date": relative_payload.get("latest_date"),
                 "latest_signal": relative_payload.get("latest_signal", {}),
+                "record_count": len(relative_records),
+                "records": relative_records,
             },
         },
+        "paths": {
+            "erp": str(ERP_SIGNAL),
+            "relative": str(RELATIVE_SIGNAL),
+        },
+        "latest_snapshot": build_latest_snapshot(erp_payload, relative_payload, latest_date),
     }
 
 

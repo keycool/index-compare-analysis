@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-0.3.0-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-1.0.0-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,10 +19,13 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v0.3.0)
+### 最新优化 (v1.0.0)
 
 - ✅ **智能增量更新**：自动检测本地数据与远程数据，只获取新增数据，大幅提升运行速度
 - ✅ **强制更新选项**：支持 `--force` 参数强制完整更新所有历史数据
+- ✅ **顶层 orchestrator**：新增统一入口，支持 ERP + Relative 顺序调度
+- ✅ **共享接口标准化**：新增 `shared/erp_signal.json` 与 `shared/relative_signal.json`
+- ✅ **主从 workflow 重构**：线上统一收敛为主调度 workflow，单项目 workflow 改为手动触发
 - ✅ 图表分位数标注优化：显示在图表下方中央，不遮挡内容
 - ✅ 红绿虚线精准匹配：标注显示范围内的最高点和最低点
 - ✅ 图表高度优化：增加底部空间，完整显示所有标注
@@ -264,6 +267,12 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v1.0.0 (2026-03-24)
+- ✨ 新增顶层 orchestrator：支持统一运行 ERP 与 CSI300 Relative
+- ✨ 引入标准共享接口：降低跨项目隐式耦合
+- ✨ 新增主调度 workflow：以当前仓库为线上统一入口
+- 🔧 单项目 workflow 调整为手动触发：避免线上双重定时
 
 ### v0.3.0 (2026-02-24)
 - ✨ 新增智能增量更新功能：自动检测本地数据与远程数据状态

@@ -216,25 +216,45 @@ def create_price_chart(df, indices_config, recent_days=1000):
 
 
 
-def get_equity_premium_json_path() -> Path:
-    """获取 Equity Risk Premium 的 dashboard 数据文件路径。"""
-    env_path = os.environ.get('INDEX_COMPARE_ERP_JSON_PATH')
+def get_equity_premium_signal_path() -> Path:
+    """获取 ERP 标准共享信号文件路径。"""
+    env_path = os.environ.get('INDEX_COMPARE_ERP_SIGNAL_PATH')
     if env_path:
         return Path(env_path)
 
-    # E:/vibe coding/ERP Investment System/Equity Risk Premium/dashboard/data/equity_premium.json
     project_root = Path(__file__).resolve().parents[5]
-    return project_root / 'Equity Risk Premium' / 'dashboard' / 'data' / 'equity_premium.json'
+    return project_root / 'shared' / 'erp_signal.json'
 
 
 def load_equity_premium_records() -> List[Dict[str, Any]]:
-    """加载股权溢价仪表盘数据。"""
-    json_path = get_equity_premium_json_path()
-    if not json_path.exists():
+    """优先加载 ERP 标准共享接口，兼容旧 dashboard 数据文件。"""
+    signal_path = get_equity_premium_signal_path()
+    if signal_path.exists():
+        try:
+            with open(signal_path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+            if (
+                isinstance(payload, dict)
+                and payload.get('version') == '1.0'
+                and payload.get('signal_type') == 'equity_risk_premium'
+            ):
+                records = payload.get('records', [])
+                return records if isinstance(records, list) else []
+        except Exception:
+            return []
+
+    legacy_env_path = os.environ.get('INDEX_COMPARE_ERP_JSON_PATH')
+    if legacy_env_path:
+        legacy_path = Path(legacy_env_path)
+    else:
+        project_root = Path(__file__).resolve().parents[5]
+        legacy_path = project_root / 'Equity Risk Premium' / 'dashboard' / 'data' / 'equity_premium.json'
+
+    if not legacy_path.exists():
         return []
 
     try:
-        with open(json_path, 'r', encoding='utf-8') as f:
+        with open(legacy_path, 'r', encoding='utf-8') as f:
             payload = json.load(f)
         records = payload.get('records', []) if isinstance(payload, dict) else []
         return records if isinstance(records, list) else []

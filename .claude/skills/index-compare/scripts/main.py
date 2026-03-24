@@ -59,6 +59,20 @@ def get_excel_output_path() -> Path:
     return get_project_root() / "index_compare_enhanced.xlsx"
 
 
+def get_shared_signal_path() -> Path:
+    """获取 Relative 共享信号文件路径。"""
+    env_path = os.environ.get("INDEX_COMPARE_SHARED_SIGNAL_PATH")
+    if env_path:
+        return Path(env_path)
+
+    return get_project_root().parent / "shared" / "relative_signal.json"
+
+
+def get_generated_at() -> str:
+    """统一共享接口的生成时间格式。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
 def normalize_date_str(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce").dt.strftime("%Y-%m-%d")
 
@@ -186,6 +200,83 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "数据源",
     ]
     return export_df[ordered_cols]
+
+
+def _safe_float(value: Any, digits: int | None = None) -> Optional[float]:
+    """将表格值安全转换为 float。"""
+    try:
+        if value is None:
+            return None
+        if pd.isna(value):
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if digits is not None:
+        return round(number, digits)
+    return number
+
+
+def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
+    """
+    导出 Relative 标准共享接口，避免其他项目依赖内部文件结构。
+    """
+    if export_df.empty:
+        logger.warning("共享接口导出跳过：导出数据为空")
+        return False
+
+    try:
+        normalized_df = export_df.copy()
+        normalized_df["日期"] = normalize_date_str(normalized_df["日期"])
+        normalized_df = normalized_df.dropna(subset=["日期"]).sort_values("日期")
+
+        records: list[Dict[str, Any]] = []
+        for _, row in normalized_df.iterrows():
+            records.append(
+                {
+                    "date": str(row["日期"]),
+                    "hs300": _safe_float(row.get("沪深300"), 4),
+                    "zz500": _safe_float(row.get("中证500"), 4),
+                    "zz1000": _safe_float(row.get("中证1000"), 4),
+                    "zza500": _safe_float(row.get("中证A500"), 4),
+                    "shci": _safe_float(row.get("上证综指"), 4),
+                    "zz500_ratio": _safe_float(row.get("500/300比价"), 6),
+                    "zz1000_ratio": _safe_float(row.get("1000/300比价"), 6),
+                    "zza500_ratio": _safe_float(row.get("A500/300比价"), 6),
+                    "zz500_percentile": _safe_float(row.get("500分位"), 1),
+                    "zz1000_percentile": _safe_float(row.get("1000分位"), 1),
+                    "zza500_percentile": _safe_float(row.get("A500分位"), 1),
+                    "zz500_deviation": _safe_float(row.get("500偏离(%)"), 2),
+                    "zz1000_deviation": _safe_float(row.get("1000偏离(%)"), 2),
+                    "zza500_deviation": _safe_float(row.get("A500偏离(%)"), 2),
+                }
+            )
+
+        latest_row = normalized_df.iloc[-1]
+        payload = {
+            "version": "1.0",
+            "signal_type": "csi300_relative_index",
+            "source": "CSI300 Relative Index",
+            "generated_at": get_generated_at(),
+            "latest_date": str(latest_row["日期"]),
+            "record_count": len(records),
+            "records": records,
+            "latest_signal": {
+                "date": str(latest_row["日期"]),
+                "zz500_recommendation": str(latest_row.get("500建议", "")),
+                "zz1000_recommendation": str(latest_row.get("1000建议", "")),
+                "zza500_recommendation": str(latest_row.get("A500建议", "")),
+            },
+        }
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("共享接口已导出: %s", output_path)
+        return True
+    except Exception as exc:
+        logger.error("导出共享接口失败: %s", exc)
+        return False
 
 
 def save_to_excel(df_new: pd.DataFrame, output_path: Path) -> tuple[bool, pd.DataFrame, pd.DataFrame]:
@@ -484,6 +575,8 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
     export_df = build_export_dataframe(processed_df, conclusions)
     excel_output_path = get_excel_output_path()
     excel_saved, _, new_rows_df = save_to_excel(export_df, excel_output_path)
+    shared_signal_path = get_shared_signal_path()
+    shared_signal_saved = export_shared_signal(export_df, shared_signal_path)
 
     print("\n[步骤 7/7] 同步飞书（Webhook + 多维表格）...")
 
@@ -522,6 +615,8 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "report_file": report_file,
         "excel_saved": excel_saved,
         "excel_path": str(excel_output_path) if excel_saved else None,
+        "shared_signal_saved": shared_signal_saved,
+        "shared_signal_path": str(shared_signal_path) if shared_signal_saved else None,
         "feishu_sent": feishu_sent,
         "bitable_synced": bitable_result.get("success", False),
         "bitable_count": bitable_result.get("synced", 0),

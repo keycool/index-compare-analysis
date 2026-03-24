@@ -1,12 +1,6 @@
-name: csi300-relative-index-scheduler
+name: csi300-relative-index-manual
 
 on:
-  schedule:
-    # GitHub cron uses UTC (Mon-Fri):
-    # 10:30 UTC = 18:30 Asia/Shanghai
-    - cron: "30 10 * * 1-5"
-    # 14:00 UTC = 22:00 Asia/Shanghai
-    - cron: "0 14 * * 1-5"
   workflow_dispatch:
     inputs:
       force_update:
@@ -22,7 +16,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
-  group: csi300-relative-index-scheduler
+  group: csi300-relative-index-manual
   cancel-in-progress: false
 
 jobs:

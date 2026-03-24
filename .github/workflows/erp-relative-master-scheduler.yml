@@ -1,0 +1,134 @@
+name: erp-relative-master-scheduler
+
+on:
+  schedule:
+    # GitHub cron uses UTC (Mon-Fri):
+    # 10:30 UTC = 18:30 Asia/Shanghai
+    - cron: "30 10 * * 1-5"
+    # 14:00 UTC = 22:00 Asia/Shanghai
+    - cron: "0 14 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force_relative:
+        description: "Force Relative full update (true/false)"
+        required: false
+        default: "false"
+        type: string
+      erp_start_date:
+        description: "Optional ERP start date (YYYYMMDD or YYYY-MM-DD)"
+        required: false
+        default: ""
+        type: string
+      erp_end_date:
+        description: "Optional ERP end date (YYYYMMDD or YYYY-MM-DD)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: erp-relative-master-scheduler
+  cancel-in-progress: false
+
+jobs:
+  run-master-orchestrator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout CSI300 Relative Index
+        uses: actions/checkout@v6
+        with:
+          path: csi300-relative-index
+
+      - name: Checkout Equity Risk Premium
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ vars.ERP_REPOSITORY || 'keycool/equity-risk-premium' }}
+          token: ${{ secrets.CROSS_REPO_PAT || github.token }}
+          path: external/equity-risk-premium
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            csi300-relative-index/.claude/skills/index-compare/requirements.txt
+            external/equity-risk-premium/skills/equity-risk-premium/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r csi300-relative-index/.claude/skills/index-compare/requirements.txt
+          pip install -r external/equity-risk-premium/skills/equity-risk-premium/requirements.txt
+
+      - name: Run master orchestrator
+        env:
+          ERP_REPO_PATH: ${{ github.workspace }}/external/equity-risk-premium
+          SHARED_DIR: ${{ github.workspace }}/shared
+
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+
+          ERP_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
+          ERP_FEISHU_APP_TOKEN: ${{ secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          ERP_FEISHU_TABLE_ID: ${{ secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+
+          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
+          CSI_FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          CSI_FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+
+          REQUIRE_BITABLE_SYNC: "true"
+          FORCE_RELATIVE: ${{ github.event.inputs.force_relative || 'false' }}
+          ERP_START_DATE: ${{ github.event.inputs.erp_start_date || '' }}
+          ERP_END_DATE: ${{ github.event.inputs.erp_end_date || '' }}
+        working-directory: csi300-relative-index
+        run: |
+          set -euo pipefail
+
+          CMD=(python orchestrator/main.py)
+
+          if [[ "$FORCE_RELATIVE" == "true" ]]; then
+            CMD+=(--force-relative)
+          fi
+
+          if [[ -n "$ERP_START_DATE" ]]; then
+            CMD+=(--erp-start-date "$ERP_START_DATE")
+          fi
+
+          if [[ -n "$ERP_END_DATE" ]]; then
+            CMD+=(--erp-end-date "$ERP_END_DATE")
+          fi
+
+          "${CMD[@]}"
+
+      - name: Generate ERP dashboard artifact
+        if: success()
+        run: |
+          python external/equity-risk-premium/dashboard/generate_dashboard_data.py
+
+      - name: Upload master artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: erp-relative-master-${{ github.run_id }}
+          path: |
+            shared/*.json
+            csi300-relative-index/index_compare_enhanced.xlsx
+            csi300-relative-index/reports/index_compare_*.html
+            csi300-relative-index/.claude/skills/index-compare/data/*.json
+            csi300-relative-index/.claude/skills/index-compare/data/*.csv
+            external/equity-risk-premium/equity_premium_enhanced.xlsx
+            external/equity-risk-premium/dashboard/data/equity_premium.json
+            external/equity-risk-premium/dashboard/data/equity_premium.js
+            external/equity-risk-premium/dashboard/index.html
+          if-no-files-found: warn
+          retention-days: 7

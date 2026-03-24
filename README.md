@@ -194,6 +194,49 @@ python scripts/main.py --query ZZA500
 └── README.md                         # 项目说明
 ```
 
+## 共享接口
+
+完整流程结束后，项目会导出标准共享文件：
+
+```text
+../shared/relative_signal.json
+```
+
+报告在需要合并 ERP 数据时，会优先读取：
+
+```text
+../shared/erp_signal.json
+```
+
+这样 `CSI300 Relative Index` 不再依赖 `Equity Risk Premium` 的内部 dashboard 文件结构，而是依赖正式发布的共享接口。
+
+## GitHub Actions
+
+线上调度现已收敛为：
+
+- 主调度 workflow: `.github/workflows/erp-relative-master-scheduler.yml`
+- 单项目手动 workflow: `.github/workflows/csi300-relative-index-scheduler.yml`
+
+主调度 workflow 以当前仓库为入口，并在运行时额外 checkout `Equity Risk Premium` 仓库，然后顺序执行：
+
+1. `Equity Risk Premium`
+2. `CSI300 Relative Index`
+3. 共享接口校验
+4. `shared/merged_signal.json` 生成
+
+若 `Equity Risk Premium` 仓库是私有仓库，需要在当前仓库配置：
+
+- `CROSS_REPO_PAT`
+
+主调度还会分别读取 ERP 和 CSI 各自的飞书配置：
+
+- `ERP_FEISHU_WEBHOOK_URL`
+- `ERP_FEISHU_APP_TOKEN`
+- `ERP_FEISHU_TABLE_ID`
+- `CSI_FEISHU_WEBHOOK_URL`
+- `CSI_FEISHU_APP_TOKEN`
+- `CSI_FEISHU_TABLE_ID`
+
 ## 🧹 临时文件管理
 
 ### 自动清理

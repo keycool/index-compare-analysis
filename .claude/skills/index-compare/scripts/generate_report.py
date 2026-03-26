@@ -402,7 +402,6 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
     hs300_df = hs300_df[['date', 'HS300']].dropna(subset=['date']).sort_values('date')
 
     merged_df = pd.merge(erp_df[['date', 'equity_premium']], hs300_df, on='date', how='inner')
-    merged_df = merged_df.tail(recent_days)
     if merged_df.empty:
         return None
 
@@ -439,7 +438,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
 
     fig.update_layout(
         title=dict(
-            text=f'宏观总览：股权溢价指数 vs 沪深300（近{len(merged_df)}交易日）',
+            text='股权溢价指数',
             x=0.5,
             font=dict(size=15, color='#f1f5f9'),
         ),
@@ -531,12 +530,6 @@ def generate_html_report(df, conclusions, output_dir):
         macro_overview_html = macro_overview_chart.to_html(full_html=False, include_plotlyjs='cdn')
     else:
         macro_overview_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于合并展示的股权溢价数据，跳过宏观总览。</div>'
-
-    erp_chart = create_equity_premium_chart(erp_records, recent_days)
-    if erp_chart is not None:
-        erp_chart_html = erp_chart.to_html(full_html=False, include_plotlyjs=False)
-    else:
-        erp_chart_html = '<div style="padding: 20px; color: #94a3b8;">未检测到 Equity Risk Premium 数据文件，跳过合并图表。</div>'
 
     # 创建比价走势图（分开存储，用于并排布局）
     ratio_charts_html = []
@@ -1260,8 +1253,8 @@ def generate_html_report(df, conclusions, output_dir):
 
         <!-- Hero -->
         <div class="hero">
-            <h1>A股指数比价分析</h1>
-            <p class="hero-subtitle">基于沪深300基准，分析中证500/1000相对估值水平与趋势，提供量化配置建议</p>
+            <h1>大宽基指数比价系统</h1>
+            <p class="hero-subtitle">基于性价比原则，分析大宽基的估值水平与趋势，提供配置参考</p>
         </div>
 
         <!-- 第一排：宏观总览 -->
@@ -1279,9 +1272,6 @@ def generate_html_report(df, conclusions, output_dir):
         </div>
 
         <!-- 第二排开始：原 Index Report 主体 -->
-        {cards_html}
-
-        <!-- 图表区域 -->
         <div class="charts-section">
             <div class="section-header">
                 <div class="section-title">
@@ -1292,15 +1282,7 @@ def generate_html_report(df, conclusions, output_dir):
             <div class="chart-wrapper">{price_chart_html}</div>
         </div>
 
-        <div class="charts-section">
-            <div class="section-header">
-                <div class="section-title">
-                    <div class="section-icon">🔗</div>
-                    <h2>股权溢价补充视图</h2>
-                </div>
-            </div>
-            <div class="chart-wrapper">{erp_chart_html}</div>
-        </div>
+        {cards_html}
 
         <!-- 比价图并排布局 -->
         <div class="charts-section">
@@ -1513,13 +1495,6 @@ def generate_analysis_html(conclusions):
                         <span class="analysis-item-value" style="{d_color}">{data['deviation']['value']:+.2f}% ({data['deviation']['status']})</span>
                     </div>
                     <div class="analysis-item-desc">{data['deviation']['description']}</div>
-                </div>
-                <div class="recommendation-box {rec_class}">
-                    <div class="recommendation-icon">{rec_icon}</div>
-                    <div class="recommendation-content">
-                        <div class="recommendation-action">配置建议：{rec['action']}</div>
-                        <div class="recommendation-score">综合得分: {rec['score']}</div>
-                    </div>
                 </div>
             </div>
         </div>

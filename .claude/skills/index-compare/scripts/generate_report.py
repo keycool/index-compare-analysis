@@ -384,7 +384,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
     """
     创建宏观总览图：股权溢价指数与沪深300双轴同屏。
     """
-    if not erp_records or index_df.empty or 'HS300' not in index_df.columns:
+    if not erp_records:
         return None
 
     erp_df = pd.DataFrame(erp_records)
@@ -397,11 +397,17 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
     if erp_df.empty:
         return None
 
-    hs300_df = index_df.reset_index().rename(columns={index_df.index.name or 'index': 'date'})
-    hs300_df['date'] = pd.to_datetime(hs300_df['date'], errors='coerce')
-    hs300_df = hs300_df[['date', 'HS300']].dropna(subset=['date']).sort_values('date')
+    if 'csi300_close' in erp_df.columns:
+        merged_df = erp_df[['date', 'equity_premium', 'csi300_close']].dropna(subset=['csi300_close']).copy()
+        merged_df = merged_df.rename(columns={'csi300_close': 'HS300'})
+    elif not index_df.empty and 'HS300' in index_df.columns:
+        hs300_df = index_df.reset_index().rename(columns={index_df.index.name or 'index': 'date'})
+        hs300_df['date'] = pd.to_datetime(hs300_df['date'], errors='coerce')
+        hs300_df = hs300_df[['date', 'HS300']].dropna(subset=['date']).sort_values('date')
+        merged_df = pd.merge(erp_df[['date', 'equity_premium']], hs300_df, on='date', how='inner')
+    else:
+        return None
 
-    merged_df = pd.merge(erp_df[['date', 'equity_premium']], hs300_df, on='date', how='inner')
     if merged_df.empty:
         return None
 

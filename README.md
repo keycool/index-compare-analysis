@@ -249,17 +249,27 @@ python scripts/main.py --query ZZA500
 主调度 workflow 成功后，会自动发布 GitHub Pages 站点：
 
 - 主页：最新合并报告 `index.html`
-- 实验页：`/lab/index.html`
 - 数据：`/data/merged_signal.json`
 - 数据：`/data/erp_signal.json`
 - 数据：`/data/relative_signal.json`
 
 这样日常查看时可以直接访问固定 URL，而不需要每次手动下载 Actions artifact。
 
+## 本地实验区
+
+实验区默认只在本地使用，不进入主 workflow，也不发布到 GitHub Pages。
+
+本地试验方式：
+
+```bash
+cd .claude/skills/index-compare
+python scripts/generate_report.py --mode lab --data data/processed_data.csv --conclusions data/conclusions.json --output reports_lab
+```
+
 约定：
 
-- 正式改动先进入 `lab` 页验证
-- 确认稳定后，再合并到正式首页
+- 新想法先在本地 `lab` 模式验证
+- 确认稳定后，再合并到正式报告与线上 workflow
 
 ## 🧹 临时文件管理
 

@@ -249,11 +249,17 @@ python scripts/main.py --query ZZA500
 主调度 workflow 成功后，会自动发布 GitHub Pages 站点：
 
 - 主页：最新合并报告 `index.html`
+- 实验页：`/lab/index.html`
 - 数据：`/data/merged_signal.json`
 - 数据：`/data/erp_signal.json`
 - 数据：`/data/relative_signal.json`
 
 这样日常查看时可以直接访问固定 URL，而不需要每次手动下载 Actions artifact。
+
+约定：
+
+- 正式改动先进入 `lab` 页验证
+- 确认稳定后，再合并到正式首页
 
 ## 🧹 临时文件管理
 

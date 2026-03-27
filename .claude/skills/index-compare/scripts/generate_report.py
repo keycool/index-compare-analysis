@@ -380,7 +380,7 @@ def create_equity_premium_chart(records, recent_days=1000):
     return fig
 
 
-def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
+def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experimental=False):
     """
     创建宏观总览图：股权溢价指数与沪深300双轴同屏。
     """
@@ -448,6 +448,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
             x=0.5,
             font=dict(size=15, color='#f1f5f9'),
         ),
+        dragmode='zoom' if experimental else 'pan',
         hovermode='x unified',
         legend=dict(
             orientation='h',
@@ -478,9 +479,35 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
             )
         ],
         xaxis=dict(
+            title='日期',
             gridcolor='rgba(255,255,255,0.05)',
             linecolor='rgba(255,255,255,0.1)',
             tickfont=dict(color='#64748b'),
+            showspikes=experimental,
+            spikemode='across',
+            spikesnap='cursor',
+            spikecolor='rgba(255,255,255,0.28)',
+            spikethickness=1,
+            rangeslider=dict(
+                visible=experimental,
+                thickness=0.10,
+                bgcolor='rgba(255,255,255,0.04)',
+                bordercolor='rgba(255,255,255,0.08)',
+                borderwidth=1,
+            ),
+            rangeselector=dict(
+                visible=experimental,
+                bgcolor='rgba(17,24,39,0.88)',
+                activecolor='rgba(62,195,255,0.28)',
+                bordercolor='rgba(255,255,255,0.08)',
+                font=dict(color='#cbd5e1', size=11),
+                buttons=[
+                    dict(count=1, label='1Y', step='year', stepmode='backward'),
+                    dict(count=3, label='3Y', step='year', stepmode='backward'),
+                    dict(count=5, label='5Y', step='year', stepmode='backward'),
+                    dict(step='all', label='ALL'),
+                ],
+            ),
         ),
     )
 
@@ -502,7 +529,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000):
 
     return fig
 
-def generate_html_report(df, conclusions, output_dir):
+def generate_html_report(df, conclusions, output_dir, mode='production'):
     """
     生成 HTML 报告
 
@@ -524,16 +551,27 @@ def generate_html_report(df, conclusions, output_dir):
     report_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     latest_date = df.index[-1].strftime('%Y-%m-%d')
 
+    is_lab = mode == 'lab'
+
     # 创建价格走势图
     price_chart = create_price_chart(df, indices_config, recent_days)
     price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
 
     # 加载并合并股权溢价图（来自 Equity Risk Premium）
     erp_records = load_equity_premium_records()
-    macro_overview_chart = create_macro_overview_chart(erp_records, df, recent_days)
+    macro_overview_chart = create_macro_overview_chart(erp_records, df, recent_days, experimental=is_lab)
     if macro_overview_chart is not None:
-        # 首屏第一张图需要负责加载 Plotly，否则容器先出现但图不会渲染。
-        macro_overview_html = macro_overview_chart.to_html(full_html=False, include_plotlyjs='cdn')
+        macro_config = {
+            'displaylogo': False,
+            'responsive': True,
+            'scrollZoom': is_lab,
+            'doubleClick': 'reset+autosize',
+        }
+        macro_overview_html = macro_overview_chart.to_html(
+            full_html=False,
+            include_plotlyjs='cdn',
+            config=macro_config,
+        )
     else:
         macro_overview_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于合并展示的股权溢价数据，跳过宏观总览。</div>'
 
@@ -552,13 +590,21 @@ def generate_html_report(df, conclusions, output_dir):
     analysis_html = generate_analysis_html(conclusions)
 
     # 组装完整HTML - 金融终端风格
+    page_label = 'LAB' if is_lab else 'LIVE'
+    page_title = '大宽基指数比价系统 Lab' if is_lab else '大宽基指数比价系统'
+    hero_note = (
+        'Lab 试验区：当前用于验证更强的图表缩放、时间滑窗和交互方式。'
+        if is_lab
+        else '基于性价比原则，分析大宽基的估值水平与趋势，提供配置参考'
+    )
+
     html_content = f"""
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>A股指数比价分析 | {report_date}</title>
+    <title>{page_title} | {report_date}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -1250,7 +1296,7 @@ def generate_html_report(df, conclusions, output_dir):
             <div class="meta-info">
                 <div class="meta-item">
                     <span class="meta-dot"></span>
-                    <span>LIVE</span>
+                    <span>{page_label}</span>
                 </div>
                 <div class="meta-item">数据截止 {latest_date}</div>
                 <div class="meta-item">生成于 {report_date}</div>
@@ -1259,8 +1305,8 @@ def generate_html_report(df, conclusions, output_dir):
 
         <!-- Hero -->
         <div class="hero">
-            <h1>大宽基指数比价系统</h1>
-            <p class="hero-subtitle">基于性价比原则，分析大宽基的估值水平与趋势，提供配置参考</p>
+            <h1>{page_title}</h1>
+            <p class="hero-subtitle">{hero_note}</p>
         </div>
 
         <!-- 第一排：宏观总览 -->
@@ -1321,7 +1367,8 @@ def generate_html_report(df, conclusions, output_dir):
     output_path.mkdir(parents=True, exist_ok=True)
 
     # 保存报告
-    report_file = output_path / f'index_compare_{timestamp}.html'
+    file_prefix = 'index_compare_lab' if is_lab else 'index_compare'
+    report_file = output_path / f'{file_prefix}_{timestamp}.html'
     with open(report_file, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
@@ -1509,7 +1556,7 @@ def generate_analysis_html(conclusions):
     return f'<div class="analysis-section">{"".join(blocks)}</div>'
 
 
-def generate_report(data_path, conclusions_path, output_dir):
+def generate_report(data_path, conclusions_path, output_dir, mode='production'):
     """
     生成完整报告
 
@@ -1532,7 +1579,7 @@ def generate_report(data_path, conclusions_path, output_dir):
 
     # 生成报告
     print("\n生成 HTML 报告...")
-    report_file = generate_html_report(df, conclusions, output_dir)
+    report_file = generate_html_report(df, conclusions, output_dir, mode=mode)
 
     print(f"\n[OK] 报告已生成: {report_file}")
 
@@ -1550,6 +1597,10 @@ def main():
     parser.add_argument('--output', '-o',
                         default='reports',
                         help='输出目录 (默认: reports)')
+    parser.add_argument('--mode',
+                        default='production',
+                        choices=['production', 'lab'],
+                        help='报告模式：production 或 lab')
 
     args = parser.parse_args()
 
@@ -1557,7 +1608,7 @@ def main():
     script_dir = Path(__file__).parent.parent
     os.chdir(script_dir)
 
-    generate_report(args.data, args.conclusions, args.output)
+    generate_report(args.data, args.conclusions, args.output, mode=args.mode)
 
 
 if __name__ == '__main__':

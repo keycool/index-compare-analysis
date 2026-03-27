@@ -156,12 +156,22 @@ jobs:
           site_dir.mkdir(parents=True, exist_ok=True)
           (site_dir / ".nojekyll").write_text("", encoding="utf-8")
 
-          report_files = sorted(reports_dir.glob("index_compare_*.html"))
-          if not report_files:
-              raise FileNotFoundError(f"No report file found in {reports_dir}")
+          prod_reports = sorted(reports_dir.glob("index_compare_*.html"))
+          prod_reports = [p for p in prod_reports if "_lab_" not in p.name]
+          if not prod_reports:
+              raise FileNotFoundError(f"No production report file found in {reports_dir}")
 
-          latest_report = max(report_files, key=lambda p: p.stat().st_mtime)
+          latest_report = max(prod_reports, key=lambda p: p.stat().st_mtime)
           shutil.copy2(latest_report, site_dir / "index.html")
+
+          lab_reports = sorted(reports_dir.glob("index_compare_lab_*.html"))
+          if lab_reports:
+              latest_lab_report = max(lab_reports, key=lambda p: p.stat().st_mtime)
+              lab_dir = site_dir / "lab"
+              lab_dir.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(latest_lab_report, lab_dir / "index.html")
+          else:
+              latest_lab_report = None
 
           data_dir = site_dir / "data"
           data_dir.mkdir(parents=True, exist_ok=True)
@@ -177,6 +187,7 @@ jobs:
           merged_path = shared_dir / "merged_signal.json"
           summary = {
               "latest_report": latest_report.name,
+              "latest_lab_report": latest_lab_report.name if latest_lab_report else None,
               "generated_files": sorted([p.name for p in data_dir.glob("*")]),
           }
           if merged_path.exists():

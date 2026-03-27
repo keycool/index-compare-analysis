@@ -562,7 +562,8 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
 
     print("\n[步骤 5/7] 生成 HTML 报告...")
     try:
-        report_file = generate_report("data/processed_data.csv", "data/conclusions.json", report_dir)
+        report_file = generate_report("data/processed_data.csv", "data/conclusions.json", report_dir, mode="production")
+        lab_report_file = generate_report("data/processed_data.csv", "data/conclusions.json", report_dir, mode="lab")
     except Exception as exc:
         print(f"[ERROR] 报告生成失败: {exc}")
         sys.exit(1)
@@ -613,6 +614,7 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "latest_date": latest_row.get("日期"),
         "latest": latest_row,
         "report_file": report_file,
+        "lab_report_file": lab_report_file,
         "excel_saved": excel_saved,
         "excel_path": str(excel_output_path) if excel_saved else None,
         "shared_signal_saved": shared_signal_saved,

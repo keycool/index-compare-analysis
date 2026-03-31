@@ -25,7 +25,7 @@ def load_config():
         return json.load(f)
 
 
-def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000):
+def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False):
     """
     创建比价走势图 - 深色主题
 
@@ -97,8 +97,17 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000):
     else:
         percentile_color = "#f43f5e"  # 红色 - 高估
 
+    title_color = '#334155' if light_theme else '#f1f5f9'
+    legend_color = '#475569' if light_theme else '#94a3b8'
+    tick_color = '#64748b'
+    x_grid = 'rgba(148,163,184,0.18)' if light_theme else 'rgba(255,255,255,0.05)'
+    x_line = 'rgba(148,163,184,0.35)' if light_theme else 'rgba(255,255,255,0.1)'
+    paper_bg = '#eef4ff' if light_theme else 'rgba(0,0,0,0)'
+    plot_bg = '#ffffff' if light_theme else 'rgba(17, 24, 39, 0.5)'
+    annotation_bg = '#ffffff' if light_theme else 'rgba(17, 24, 39, 0.85)'
+
     fig.update_layout(
-        title=dict(text=title, x=0.5, font=dict(size=14, color='#f1f5f9')),
+        title=dict(text=title, x=0.5, font=dict(size=14, color=title_color)),
         xaxis_title='',
         yaxis_title='比价',
         hovermode='x unified',
@@ -108,7 +117,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000):
             y=1.02,
             xanchor='right',
             x=1,
-            font=dict(color='#94a3b8', size=10)
+            font=dict(color=legend_color, size=10)
         ),
         # 添加分位数显示（图表下方正中间）
         annotations=[
@@ -117,8 +126,8 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000):
                 xref='paper', yref='paper',
                 text=f'<b>当前分位数：</b><span style="font-size:16px; color:{percentile_color}; font-weight:700">{current_percentile:.1f}%</span>',
                 showarrow=False,
-                font=dict(size=12, color='#94a3b8'),
-                bgcolor='rgba(17, 24, 39, 0.85)',
+                font=dict(size=12, color=legend_color),
+                bgcolor=annotation_bg,
                 bordercolor=percentile_color,
                 borderwidth=1,
                 borderpad=10,
@@ -128,25 +137,25 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000):
         ],
         margin=dict(l=50, r=50, t=50, b=90),
         height=450,
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(17, 24, 39, 0.5)',
-        font=dict(color='#94a3b8'),
+        paper_bgcolor=paper_bg,
+        plot_bgcolor=plot_bg,
+        font=dict(color=legend_color),
         xaxis=dict(
-            gridcolor='rgba(255,255,255,0.05)',
-            linecolor='rgba(255,255,255,0.1)',
-            tickfont=dict(color='#64748b', size=10)
+            gridcolor=x_grid,
+            linecolor=x_line,
+            tickfont=dict(color=tick_color, size=10)
         ),
         yaxis=dict(
-            gridcolor='rgba(255,255,255,0.05)',
-            linecolor='rgba(255,255,255,0.1)',
-            tickfont=dict(color='#64748b', size=10)
+            gridcolor=x_grid,
+            linecolor=x_line,
+            tickfont=dict(color=tick_color, size=10)
         )
     )
 
     return fig
 
 
-def create_price_chart(df, indices_config, recent_days=1000):
+def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
     """
     创建价格走势图 - 深色主题
 
@@ -173,17 +182,37 @@ def create_price_chart(df, indices_config, recent_days=1000):
 
     for code, info in indices_config.items():
         if code in recent_df.columns:
+            series = pd.to_numeric(recent_df[code], errors='coerce').copy()
+
+            # 中证A500 历史起始阶段存在被固定首值占住的平线，图表中直接隐藏该段。
+            if code == 'ZZA500':
+                valid = series.dropna()
+                if not valid.empty:
+                    first_value = valid.iloc[0]
+                    changed_mask = (valid - first_value).abs() > 1e-9
+                    if changed_mask.any():
+                        first_change_label = changed_mask[changed_mask].index[0]
+                        series.loc[series.index < first_change_label] = pd.NA
+
             fig.add_trace(go.Scatter(
                 x=recent_df.index,
-                y=recent_df[code],
+                y=series,
                 mode='lines',
                 name=info['name'],
                 line=dict(color=colors.get(code, '#94a3b8'), width=1.5),
                 hovertemplate=f"{info['name']}<br>日期: %{{x}}<br>点位: %{{y:.2f}}<extra></extra>"
             ))
 
+    title_color = '#334155' if light_theme else '#f1f5f9'
+    legend_color = '#475569' if light_theme else '#94a3b8'
+    tick_color = '#64748b'
+    x_grid = 'rgba(148,163,184,0.18)' if light_theme else 'rgba(255,255,255,0.05)'
+    x_line = 'rgba(148,163,184,0.35)' if light_theme else 'rgba(255,255,255,0.1)'
+    paper_bg = '#eef4ff' if light_theme else 'rgba(0,0,0,0)'
+    plot_bg = '#ffffff' if light_theme else 'rgba(17, 24, 39, 0.5)'
+
     fig.update_layout(
-        title=dict(text=f'指数价格走势（近{recent_days}交易日）', x=0.5, font=dict(size=14, color='#f1f5f9')),
+        title=dict(text=f'指数价格走势（近{recent_days}交易日）', x=0.5, font=dict(size=14, color=title_color)),
         xaxis_title='日期',
         yaxis_title='点位',
         hovermode='x unified',
@@ -193,22 +222,22 @@ def create_price_chart(df, indices_config, recent_days=1000):
             y=1.02,
             xanchor='right',
             x=1,
-            font=dict(color='#94a3b8', size=11)
+            font=dict(color=legend_color, size=11)
         ),
         margin=dict(l=60, r=60, t=60, b=60),
         height=450,
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(17, 24, 39, 0.5)',
-        font=dict(color='#94a3b8'),
+        paper_bgcolor=paper_bg,
+        plot_bgcolor=plot_bg,
+        font=dict(color=legend_color),
         xaxis=dict(
-            gridcolor='rgba(255,255,255,0.05)',
-            linecolor='rgba(255,255,255,0.1)',
-            tickfont=dict(color='#64748b')
+            gridcolor=x_grid,
+            linecolor=x_line,
+            tickfont=dict(color=tick_color)
         ),
         yaxis=dict(
-            gridcolor='rgba(255,255,255,0.05)',
-            linecolor='rgba(255,255,255,0.1)',
-            tickfont=dict(color='#64748b')
+            gridcolor=x_grid,
+            linecolor=x_line,
+            tickfont=dict(color=tick_color)
         )
     )
 
@@ -441,6 +470,38 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
 
     latest_erp = merged_df['equity_premium'].iloc[-1]
     latest_hs300 = merged_df['HS300'].iloc[-1]
+    first_date = merged_df['date'].iloc[0]
+    last_date = merged_df['date'].iloc[-1]
+
+    lab_annotations = [
+        dict(
+            x=0.01,
+            y=1.12,
+            xref='paper',
+            yref='paper',
+            text=(
+                f'最新股权溢价 <b style="color:#3ec3ff;">{latest_erp:.2f}%</b>'
+                f' &nbsp;&nbsp;|&nbsp;&nbsp; 最新沪深300 <b style="color:#fbbf24;">{latest_hs300:,.2f}</b>'
+            ),
+            showarrow=False,
+            xanchor='left',
+            font=dict(size=12, color='#cbd5e1'),
+        )
+    ]
+
+    if experimental:
+        lab_annotations.append(
+            dict(
+                x=0.99,
+                y=1.12,
+                xref='paper',
+                yref='paper',
+                text='实验模式：框选缩放 / 滚轮缩放 / 底部滑块定位 / 双击恢复全历史',
+                showarrow=False,
+                xanchor='right',
+                font=dict(size=11, color='#94a3b8'),
+            )
+        )
 
     fig.update_layout(
         title=dict(
@@ -450,6 +511,8 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
         ),
         dragmode='zoom' if experimental else 'pan',
         hovermode='x unified',
+        hoverdistance=30,
+        uirevision='macro-overview-lab' if experimental else None,
         legend=dict(
             orientation='h',
             yanchor='bottom',
@@ -458,31 +521,18 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             x=1,
             font=dict(color='#94a3b8', size=11),
         ),
-        margin=dict(l=60, r=70, t=65, b=65),
-        height=480,
+        margin=dict(l=60, r=70, t=78, b=85 if experimental else 65),
+        height=560 if experimental else 480,
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(17, 24, 39, 0.55)',
         font=dict(color='#94a3b8'),
-        annotations=[
-            dict(
-                x=0.01,
-                y=1.12,
-                xref='paper',
-                yref='paper',
-                text=(
-                    f'最新股权溢价 <b style="color:#3ec3ff;">{latest_erp:.2f}%</b>'
-                    f' &nbsp;&nbsp;|&nbsp;&nbsp; 最新沪深300 <b style="color:#fbbf24;">{latest_hs300:,.2f}</b>'
-                ),
-                showarrow=False,
-                xanchor='left',
-                font=dict(size=12, color='#cbd5e1'),
-            )
-        ],
+        annotations=lab_annotations,
         xaxis=dict(
             title='日期',
             gridcolor='rgba(255,255,255,0.05)',
             linecolor='rgba(255,255,255,0.1)',
             tickfont=dict(color='#64748b'),
+            range=[first_date, last_date],
             showspikes=experimental,
             spikemode='across',
             spikesnap='cursor',
@@ -490,7 +540,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             spikethickness=1,
             rangeslider=dict(
                 visible=experimental,
-                thickness=0.10,
+                thickness=0.14,
                 bgcolor='rgba(255,255,255,0.04)',
                 bordercolor='rgba(255,255,255,0.08)',
                 borderwidth=1,
@@ -502,9 +552,11 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
                 bordercolor='rgba(255,255,255,0.08)',
                 font=dict(color='#cbd5e1', size=11),
                 buttons=[
+                    dict(count=6, label='6M', step='month', stepmode='backward'),
                     dict(count=1, label='1Y', step='year', stepmode='backward'),
                     dict(count=3, label='3Y', step='year', stepmode='backward'),
                     dict(count=5, label='5Y', step='year', stepmode='backward'),
+                    dict(count=10, label='10Y', step='year', stepmode='backward'),
                     dict(step='all', label='ALL'),
                 ],
             ),
@@ -529,6 +581,409 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
 
     return fig
 
+
+def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5):
+    """
+    创建双视图实验图：
+    - 上图：全历史总览
+    - 下图：固定近 N 年细节观察
+    """
+    if not erp_records:
+        return None
+
+    erp_df = pd.DataFrame(erp_records)
+    required = {'date', 'equity_premium'}
+    if not required.issubset(set(erp_df.columns)):
+        return None
+
+    erp_df['date'] = pd.to_datetime(erp_df['date'], errors='coerce')
+    erp_df = erp_df.dropna(subset=['date']).sort_values('date')
+    if erp_df.empty:
+        return None
+
+    if 'csi300_close' in erp_df.columns:
+        merged_df = erp_df[['date', 'equity_premium', 'csi300_close']].dropna(subset=['csi300_close']).copy()
+        merged_df = merged_df.rename(columns={'csi300_close': 'HS300'})
+    elif not index_df.empty and 'HS300' in index_df.columns:
+        hs300_df = index_df.reset_index().rename(columns={index_df.index.name or 'index': 'date'})
+        hs300_df['date'] = pd.to_datetime(hs300_df['date'], errors='coerce')
+        hs300_df = hs300_df[['date', 'HS300']].dropna(subset=['date']).sort_values('date')
+        merged_df = pd.merge(erp_df[['date', 'equity_premium']], hs300_df, on='date', how='inner')
+    else:
+        return None
+
+    if merged_df.empty:
+        return None
+
+    merged_df = merged_df.dropna(subset=['equity_premium', 'HS300']).copy()
+    if merged_df.empty:
+        return None
+
+    last_date = merged_df['date'].iloc[-1]
+    first_date = merged_df['date'].iloc[0]
+    focus_start = max(first_date, last_date - pd.DateOffset(years=focus_years))
+
+    focus_df = merged_df[merged_df['date'] >= focus_start].copy()
+    if focus_df.empty:
+        focus_df = merged_df.copy()
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        row_heights=[0.50, 0.50],
+        vertical_spacing=0.10,
+        specs=[[{"secondary_y": True}], [{"secondary_y": True}]],
+        subplot_titles=('全历史总览', f'近{focus_years}年细节观察'),
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['equity_premium'],
+            mode='lines',
+            name='股权溢价指数',
+            line=dict(color='#3ec3ff', width=2.8),
+            fill='tozeroy',
+            fillcolor='rgba(62, 195, 255, 0.10)',
+            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
+        ),
+        row=1,
+        col=1,
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['HS300'],
+            mode='lines',
+            name='沪深300',
+            line=dict(color='#fbbf24', width=2.2),
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=focus_df['date'],
+            y=focus_df['equity_premium'],
+            mode='lines',
+            name=f'股权溢价指数(近{focus_years}年)',
+            line=dict(color='#3ec3ff', width=2.8),
+            fill='tozeroy',
+            fillcolor='rgba(62, 195, 255, 0.10)',
+            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
+        ),
+        row=2,
+        col=1,
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=focus_df['date'],
+            y=focus_df['HS300'],
+            mode='lines',
+            name=f'沪深300(近{focus_years}年)',
+            line=dict(color='#fbbf24', width=2.2),
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+        ),
+        row=2,
+        col=1,
+        secondary_y=True,
+    )
+
+    fig.add_vrect(
+        x0=focus_start,
+        x1=last_date,
+        fillcolor='rgba(62, 195, 255, 0.10)',
+        line_width=0,
+        row=1,
+        col=1,
+    )
+
+    fig.update_layout(
+        title=dict(
+            text='股权溢价指数（双视图实验版）',
+            x=0.5,
+            font=dict(size=15, color='#f1f5f9'),
+        ),
+        hovermode='x unified',
+        dragmode='pan',
+        hoverdistance=30,
+        uirevision='macro-overview-dual-view-lab',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.04,
+            xanchor='right',
+            x=1,
+            font=dict(color='#94a3b8', size=11),
+        ),
+        margin=dict(l=60, r=70, t=88, b=65),
+        height=780,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(17, 24, 39, 0.55)',
+        font=dict(color='#94a3b8'),
+        annotations=[
+            dict(
+                x=0.01,
+                y=1.12,
+                xref='paper',
+                yref='paper',
+                text=f'上图保留全历史，下图固定展示近{focus_years}年细节；不依赖频繁缩放也能同时看全局与局部。',
+                showarrow=False,
+                xanchor='left',
+                font=dict(size=11, color='#94a3b8'),
+            )
+        ],
+    )
+
+    fig.update_xaxes(
+        row=1,
+        col=1,
+        title='日期',
+        gridcolor='rgba(255,255,255,0.05)',
+        linecolor='rgba(255,255,255,0.1)',
+        tickfont=dict(color='#64748b'),
+        rangeslider=dict(visible=False),
+    )
+    fig.update_xaxes(
+        row=2,
+        col=1,
+        title='日期',
+        range=[focus_start, last_date],
+        gridcolor='rgba(255,255,255,0.05)',
+        linecolor='rgba(255,255,255,0.1)',
+        tickfont=dict(color='#64748b', size=10),
+        showspikes=True,
+        spikemode='across',
+        spikesnap='cursor',
+        spikecolor='rgba(255,255,255,0.28)',
+        spikethickness=1,
+        rangeslider=dict(visible=False),
+    )
+    fig.update_yaxes(
+        title_text='股权溢价(%)',
+        row=1,
+        col=1,
+        secondary_y=False,
+        gridcolor='rgba(62,195,255,0.10)',
+        tickfont=dict(color='#7dd3fc'),
+        title_font=dict(color='#7dd3fc'),
+        zerolinecolor='rgba(255,255,255,0.14)',
+    )
+    fig.update_yaxes(
+        title_text='沪深300点位',
+        row=1,
+        col=1,
+        secondary_y=True,
+        gridcolor='rgba(255,255,255,0)',
+        tickfont=dict(color='#fcd34d'),
+        title_font=dict(color='#fcd34d'),
+    )
+    fig.update_yaxes(
+        title_text='股权溢价(%)',
+        row=2,
+        col=1,
+        secondary_y=False,
+        gridcolor='rgba(255,255,255,0.05)',
+        tickfont=dict(color='#7dd3fc'),
+        title_font=dict(color='#7dd3fc'),
+        zerolinecolor='rgba(255,255,255,0.14)',
+    )
+    fig.update_yaxes(
+        title_text='沪深300点位',
+        row=2,
+        col=1,
+        secondary_y=True,
+        gridcolor='rgba(255,255,255,0)',
+        tickfont=dict(color='#fcd34d'),
+        title_font=dict(color='#fcd34d'),
+    )
+
+    return fig
+
+
+def create_macro_overview_reference_chart(erp_records, index_df):
+    """
+    创建参考版股权溢价图：
+    - 主线：股权溢价指数
+    - 参考线：机会值(70分位) / 中位值(50分位) / 危险值(30分位)
+    - 对照线：沪深300
+    """
+    if not erp_records:
+        return None, None
+
+    erp_df = pd.DataFrame(erp_records)
+    required = {'date', 'equity_premium'}
+    if not required.issubset(set(erp_df.columns)):
+        return None, None
+
+    erp_df['date'] = pd.to_datetime(erp_df['date'], errors='coerce')
+    erp_df = erp_df.dropna(subset=['date']).sort_values('date')
+    if erp_df.empty:
+        return None, None
+
+    if 'csi300_close' in erp_df.columns:
+        merged_df = erp_df[['date', 'equity_premium', 'csi300_close']].dropna(subset=['csi300_close']).copy()
+        merged_df = merged_df.rename(columns={'csi300_close': 'HS300'})
+    elif not index_df.empty and 'HS300' in index_df.columns:
+        hs300_df = index_df.reset_index().rename(columns={index_df.index.name or 'index': 'date'})
+        hs300_df['date'] = pd.to_datetime(hs300_df['date'], errors='coerce')
+        hs300_df = hs300_df[['date', 'HS300']].dropna(subset=['date']).sort_values('date')
+        merged_df = pd.merge(erp_df[['date', 'equity_premium']], hs300_df, on='date', how='inner')
+    else:
+        return None, None
+
+    if merged_df.empty:
+        return None, None
+
+    merged_df = merged_df.dropna(subset=['equity_premium', 'HS300']).copy()
+    if merged_df.empty:
+        return None, None
+
+    premium_series = merged_df['equity_premium']
+
+    def expanding_quantile(series: pd.Series, q: float) -> pd.Series:
+        return series.expanding(min_periods=30).quantile(q)
+
+    merged_df['opportunity_line'] = expanding_quantile(premium_series, 0.70)
+    merged_df['median_line'] = expanding_quantile(premium_series, 0.50)
+    merged_df['danger_line'] = expanding_quantile(premium_series, 0.30)
+
+    latest_row = merged_df.iloc[-1]
+    latest_value = float(latest_row['equity_premium'])
+    historical_mean = float(premium_series.mean())
+    percentile = float(percentileofscore(premium_series.dropna(), latest_value))
+
+    summary = {
+        'date': latest_row['date'].strftime('%Y.%m.%d'),
+        'latest_value': latest_value,
+        'historical_mean': historical_mean,
+        'percentile': percentile,
+    }
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['equity_premium'],
+            mode='lines',
+            name='股权溢价指数',
+            line=dict(color='#4b4b4b', width=2.4),
+            hovertemplate='日期: %{x}<br>股权溢价指数: %{y:.2f}<extra></extra>',
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['opportunity_line'],
+            mode='lines',
+            name='机会值(70分位)',
+            line=dict(color='#324d94', width=1.4),
+            hovertemplate='日期: %{x}<br>机会值: %{y:.2f}<extra></extra>',
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['median_line'],
+            mode='lines',
+            name='中位值(50分位)',
+            line=dict(color='#0d7fd1', width=1.4),
+            hovertemplate='日期: %{x}<br>中位值: %{y:.2f}<extra></extra>',
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['danger_line'],
+            mode='lines',
+            name='危险值(30分位)',
+            line=dict(color='#6f97e7', width=1.4),
+            hovertemplate='日期: %{x}<br>危险值: %{y:.2f}<extra></extra>',
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=merged_df['date'],
+            y=merged_df['HS300'],
+            mode='lines',
+            name='沪深300',
+            line=dict(color='#1e90ff', width=1.2),
+            opacity=0.9,
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+        ),
+        secondary_y=True,
+    )
+
+    fig.add_hline(
+        y=historical_mean,
+        line_dash='dash',
+        line_color='rgba(75,75,75,0.55)',
+        annotation_text=f'历史均值: {historical_mean:.2f}',
+        annotation_position='right',
+    )
+
+    fig.update_layout(
+        title=dict(
+            text='股权溢价指数参考版',
+            x=0.5,
+            font=dict(size=15, color='#334155'),
+        ),
+        hovermode='x unified',
+        dragmode='pan',
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5,
+            font=dict(color='#475569', size=11),
+        ),
+        margin=dict(l=50, r=55, t=55, b=55),
+        height=540,
+        paper_bgcolor='#eef4ff',
+        plot_bgcolor='#ffffff',
+        font=dict(color='#334155'),
+        xaxis=dict(
+            title='',
+            gridcolor='rgba(148,163,184,0.18)',
+            linecolor='rgba(148,163,184,0.35)',
+            tickfont=dict(color='#64748b'),
+            rangeslider=dict(
+                visible=True,
+                thickness=0.10,
+                bgcolor='rgba(191,219,254,0.18)',
+                bordercolor='rgba(148,163,184,0.20)',
+                borderwidth=1,
+            ),
+        ),
+    )
+    fig.update_yaxes(
+        title_text='股权溢价指数',
+        secondary_y=False,
+        gridcolor='rgba(148,163,184,0.18)',
+        tickfont=dict(color='#64748b'),
+        title_font=dict(color='#475569'),
+        zerolinecolor='rgba(148,163,184,0.25)',
+    )
+    fig.update_yaxes(
+        title_text='沪深300点位',
+        secondary_y=True,
+        gridcolor='rgba(0,0,0,0)',
+        tickfont=dict(color='#1d4ed8'),
+        title_font=dict(color='#1d4ed8'),
+    )
+
+    return fig, summary
+
 def generate_html_report(df, conclusions, output_dir, mode='production'):
     """
     生成 HTML 报告
@@ -552,21 +1007,22 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     latest_date = df.index[-1].strftime('%Y-%m-%d')
 
     is_lab = mode == 'lab'
+    use_reference_chart_style = True
 
     # 创建价格走势图
-    price_chart = create_price_chart(df, indices_config, recent_days)
+    price_chart = create_price_chart(df, indices_config, recent_days, light_theme=use_reference_chart_style)
     price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
 
     # 加载并合并股权溢价图（来自 Equity Risk Premium）
     erp_records = load_equity_premium_records()
+    macro_config = {
+        'displaylogo': False,
+        'responsive': True,
+        'scrollZoom': is_lab,
+        'doubleClick': 'reset+autosize',
+    }
     macro_overview_chart = create_macro_overview_chart(erp_records, df, recent_days, experimental=is_lab)
     if macro_overview_chart is not None:
-        macro_config = {
-            'displaylogo': False,
-            'responsive': True,
-            'scrollZoom': is_lab,
-            'doubleClick': 'reset+autosize',
-        }
         macro_overview_html = macro_overview_chart.to_html(
             full_html=False,
             include_plotlyjs='cdn',
@@ -575,12 +1031,107 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     else:
         macro_overview_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于合并展示的股权溢价数据，跳过宏观总览。</div>'
 
+    macro_dual_panel_html = ''
+    if is_lab:
+        macro_dual_panel_chart = create_macro_overview_dual_panel_chart(erp_records, df)
+        if macro_dual_panel_chart is not None:
+            macro_dual_panel_html = macro_dual_panel_chart.to_html(
+                full_html=False,
+                include_plotlyjs=False,
+                config=macro_config,
+            )
+        else:
+            macro_dual_panel_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成双层实验图的数据。</div>'
+
+    macro_reference_html = ''
+    macro_reference_summary_html = ''
+    macro_reference_chart, macro_reference_summary = create_macro_overview_reference_chart(erp_records, df)
+    if macro_reference_chart is not None and macro_reference_summary is not None:
+        reference_chart_id = 'macro-reference-chart'
+        reference_chart_body = macro_reference_chart.to_html(
+            full_html=False,
+            include_plotlyjs=False,
+            div_id=reference_chart_id,
+            config={
+                'displaylogo': False,
+                'responsive': True,
+                'scrollZoom': False,
+                'doubleClick': 'reset+autosize',
+            },
+        )
+        macro_reference_html = (
+            '<div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;'
+            'margin:0 0 12px 0;">'
+            '<button type="button" class="macro-ref-toggle is-on" '
+            'data-target="70" style="border:1px solid #324d94;background:#e8efff;color:#324d94;'
+            'padding:6px 12px;border-radius:999px;font-size:12px;cursor:pointer;">70</button>'
+            '<button type="button" class="macro-ref-toggle is-on" '
+            'data-target="50" style="border:1px solid #0d7fd1;background:#e0f2fe;color:#0d7fd1;'
+            'padding:6px 12px;border-radius:999px;font-size:12px;cursor:pointer;">50</button>'
+            '<button type="button" class="macro-ref-toggle is-on" '
+            'data-target="30" style="border:1px solid #6f97e7;background:#eef4ff;color:#6f97e7;'
+            'padding:6px 12px;border-radius:999px;font-size:12px;cursor:pointer;">30</button>'
+            '</div>'
+            + reference_chart_body +
+            f"""
+<script>
+(function() {{
+    const chartId = "{reference_chart_id}";
+    const traceIndexMap = {{ "70": 1, "50": 2, "30": 3 }};
+
+    function bindReferenceToggles() {{
+        const chart = document.getElementById(chartId);
+        if (!chart || !chart.data) return;
+
+        document.querySelectorAll('.macro-ref-toggle').forEach((button) => {{
+            if (button.dataset.bound === 'true') return;
+            button.dataset.bound = 'true';
+
+            button.addEventListener('click', () => {{
+                const target = button.dataset.target;
+                const traceIndex = traceIndexMap[target];
+                const currentVisible = chart.data[traceIndex] && chart.data[traceIndex].visible;
+                const nextVisible = currentVisible === 'legendonly' ? true : 'legendonly';
+
+                Plotly.restyle(chart, {{ visible: nextVisible }}, [traceIndex]);
+
+                if (nextVisible === 'legendonly') {{
+                    button.classList.remove('is-on');
+                    button.style.opacity = '0.45';
+                    button.style.filter = 'grayscale(0.15)';
+                }} else {{
+                    button.classList.add('is-on');
+                    button.style.opacity = '1';
+                    button.style.filter = 'none';
+                }}
+            }});
+        }});
+    }}
+
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', bindReferenceToggles);
+    }} else {{
+        bindReferenceToggles();
+    }}
+}})();
+</script>
+"""
+        )
+        macro_reference_summary_html = (
+            f"{macro_reference_summary['date']}，股权溢价指数最新值 "
+            f"{macro_reference_summary['latest_value']:.2f}，历史平均 "
+            f"{macro_reference_summary['historical_mean']:.2f}，当前值高于历史上 "
+            f"{macro_reference_summary['percentile']:.2f}% 的时期"
+        )
+    else:
+        macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
+
     # 创建比价走势图（分开存储，用于并排布局）
     ratio_charts_html = []
     for target in ['ZZ500', 'ZZ1000', 'ZZA500']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
-            chart = create_ratio_chart(df, target, f'{name} vs 沪深300', ma_window, recent_days)
+            chart = create_ratio_chart(df, target, f'{name} vs 沪深300', ma_window, recent_days, light_theme=use_reference_chart_style)
             ratio_charts_html.append(chart.to_html(full_html=False, include_plotlyjs='cdn'))
 
     # 生成指标卡片HTML
@@ -605,6 +1156,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{page_title} | {report_date}</title>
+    <script charset="utf-8" src="https://cdn.plot.ly/plotly-3.0.0.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -1309,19 +1861,8 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <p class="hero-subtitle">{hero_note}</p>
         </div>
 
-        <!-- 第一排：宏观总览 -->
-        <div class="charts-section overview-section">
-            <div class="section-header">
-                <div class="section-title">
-                    <div class="section-icon">◎</div>
-                    <div>
-                        <h2>股权溢价指数</h2>
-                        <div class="overview-subtitle">溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。</div>
-                    </div>
-                </div>
-            </div>
-            <div class="chart-wrapper">{macro_overview_html}</div>
-        </div>
+        <!-- 第一排：股权溢价指数 -->
+        <div class="charts-section overview-section"><div class="section-header"><div class="section-title"><div class="section-icon">◎</div><div><h2>股权溢价指数</h2><div class="overview-subtitle">{macro_reference_summary_html if macro_reference_summary_html else '溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。'}</div></div></div></div><div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">值越大代表投资价值越大；参考线采用截至当日的历史分位估算：机会值(70分位)、中位值(50分位)、危险值(30分位)。</div><div class="chart-wrapper">{macro_reference_html}</div></div>
 
         <!-- 第二排开始：原 Index Report 主体 -->
         <div class="charts-section">
@@ -1586,6 +2127,21 @@ def generate_report(data_path, conclusions_path, output_dir, mode='production'):
     return report_file
 
 
+def resolve_output_dir(output_dir: str, mode: str) -> Path:
+    """解析输出目录，lab 模式默认落在系统根目录，便于隔离试验产物。"""
+    path = Path(output_dir)
+    if path.is_absolute():
+        return path
+
+    if mode == 'lab':
+        system_root = Path(__file__).resolve().parents[5]
+        if output_dir == 'reports':
+            return system_root / 'reports_lab'
+        return system_root / path
+
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description='生成 HTML 报告')
     parser.add_argument('--data', '-d',
@@ -1608,7 +2164,8 @@ def main():
     script_dir = Path(__file__).parent.parent
     os.chdir(script_dir)
 
-    generate_report(args.data, args.conclusions, args.output, mode=args.mode)
+    output_dir = resolve_output_dir(args.output, args.mode)
+    generate_report(args.data, args.conclusions, str(output_dir), mode=args.mode)
 
 
 if __name__ == '__main__':

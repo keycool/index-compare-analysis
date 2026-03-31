@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.0.2-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-1.0.3-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,7 +19,7 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v1.0.2)
+### 最新优化 (v1.0.3)
 
 - ✅ **智能增量更新**：自动检测本地数据与远程数据，只获取新增数据，大幅提升运行速度
 - ✅ **强制更新选项**：支持 `--force` 参数强制完整更新所有历史数据
@@ -30,6 +30,10 @@
 - ✅ **单页合并报告布局**：首屏整合股权溢价指数与沪深300，后续延续 Relative 主体分析
 - ✅ **页面结构再优化**：价格走势前置、移除冗余 ERP 补充视图、精简分析卡展示
 - ✅ **全历史首屏修复**：股权溢价指数图改为依赖 ERP 全量历史共享数据
+- ✅ **股权溢价参考版转正**：正式页切换为参考线版股权溢价指数图，并支持 30/50/70 分位参考线开关
+- ✅ **图表风格统一**：价格走势与比价走势统一为浅色底风格，和首屏股权溢价图区块保持一致
+- ✅ **A500 起始显示修复**：指数价格走势图中，中证 A500 上市前的平线占位已隐藏
+- ✅ **主调度时间调整**：主 workflow 自动运行时间调整为工作日 08:00 / 22:00（北京时间）
 - ✅ 图表分位数标注优化：显示在图表下方中央，不遮挡内容
 - ✅ 红绿虚线精准匹配：标注显示范围内的最高点和最低点
 - ✅ 图表高度优化：增加底部空间，完整显示所有标注
@@ -263,7 +267,13 @@ python scripts/main.py --query ZZA500
 
 ```bash
 cd .claude/skills/index-compare
-python scripts/generate_report.py --mode lab --data data/processed_data.csv --conclusions data/conclusions.json --output reports_lab
+python scripts/generate_report.py --mode lab --data data/processed_data.csv --conclusions data/conclusions.json
+```
+
+默认会输出到：
+
+```text
+E:/vibe coding/ERP Investment System/reports_lab
 ```
 
 约定：
@@ -298,6 +308,12 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v1.0.3 (2026-03-31)
+- ✨ 正式页首屏升级为股权溢价指数参考版，增加 30/50/70 分位参考线独立开关
+- ✨ 指数价格走势与比价走势统一为浅色底图表风格
+- 🔧 修复中证 A500 在价格走势图中的起始平线占位问题
+- 🔧 主调度 workflow 自动时间调整为工作日 08:00 / 22:00（北京时间）
 
 ### v1.0.2 (2026-03-26)
 - ✨ 单页合并报告继续优化：首屏聚焦股权溢价，价格走势与比价关系层次更清晰

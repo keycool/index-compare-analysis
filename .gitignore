@@ -13,6 +13,7 @@ __pycache__/
 
 # 报告文件（可选）
 # reports/*.html
+reports_lab/
 
 # 环境变量
 .env

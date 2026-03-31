@@ -3,8 +3,8 @@ name: erp-relative-master-scheduler
 on:
   schedule:
     # GitHub cron uses UTC (Mon-Fri):
-    # 10:30 UTC = 18:30 Asia/Shanghai
-    - cron: "30 10 * * 1-5"
+    # 00:00 UTC = 08:00 Asia/Shanghai
+    - cron: "0 0 * * 1-5"
     # 14:00 UTC = 22:00 Asia/Shanghai
     - cron: "0 14 * * 1-5"
   workflow_dispatch:

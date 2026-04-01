@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.0.4-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-1.1.0-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,8 +19,14 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v1.0.4)
+### 最新优化 (v1.1.0)
 
+- ✅ **A500 数据正式修复**：在数据获取层清理中证A500成立前被错误前向填充的历史污染，真实起点恢复为 `2024-09-24`
+- ✅ **比价小图交互升级**：三张比价图新增底部时间滑条，支持左右拖动和时间窗口放大/缩小
+- ✅ **比价小图均线升级**：将辅助长周期均线从 `60日` 调整为 `120日`
+- ✅ **图表头部布局优化**：清理分位数浮标，优化标题与图例的层次，避免小图顶部信息重叠
+
+### v1.0.4 主要能力
 - ✅ **HTML 风格重构校正**：保留新版页面视觉风格，同时修复模板插值回归，避免卡片、比价图和分析区渲染为占位文本
 - ✅ **价格走势摘要增强**：在“指数价格走势”标题下新增“最新日期 + 各指数最新点位”摘要，阅读路径与首屏保持一致
 - ✅ **本地预览链路完善**：支持在 `lab` 模式下独立验证样式修改，避免误覆盖正式页产物
@@ -314,6 +320,13 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v1.1.0 (2026-04-01)
+
+- 在数据获取层增加历史前向填充污染清洗，正式修复中证A500成立前的伪历史数据
+- 三张比价走势小图支持底部时间滑条拖动，便于放大、缩小和横向浏览时间区间
+- 小图移除“当前分位数”浮标，并优化标题/图例布局
+- 小图辅助长周期均线由 `60日均线` 调整为 `120日均线`
 
 ### v1.0.4 (2026-04-01)
 

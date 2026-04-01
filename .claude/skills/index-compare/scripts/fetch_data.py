@@ -18,6 +18,40 @@ import pandas as pd
 import tushare as ts
 
 
+def sanitize_forward_filled_prefix(series, min_constant_length=200):
+    """
+    清理被错误前向填充到指数成立前的常数前缀。
+
+    对于成立较晚的指数，如果历史早期出现“长时间完全不变、直到很晚才第一次变化”的情况，
+    通常意味着上市前缺失值被错误填成了首个有效值。此时将首次真实变化日前的前缀恢复为 NaN。
+    """
+    cleaned = series.copy()
+    non_na = cleaned.dropna()
+    if non_na.empty:
+        return cleaned
+
+    changes = non_na.ne(non_na.shift())
+    change_points = non_na.index[changes]
+    if len(change_points) <= 1:
+        return cleaned
+
+    first_real_change = change_points[1]
+    constant_prefix = non_na.loc[:first_real_change].iloc[:-1]
+
+    if len(constant_prefix) >= min_constant_length and constant_prefix.nunique(dropna=True) == 1:
+        cleaned.loc[constant_prefix.index] = pd.NA
+
+    return cleaned
+
+
+def sanitize_index_history(df):
+    """清理指数历史数据中的错误前向填充污染。"""
+    cleaned = df.copy()
+    for column in cleaned.columns:
+        cleaned[column] = sanitize_forward_filled_prefix(cleaned[column])
+    return cleaned
+
+
 def load_config():
     """加载配置文件"""
     config_path = Path(__file__).parent.parent / 'config.json'
@@ -203,7 +237,13 @@ def fetch_all_data(output_path, start_date='20070101', token=None, force_update=
             df = pd.read_csv(output_path)
             df['trade_date'] = pd.to_datetime(df['trade_date'])
             df.set_index('trade_date', inplace=True)
-            return df
+            sanitized_df = sanitize_index_history(df)
+            if not sanitized_df.equals(df):
+                print("  [清理] 检测到历史前向填充污染，已自动修复本地数据")
+                output_file = Path(output_path)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                sanitized_df.to_csv(output_file, encoding='utf-8-sig')
+            return sanitized_df
 
         print(f"  {status['message']}")
 
@@ -261,6 +301,7 @@ def fetch_all_data(output_path, start_date='20070101', token=None, force_update=
         combined = new_data
     # 仅向前填充，避免将指数成立前区间错误回填为首个有效值
     combined = combined.ffill()
+    combined = sanitize_index_history(combined)
     # 确保输出目录存在
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)

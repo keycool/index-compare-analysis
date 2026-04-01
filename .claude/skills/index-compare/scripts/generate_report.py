@@ -42,8 +42,17 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
     ratio_col = f'{target}_ratio'
     ma_col = f'{target}_MA{ma_window}'
 
+    chart_df = df.copy()
+    if target == 'ZZA500' and target in chart_df.columns:
+        target_series = chart_df[target].dropna()
+        if not target_series.empty:
+            changes = target_series.ne(target_series.shift())
+            change_points = target_series.index[changes]
+            if len(change_points) > 1:
+                chart_df = chart_df.loc[change_points[1]:].copy()
+
     # 获取最近N个交易日数据
-    recent_df = df.tail(recent_days)
+    recent_df = chart_df.tail(recent_days)
 
     fig = go.Figure()
 
@@ -67,8 +76,18 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         hovertemplate='日期: %{x}<br>均线: %{y:.4f}<extra></extra>'
     ))
 
+    recent_ma120 = chart_df[ratio_col].rolling(window=120).mean().loc[recent_df.index]
+    fig.add_trace(go.Scatter(
+        x=recent_df.index,
+        y=recent_ma120,
+        mode='lines',
+        name='120日均线',
+        line=dict(color='#60a5fa', width=1.5, dash='dot'),
+        hovertemplate='日期: %{x}<br>120日均线: %{y:.4f}<extra></extra>'
+    ))
+
     # 添加历史分位区域（使用显示范围内的数据计算最高最低点）
-    all_ratios = df[ratio_col].dropna()
+    all_ratios = chart_df[ratio_col].dropna()
 
     # 使用显示范围内的实际最高和最低点
     display_ratios = recent_df[ratio_col].dropna()
@@ -86,7 +105,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
                   annotation=dict(font=dict(color="#f43f5e", size=11)))
 
     # 计算当前值的历史分位数
-    current_value = df[ratio_col].iloc[-1]
+    current_value = chart_df[ratio_col].dropna().iloc[-1]
     current_percentile = percentileofscore(all_ratios, current_value)
 
     # 根据分位数确定颜色
@@ -107,35 +126,30 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
     annotation_bg = '#ffffff' if light_theme else 'rgba(17, 24, 39, 0.85)'
 
     fig.update_layout(
-        title=dict(text=title, x=0.5, font=dict(size=14, color=title_color)),
+        title=dict(
+            text=title,
+            x=0.5,
+            y=0.98,
+            xanchor='center',
+            yanchor='top',
+            pad=dict(b=24),
+            font=dict(size=14, color=title_color)
+        ),
         xaxis_title='',
         yaxis_title='比价',
         hovermode='x unified',
+        dragmode='pan',
+        uirevision=f'ratio-chart-{target}',
         legend=dict(
             orientation='h',
             yanchor='bottom',
-            y=1.02,
-            xanchor='right',
-            x=1,
-            font=dict(color=legend_color, size=10)
+            y=1.10,
+            xanchor='center',
+            x=0.5,
+            font=dict(color=legend_color, size=9),
+            itemwidth=44
         ),
-        # 添加分位数显示（图表下方正中间）
-        annotations=[
-            dict(
-                x=0.5, y=-0.15,
-                xref='paper', yref='paper',
-                text=f'<b>当前分位数：</b><span style="font-size:16px; color:{percentile_color}; font-weight:700">{current_percentile:.1f}%</span>',
-                showarrow=False,
-                font=dict(size=12, color=legend_color),
-                bgcolor=annotation_bg,
-                bordercolor=percentile_color,
-                borderwidth=1,
-                borderpad=10,
-                xanchor='center',
-                yanchor='top'
-            )
-        ],
-        margin=dict(l=50, r=50, t=50, b=90),
+        margin=dict(l=50, r=50, t=108, b=90),
         height=450,
         paper_bgcolor=paper_bg,
         plot_bgcolor=plot_bg,
@@ -143,7 +157,14 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         xaxis=dict(
             gridcolor=x_grid,
             linecolor=x_line,
-            tickfont=dict(color=tick_color, size=10)
+            tickfont=dict(color=tick_color, size=10),
+            rangeslider=dict(
+                visible=True,
+                thickness=0.10,
+                bgcolor='rgba(191,219,254,0.18)' if light_theme else 'rgba(30,41,59,0.45)',
+                bordercolor=x_line,
+                borderwidth=1
+            )
         ),
         yaxis=dict(
             gridcolor=x_grid,

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.1.0-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-1.1.1-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,7 +19,14 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v1.1.0)
+### 最新优化 (v1.1.1)
+
+- ✅ **比价小图显示试验增强**：`lab` 中支持对前两个比价小图显示全历史数据，便于比较长期结构
+- ✅ **比价小图交互精简**：移除顶部快捷时间按钮，保留底部时间滑条，减少标题与图例遮挡
+- ✅ **均线配置微调**：小图长周期辅助线调整为 `120日均线`
+- ✅ **风险提示位置优化**：免责声明调整到页面底部，在保留提醒作用的同时减少对首屏阅读的干扰
+
+### v1.1.0 主要能力
 
 - ✅ **A500 数据正式修复**：在数据获取层清理中证A500成立前被错误前向填充的历史污染，真实起点恢复为 `2024-09-24`
 - ✅ **比价小图交互升级**：三张比价图新增底部时间滑条，支持左右拖动和时间窗口放大/缩小
@@ -320,6 +327,13 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v1.1.1 (2026-04-01)
+
+- 调整 `lab` 中前两个比价小图为全历史显示，便于检视长期比价结构
+- 小图移除顶部快捷时间按钮，仅保留底部时间滑条交互
+- 小图标题与图例进一步错层，减少顶部重叠
+- 页面新增免责声明，并将位置下移到页脚前，降低对首屏阅读的干扰
 
 ### v1.1.0 (2026-04-01)
 

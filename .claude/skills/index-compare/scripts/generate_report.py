@@ -25,7 +25,7 @@ def load_config():
         return json.load(f)
 
 
-def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False):
+def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False):
     """
     创建比价走势图 - 深色主题
 
@@ -35,6 +35,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         title: 图表标题
         ma_window: 移动平均窗口
         recent_days: 显示最近多少个交易日
+        show_full_history: 是否显示全历史
 
     Returns:
         plotly Figure
@@ -51,8 +52,8 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
             if len(change_points) > 1:
                 chart_df = chart_df.loc[change_points[1]:].copy()
 
-    # 获取最近N个交易日数据
-    recent_df = chart_df.tail(recent_days)
+    # 获取显示范围数据
+    recent_df = chart_df.copy() if show_full_history else chart_df.tail(recent_days)
 
     fig = go.Figure()
 
@@ -1163,7 +1164,16 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     for target in ['ZZ500', 'ZZ1000', 'ZZA500']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
-            chart = create_ratio_chart(df, target, f'{name} vs 沪深300', ma_window, recent_days, light_theme=use_reference_chart_style)
+            show_full_history = is_lab and target in {'ZZ500', 'ZZ1000'}
+            chart = create_ratio_chart(
+                df,
+                target,
+                f'{name} vs 沪深300',
+                ma_window,
+                recent_days,
+                light_theme=use_reference_chart_style,
+                show_full_history=show_full_history,
+            )
             ratio_charts_html.append(chart.to_html(full_html=False, include_plotlyjs='cdn'))
 
     # 生成指标卡片HTML
@@ -1377,6 +1387,48 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             margin: 0 auto;
             opacity: 0.8;
             font-weight: 300;
+        }}
+
+        .risk-banner {{
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            margin: 0 auto 28px;
+            padding: 18px 22px;
+            max-width: 1080px;
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(239, 68, 68, 0.12));
+            border: 1px solid rgba(251, 191, 36, 0.35);
+            border-radius: 18px;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+            backdrop-filter: var(--glass-blur);
+        }}
+
+        .risk-icon {{
+            width: 34px;
+            height: 34px;
+            flex-shrink: 0;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.12);
+            color: #fde68a;
+            font-size: 18px;
+            font-weight: 700;
+        }}
+
+        .risk-title {{
+            font-size: 14px;
+            font-weight: 700;
+            color: #fef3c7;
+            margin-bottom: 4px;
+            letter-spacing: 0.5px;
+        }}
+
+        .risk-text {{
+            font-size: 13px;
+            color: #fde68a;
+            line-height: 1.75;
         }}
 
         /* 指标卡片 */
@@ -1729,6 +1781,14 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         <!-- 分析区域 -->
         {analysis_html}
 
+        <div class="risk-banner">
+            <div class="risk-icon">!</div>
+            <div>
+                <div class="risk-title">风险提示 / 免责声明</div>
+                <div class="risk-text">本页面内容仅基于公开市场数据进行量化整理与历史分析，不构成任何投资建议、收益承诺或买卖依据。市场有风险，投资需谨慎；使用者应结合自身风险承受能力独立判断，并自行承担相关决策责任。</div>
+            </div>
+        </div>
+
         <!-- 页脚 -->
         <div class="footer">
             <div class="footer-text">INDEX COMPARE ANALYSIS REPORT</div>
@@ -1902,7 +1962,7 @@ def generate_analysis_html(conclusions):
                         <span class="analysis-item-title">历史分位</span>
                         <span class="analysis-item-value" style="{p_color}">{data['percentile']['value']:.1f}% ({data['percentile']['status']})</span>
                     </div>
-                    <div class="analysis-item-desc">{data['percentile']['description']}</div>
+                    <div class="analysis-item-desc">{data['percentile']['description']}<br><span style="font-size:12px;color:var(--text-muted);">基于全部有效历史样本计算</span></div>
                 </div>
                 <div class="analysis-item">
                     <div class="analysis-item-header">

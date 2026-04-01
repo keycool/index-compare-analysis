@@ -1012,6 +1012,17 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     # 创建价格走势图
     price_chart = create_price_chart(df, indices_config, recent_days, light_theme=use_reference_chart_style)
     price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
+    price_summary_items = []
+    for code in ['HS300', 'ZZ500', 'ZZ1000', 'ZZA500']:
+        if code in df.columns:
+            latest_value = df[code].dropna().iloc[-1]
+            display_name = indices_config.get(code, {}).get('name', code)
+            price_summary_items.append(f'{display_name} {latest_value:,.2f}')
+    price_summary_html = (
+        f'{latest_date}，' + '，'.join(price_summary_items)
+        if price_summary_items
+        else f'{latest_date}，暂无指数点位摘要。'
+    )
 
     # 加载并合并股权溢价图（来自 Equity Risk Premium）
     erp_records = load_equity_premium_records()
@@ -1163,26 +1174,31 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     <style>
         :root {{
             --bg-primary: #0a0e17;
-            --bg-secondary: #111827;
-            --bg-card: rgba(17, 24, 39, 0.8);
+            --bg-secondary: #0f172a;
+            --bg-card: rgba(15, 23, 42, 0.75);
             --bg-glass: rgba(255, 255, 255, 0.03);
-            --border-subtle: rgba(255, 255, 255, 0.06);
-            --border-glow: rgba(251, 191, 36, 0.3);
-            --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
+            --bg-surface: rgba(30, 41, 59, 0.5);
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --border-glow: rgba(251, 191, 36, 0.4);
+            --text-primary: #f8fafc;
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
             --accent-gold: #fbbf24;
             --accent-amber: #f59e0b;
             --accent-emerald: #10b981;
             --accent-rose: #f43f5e;
             --accent-sky: #0ea5e9;
+            --accent-indigo: #6366f1;
             --accent-violet: #8b5cf6;
+            --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+            --glass-blur: blur(14px);
         }}
 
         * {{
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+            -webkit-font-smoothing: antialiased;
         }}
 
         body {{
@@ -1192,9 +1208,10 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             min-height: 100vh;
             line-height: 1.6;
             overflow-x: hidden;
+            font-variant-numeric: tabular-nums;
         }}
 
-        /* 背景纹理 */
+        /* 动态背景 */
         body::before {{
             content: '';
             position: fixed;
@@ -1203,14 +1220,14 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             right: 0;
             bottom: 0;
             background:
-                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(251, 191, 36, 0.08), transparent),
-                radial-gradient(ellipse 60% 40% at 100% 100%, rgba(139, 92, 246, 0.05), transparent),
-                linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.3) 100%);
+                radial-gradient(circle at 20% 30%, rgba(62, 195, 255, 0.05), transparent 40%),
+                radial-gradient(circle at 80% 70%, rgba(139, 92, 246, 0.05), transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(251, 191, 36, 0.02), transparent 60%);
             pointer-events: none;
             z-index: -1;
         }}
 
-        /* 网格背景 */
+        /* 极细网格 */
         body::after {{
             content: '';
             position: fixed;
@@ -1219,25 +1236,25 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             right: 0;
             bottom: 0;
             background-image:
-                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-            background-size: 60px 60px;
+                linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px);
+            background-size: 40px 40px;
             pointer-events: none;
             z-index: -1;
         }}
 
         .container {{
-            max-width: 1600px;
+            max-width: 1680px;
             margin: 0 auto;
-            padding: 40px 24px;
+            padding: 32px 40px;
         }}
 
-        /* 顶部导航栏 */
+        /* 顶部导航 */
         .top-bar {{
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 16px 0;
+            padding-bottom: 24px;
             margin-bottom: 32px;
             border-bottom: 1px solid var(--border-subtle);
         }}
@@ -1245,36 +1262,46 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         .logo {{
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 16px;
+            text-decoration: none;
         }}
 
         .logo-icon {{
-            width: 40px;
-            height: 40px;
+            width: 44px;
+            height: 44px;
             background: linear-gradient(135deg, var(--accent-gold), var(--accent-amber));
-            border-radius: 10px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--bg-primary);
-            box-shadow: 0 4px 20px rgba(251, 191, 36, 0.3);
+            font-size: 22px;
+            font-weight: 800;
+            color: #000;
+            box-shadow: 0 0 20px rgba(251, 191, 36, 0.4);
+            transition: transform 0.3s ease;
+        }}
+
+        .logo:hover .logo-icon {{
+            transform: rotate(5deg) scale(1.05);
         }}
 
         .logo-text {{
-            font-size: 20px;
-            font-weight: 600;
-            letter-spacing: -0.5px;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.8px;
+            background: linear-gradient(to bottom, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }}
 
         .logo-text span {{
             color: var(--accent-gold);
+            -webkit-text-fill-color: var(--accent-gold);
         }}
 
         .meta-info {{
             display: flex;
-            gap: 24px;
+            gap: 32px;
             font-size: 13px;
             color: var(--text-muted);
             font-family: 'JetBrains Mono', monospace;
@@ -1283,164 +1310,135 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         .meta-item {{
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
+            background: var(--bg-glass);
+            padding: 6px 16px;
+            border-radius: 99px;
+            border: 1px solid var(--border-subtle);
         }}
 
         .meta-dot {{
-            width: 6px;
-            height: 6px;
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
             background: var(--accent-emerald);
+            box-shadow: 0 0 10px var(--accent-emerald);
             animation: pulse 2s ease-in-out infinite;
         }}
 
         @keyframes pulse {{
-            0%, 100% {{ opacity: 1; }}
-            50% {{ opacity: 0.5; }}
+            0%, 100% {{ opacity: 1; transform: scale(1); }}
+            50% {{ opacity: 0.4; transform: scale(0.8); }}
         }}
 
-        /* Hero 区域 */
+        /* Hero */
         .hero {{
             text-align: center;
-            padding: 60px 0 80px;
-            position: relative;
+            padding: 40px 0 60px;
         }}
 
         .hero h1 {{
-            font-size: 48px;
-            font-weight: 700;
-            letter-spacing: -1px;
-            margin-bottom: 16px;
-            background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent-gold) 50%, var(--text-primary) 100%);
+            font-size: 56px;
+            font-weight: 800;
+            letter-spacing: -1.5px;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, #fff 0%, var(--accent-gold) 50%, #fff 100%);
             background-size: 200% auto;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            background-clip: text;
-            animation: shimmer 3s linear infinite;
-        }}
-
-        @keyframes shimmer {{
-            0% {{ background-position: 200% center; }}
-            100% {{ background-position: -200% center; }}
+            animation: shimmer 5s linear infinite;
         }}
 
         .hero-subtitle {{
-            font-size: 16px;
+            font-size: 18px;
             color: var(--text-secondary);
-            max-width: 600px;
+            max-width: 700px;
             margin: 0 auto;
+            opacity: 0.8;
+            font-weight: 300;
         }}
 
-        /* 主要指标网格 */
+        /* 指标卡片 */
         .metrics-grid {{
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr 1fr;
-            gap: 20px;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 24px;
             margin-bottom: 40px;
         }}
 
         .metric-card {{
             background: var(--bg-card);
             border: 1px solid var(--border-subtle);
-            border-radius: 16px;
-            padding: 28px;
+            border-radius: 20px;
+            padding: 24px;
+            backdrop-filter: var(--glass-blur);
+            transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
             position: relative;
             overflow: hidden;
-            backdrop-filter: blur(10px);
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: var(--card-shadow);
         }}
 
-        .metric-card::before {{
+        .metric-card::after {{
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, var(--accent-gold), transparent);
-            opacity: 0;
-            transition: opacity 0.4s ease;
+            inset: 0;
+            background: linear-gradient(225deg, rgba(255,255,255,0.03) 0%, transparent 50%);
+            pointer-events: none;
         }}
 
         .metric-card:hover {{
-            transform: translateY(-4px);
+            transform: translateY(-6px);
             border-color: var(--border-glow);
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 0 0 60px rgba(251, 191, 36, 0.1);
-        }}
-
-        .metric-card:hover::before {{
-            opacity: 1;
-        }}
-
-        .metric-card.benchmark {{
-            background: linear-gradient(135deg, rgba(251, 191, 36, 0.1), rgba(245, 158, 11, 0.05));
-            border-color: rgba(251, 191, 36, 0.2);
+            background: rgba(30, 41, 59, 0.8);
         }}
 
         .metric-header {{
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 20px;
+            align-items: center;
+            margin-bottom: 16px;
         }}
 
         .metric-name {{
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
         }}
 
         .metric-badge {{
-            font-size: 11px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 99px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
         }}
 
-        .badge-benchmark {{
-            background: rgba(251, 191, 36, 0.2);
-            color: var(--accent-gold);
-        }}
-
-        .badge-high {{
-            background: rgba(244, 63, 94, 0.2);
-            color: var(--accent-rose);
-        }}
-
-        .badge-low {{
-            background: rgba(16, 185, 129, 0.2);
-            color: var(--accent-emerald);
-        }}
-
-        .badge-neutral {{
-            background: rgba(14, 165, 233, 0.2);
-            color: var(--accent-sky);
-        }}
+        .badge-benchmark {{ background: rgba(251, 191, 36, 0.15); color: var(--accent-gold); border: 1px solid rgba(251, 191, 36, 0.2); }}
+        .badge-high {{ background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); border: 1px solid rgba(244, 63, 94, 0.2); }}
+        .badge-low {{ background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border: 1px solid rgba(16, 185, 129, 0.2); }}
+        .badge-neutral {{ background: rgba(14, 165, 233, 0.15); color: var(--accent-sky); border: 1px solid rgba(14, 165, 233, 0.2); }}
 
         .metric-value {{
             font-family: 'JetBrains Mono', monospace;
-            font-size: 36px;
+            font-size: 32px;
             font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-            letter-spacing: -1px;
+            color: #fff;
+            margin-bottom: 4px;
         }}
 
         .metric-label {{
-            font-size: 13px;
+            font-size: 12px;
             color: var(--text-muted);
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }}
 
         .metric-stats {{
             display: flex;
             flex-direction: column;
-            gap: 12px;
-            padding-top: 20px;
+            gap: 10px;
+            padding-top: 16px;
             border-top: 1px solid var(--border-subtle);
         }}
 
@@ -1451,222 +1449,139 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         }}
 
         .stat-label {{
-            font-size: 13px;
+            font-size: 12px;
             color: var(--text-muted);
         }}
 
         .stat-value {{
             font-family: 'JetBrains Mono', monospace;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 600;
-            padding: 4px 12px;
+            padding: 2px 10px;
             border-radius: 6px;
-            background: var(--bg-glass);
         }}
 
-        .stat-value.positive {{
-            color: var(--accent-emerald);
-            background: rgba(16, 185, 129, 0.1);
-        }}
+        .stat-value.positive {{ color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); }}
+        .stat-value.negative {{ color: var(--accent-rose); background: rgba(244, 63, 94, 0.1); }}
+        .stat-value.neutral {{ color: var(--accent-sky); background: rgba(14, 165, 233, 0.1); }}
 
-        .stat-value.negative {{
-            color: var(--accent-rose);
-            background: rgba(244, 63, 94, 0.1);
-        }}
-
-        .stat-value.neutral {{
-            color: var(--accent-sky);
-            background: rgba(14, 165, 233, 0.1);
-        }}
-
-        .stat-value.warning {{
-            color: var(--accent-amber);
-            background: rgba(245, 158, 11, 0.1);
-        }}
-
-        /* 图表区域 */
+        /* 图表容器 */
         .charts-section {{
             background: var(--bg-card);
             border: 1px solid var(--border-subtle);
-            border-radius: 20px;
+            border-radius: 24px;
             padding: 32px;
-            margin-bottom: 40px;
-            backdrop-filter: blur(10px);
+            margin-bottom: 32px;
+            backdrop-filter: var(--glass-blur);
+            box-shadow: var(--card-shadow);
         }}
 
         .section-header {{
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            margin-bottom: 28px;
-            padding-bottom: 20px;
+            align-items: flex-end;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
             border-bottom: 1px solid var(--border-subtle);
         }}
 
         .section-title {{
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 16px;
         }}
 
         .section-icon {{
-            width: 36px;
-            height: 36px;
-            background: var(--bg-glass);
+            width: 40px;
+            height: 40px;
+            background: var(--bg-surface);
             border: 1px solid var(--border-subtle);
-            border-radius: 10px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 18px;
+            font-size: 20px;
         }}
 
         .section-title h2 {{
-            font-size: 20px;
-            font-weight: 600;
-            letter-spacing: -0.3px;
+            font-size: 22px;
+            font-weight: 700;
+            color: #fff;
         }}
 
         .chart-wrapper {{
-            background: var(--bg-secondary);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 16px;
+            padding: 12px;
+            border: 1px solid rgba(255,255,255,0.03);
         }}
 
-        .overview-section {{
-            background:
-                linear-gradient(135deg, rgba(62, 195, 255, 0.08), transparent 45%),
-                linear-gradient(215deg, rgba(251, 191, 36, 0.07), transparent 40%),
-                var(--bg-card);
-            border: 1px solid rgba(255,255,255,0.08);
-        }}
-
-        .overview-subtitle {{
-            color: var(--text-secondary);
-            font-size: 14px;
-            max-width: 840px;
-            line-height: 1.75;
-        }}
-
-        .chart-wrapper:last-child {{
-            margin-bottom: 0;
-        }}
-
-        /* 三列比价图布局 */
         .ratio-charts-grid {{
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: repeat(3, 1fr);
             gap: 20px;
         }}
 
         .ratio-chart-wrapper {{
-            background: var(--bg-secondary);
+            background: rgba(0, 0, 0, 0.1);
             border-radius: 12px;
-            padding: 16px;
+            padding: 8px;
         }}
 
-        @media (max-width: 1400px) {{
-            .ratio-charts-grid {{
-                grid-template-columns: 1fr 1fr;
-            }}
-        }}
-
-        @media (max-width: 1200px) {{
-            .ratio-charts-grid {{
-                grid-template-columns: 1fr;
-            }}
-            .analysis-section {{
-                grid-template-columns: 1fr 1fr;
-            }}
-        }}
-
-        /* 分析区域 */
+        /* 分析卡片 */
         .analysis-section {{
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: repeat(3, 1fr);
             gap: 24px;
-            margin-bottom: 40px;
+            margin-bottom: 32px;
         }}
 
         .analysis-card {{
             background: var(--bg-card);
             border: 1px solid var(--border-subtle);
-            border-radius: 20px;
+            border-radius: 24px;
             padding: 32px;
-            backdrop-filter: blur(10px);
-            position: relative;
-            overflow: hidden;
+            backdrop-filter: var(--glass-blur);
+            transition: all 0.3s ease;
         }}
 
-        .analysis-card::after {{
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -50%;
-            width: 100%;
-            height: 100%;
-            background: radial-gradient(circle, rgba(251, 191, 36, 0.03) 0%, transparent 70%);
-            pointer-events: none;
+        .analysis-card:hover {{
+            border-color: rgba(255,255,255,0.15);
+            background: rgba(30, 41, 59, 0.8);
         }}
 
         .analysis-header {{
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 20px;
             margin-bottom: 24px;
         }}
 
         .analysis-icon {{
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
+            width: 52px;
+            height: 52px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 24px;
+            font-weight: 700;
+            color: #fff;
         }}
 
-        .analysis-icon.zz500 {{
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.05));
-            border: 1px solid rgba(16, 185, 129, 0.3);
-        }}
+        .analysis-icon.zz500 {{ background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 8px 20px rgba(16, 185, 129, 0.2); }}
+        .analysis-icon.zz1000 {{ background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); box-shadow: 0 8px 20px rgba(139, 92, 246, 0.2); }}
+        .analysis-icon.zza500 {{ background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); box-shadow: 0 8px 20px rgba(249, 115, 22, 0.2); }}
 
-        .analysis-icon.zz1000 {{
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(139, 92, 246, 0.05));
-            border: 1px solid rgba(139, 92, 246, 0.3);
-        }}
-
-        .analysis-icon.zza500 {{
-            background: linear-gradient(135deg, rgba(249, 115, 22, 0.2), rgba(249, 115, 22, 0.05));
-            border: 1px solid rgba(249, 115, 22, 0.3);
-        }}
-
-        .analysis-title {{
-            font-size: 18px;
-            font-weight: 600;
-        }}
-
-        .analysis-subtitle {{
-            font-size: 13px;
-            color: var(--text-muted);
-            margin-top: 2px;
-        }}
-
-        .analysis-body {{
-            position: relative;
-            z-index: 1;
-        }}
+        .analysis-title {{ font-size: 20px; font-weight: 700; color: #fff; }}
+        .analysis-subtitle {{ font-size: 13px; color: var(--text-muted); }}
 
         .analysis-item {{
             padding: 16px 0;
             border-bottom: 1px solid var(--border-subtle);
         }}
 
-        .analysis-item:last-child {{
-            border-bottom: none;
-            padding-bottom: 0;
-        }}
+        .analysis-item:last-child {{ border-bottom: none; }}
 
         .analysis-item-header {{
             display: flex;
@@ -1675,166 +1590,63 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             margin-bottom: 8px;
         }}
 
-        .analysis-item-title {{
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-secondary);
-        }}
-
-        .analysis-item-value {{
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 14px;
-            font-weight: 600;
-        }}
-
-        .analysis-item-desc {{
-            font-size: 13px;
-            color: var(--text-muted);
-            line-height: 1.7;
-        }}
-
-        .recommendation-box {{
-            margin-top: 24px;
-            padding: 20px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        }}
-
-        .recommendation-box.overweight {{
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.05));
-            border: 1px solid rgba(16, 185, 129, 0.3);
-        }}
-
-        .recommendation-box.underweight {{
-            background: linear-gradient(135deg, rgba(244, 63, 94, 0.15), rgba(244, 63, 94, 0.05));
-            border: 1px solid rgba(244, 63, 94, 0.3);
-        }}
-
-        .recommendation-box.neutral {{
-            background: linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(14, 165, 233, 0.05));
-            border: 1px solid rgba(14, 165, 233, 0.3);
-        }}
-
-        .recommendation-icon {{
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 22px;
-            flex-shrink: 0;
-        }}
-
-        .recommendation-box.overweight .recommendation-icon {{
-            background: rgba(16, 185, 129, 0.2);
-            color: var(--accent-emerald);
-        }}
-
-        .recommendation-box.underweight .recommendation-icon {{
-            background: rgba(244, 63, 94, 0.2);
-            color: var(--accent-rose);
-        }}
-
-        .recommendation-box.neutral .recommendation-icon {{
-            background: rgba(14, 165, 233, 0.2);
-            color: var(--accent-sky);
-        }}
-
-        .recommendation-content {{
-            flex: 1;
-        }}
-
-        .recommendation-action {{
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 4px;
-        }}
-
-        .recommendation-score {{
-            font-size: 12px;
-            color: var(--text-muted);
-            font-family: 'JetBrains Mono', monospace;
-        }}
+        .analysis-item-title {{ font-size: 14px; font-weight: 600; color: var(--text-secondary); }}
+        .analysis-item-value {{ font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700; }}
+        .analysis-item-desc {{ font-size: 13px; color: var(--text-muted); line-height: 1.6; }}
 
         /* 页脚 */
         .footer {{
             text-align: center;
-            padding: 40px 0;
+            padding: 60px 0 40px;
             border-top: 1px solid var(--border-subtle);
-            margin-top: 40px;
-        }}
-
-        .footer-text {{
-            font-size: 13px;
             color: var(--text-muted);
             font-family: 'JetBrains Mono', monospace;
         }}
 
         .footer-brand {{
-            margin-top: 8px;
+            margin-top: 12px;
             font-size: 11px;
-            color: var(--text-muted);
-            opacity: 0.7;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            opacity: 0.5;
         }}
 
-        /* 响应式 */
-        @media (max-width: 1400px) {{
-            .metrics-grid {{
-                grid-template-columns: 1fr 1fr;
-            }}
+        /* 动画 */
+        @keyframes shimmer {{
+            0% {{ background-position: 200% center; }}
+            100% {{ background-position: -200% center; }}
         }}
 
-        @media (max-width: 900px) {{
-            .metrics-grid {{
-                grid-template-columns: 1fr;
-            }}
-            .analysis-section {{
-                grid-template-columns: 1fr;
-            }}
-            .ratio-charts-grid {{
-                grid-template-columns: 1fr;
-            }}
-            .hero h1 {{
-                font-size: 32px;
-            }}
-            .top-bar {{
-                flex-direction: column;
-                gap: 16px;
-                text-align: center;
-            }}
-            .meta-info {{
-                flex-wrap: wrap;
-                justify-content: center;
-            }}
-        }}
-
-        /* 入场动画 */
         @keyframes fadeInUp {{
-            from {{
-                opacity: 0;
-                transform: translateY(20px);
-            }}
-            to {{
-                opacity: 1;
-                transform: translateY(0);
-            }}
+            from {{ opacity: 0; transform: translateY(30px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
         }}
 
         .metric-card, .charts-section, .analysis-card {{
-            animation: fadeInUp 0.6s ease-out backwards;
+            animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) backwards;
         }}
 
         .metric-card:nth-child(1) {{ animation-delay: 0.1s; }}
         .metric-card:nth-child(2) {{ animation-delay: 0.2s; }}
         .metric-card:nth-child(3) {{ animation-delay: 0.3s; }}
         .metric-card:nth-child(4) {{ animation-delay: 0.4s; }}
-        .charts-section {{ animation-delay: 0.5s; }}
-        .analysis-card:nth-child(1) {{ animation-delay: 0.6s; }}
-        .analysis-card:nth-child(2) {{ animation-delay: 0.7s; }}
-        .analysis-card:nth-child(3) {{ animation-delay: 0.8s; }}
+
+        /* 滚动条 */
+        ::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+        ::-webkit-scrollbar-track {{ background: var(--bg-primary); }}
+        ::-webkit-scrollbar-thumb {{ background: var(--bg-surface); border-radius: 4px; }}
+        ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
+
+        @media (max-width: 1400px) {{
+            .metrics-grid, .analysis-section {{ grid-template-columns: repeat(2, 1fr); }}
+            .ratio-charts-grid {{ grid-template-columns: 1fr 1fr; }}
+        }}
+
+        @media (max-width: 900px) {{
+            .metrics-grid, .analysis-section, .ratio-charts-grid {{ grid-template-columns: 1fr; }}
+            .hero h1 {{ font-size: 36px; }}
+            .container {{ padding: 20px; }}
+        }}
     </style>
 </head>
 <body>
@@ -1869,7 +1681,10 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="section-header">
                 <div class="section-title">
                     <div class="section-icon">📈</div>
-                    <h2>指数价格走势</h2>
+                    <div>
+                        <h2>指数价格走势</h2>
+                        <div class="overview-subtitle">{price_summary_html}</div>
+                    </div>
                 </div>
             </div>
             <div class="chart-wrapper">{price_chart_html}</div>
@@ -2170,6 +1985,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-

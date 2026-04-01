@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.0.3-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-1.0.4-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,7 +19,13 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v1.0.3)
+### 最新优化 (v1.0.4)
+
+- ✅ **HTML 风格重构校正**：保留新版页面视觉风格，同时修复模板插值回归，避免卡片、比价图和分析区渲染为占位文本
+- ✅ **价格走势摘要增强**：在“指数价格走势”标题下新增“最新日期 + 各指数最新点位”摘要，阅读路径与首屏保持一致
+- ✅ **本地预览链路完善**：支持在 `lab` 模式下独立验证样式修改，避免误覆盖正式页产物
+
+### v1.0.3 主要能力
 
 - ✅ **智能增量更新**：自动检测本地数据与远程数据，只获取新增数据，大幅提升运行速度
 - ✅ **强制更新选项**：支持 `--force` 参数强制完整更新所有历史数据
@@ -308,6 +314,12 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v1.0.4 (2026-04-01)
+
+- 修复新版 HTML 风格中误改模板插值的问题，恢复卡片、比价图和分析模块的真实数据渲染
+- 为“指数价格走势”板块增加最新日期与指数点位摘要
+- 延续 `lab` 试验区工作流，便于本地验证版式调整
 
 ### v1.0.3 (2026-03-31)
 - ✨ 正式页首屏升级为股权溢价指数参考版，增加 30/50/70 分位参考线独立开关

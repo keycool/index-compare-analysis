@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.1.1-green)](https://github.com/keycool/index-compare-analysis)
+[![Version](https://img.shields.io/badge/version-1.1.2-green)](https://github.com/keycool/index-compare-analysis)
 
 > 自动化分析 A 股主要指数的比价关系，一键生成包含智能分析结论的交互式 HTML 报告
 
@@ -19,7 +19,12 @@
 - 🎨 **交互式报告**：生成 Plotly 交互式 HTML 报告，支持缩放、悬停查看
 - 🧹 **自动清理**：智能管理临时文件，保持项目目录整洁
 
-### 最新优化 (v1.1.1)
+### 最新优化 (v1.1.2)
+
+- ✅ **Vercel 自动发布接入**：主 workflow 在生成 `site/` 后可同步发布到 Vercel，和 GitHub Pages 保持同源更新
+- ✅ **双出口部署**：保留 GitHub Pages 的同时新增 Vercel 访问入口，统一复用同一次 Action 产物
+
+### v1.1.1 主要能力
 
 - ✅ **比价小图显示试验增强**：`lab` 中支持对前两个比价小图显示全历史数据，便于比较长期结构
 - ✅ **比价小图交互精简**：移除顶部快捷时间按钮，保留底部时间滑条，减少标题与图例遮挡
@@ -327,6 +332,12 @@ python scripts/cleanup.py --max 10
 5. **免责声明**：本工具仅供参考，不构成投资建议
 
 ## 📝 版本历史
+
+### v1.1.2 (2026-04-02)
+
+- 主 workflow 新增 Vercel 发布步骤，可在生成 `site/` 后同步部署到 Vercel
+- 引入 Node 环境准备步骤，支持在 GitHub Actions 中调用 `vercel` CLI
+- 保持 GitHub Pages 现有链路不变，实现 GitHub Pages + Vercel 双发布
 
 ### v1.1.1 (2026-04-01)
 

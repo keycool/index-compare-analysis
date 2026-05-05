@@ -79,6 +79,9 @@ class FeishuBitableClient:
     def _records_batch_url(self, action: str) -> str:
         return f"{self._records_url()}/{action}"
 
+    def _fields_url(self) -> str:
+        return f"{self.BITABLE_ENDPOINT}/apps/{self.app_token}/tables/{self.table_id}/fields"
+
     @staticmethod
     def _chunk(items: List[dict], size: int):
         chunk_size = max(1, int(size))
@@ -230,6 +233,62 @@ class FeishuBitableClient:
 
         return index
 
+    def get_table_field_names(self) -> set[str]:
+        """获取当前多维表格字段名集合。"""
+        self._validate_table()
+        names: set[str] = set()
+        page_token = None
+
+        while True:
+            params = {"page_size": 500}
+            if page_token:
+                params["page_token"] = page_token
+
+            response = requests.get(
+                self._fields_url(),
+                params=params,
+                headers=self._get_headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+
+            payload = response.json()
+            if payload.get("code") != 0:
+                raise RuntimeError(f"查询字段失败: {payload}")
+
+            data = payload.get("data", {})
+            items = data.get("items", [])
+            for item in items:
+                field_name = item.get("field_name")
+                if field_name:
+                    names.add(str(field_name))
+
+            if not data.get("has_more"):
+                break
+            page_token = data.get("page_token")
+            if not page_token:
+                break
+
+        return names
+
+    def _validate_required_cyb_fields(self) -> None:
+        """严格校验创业板字段存在；缺失时直接报错，避免写入到旧 A500 字段。"""
+        names = self.get_table_field_names()
+        required = {
+            "创业板指数",
+            "创业板/300比价",
+            "创业板分位",
+            "创业板偏离(%)",
+            "创业板建议",
+        }
+        missing = sorted(required - names)
+        if missing:
+            raise RuntimeError(
+                "飞书多维表格缺少创业板字段: "
+                + ", ".join(missing)
+                + "。请先将旧A500列改名为创业板列后再同步。"
+            )
+
     @staticmethod
     def _build_csi_fields(record: Dict[str, float | str]) -> Dict[str, object]:
         """
@@ -364,6 +423,7 @@ class FeishuBitableClient:
 
         if date_index is None:
             date_index = self.get_date_record_index()
+        self._validate_required_cyb_fields()
 
         create_items: List[dict] = []
         update_items: List[dict] = []

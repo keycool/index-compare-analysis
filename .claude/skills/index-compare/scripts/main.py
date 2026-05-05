@@ -176,6 +176,7 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         if col in export_df.columns:
             export_df[col] = pd.to_numeric(export_df[col], errors="coerce")
 
+    export_df = align_cyb_columns_with_hs300(export_df)
     export_df = export_df.sort_values("日期").drop_duplicates(subset=["日期"], keep="last")
 
     ordered_cols = [
@@ -200,6 +201,28 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "数据源",
     ]
     return export_df[ordered_cols]
+
+
+def align_cyb_columns_with_hs300(export_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    创业板相关字段仅在“沪深300与创业板指数同日均有效”时保留。
+    这样可避免创业板成立前被误填，也便于飞书表格按日期对齐回填。
+    """
+    required_cols = {"沪深300", "创业板指数"}
+    if not required_cols.issubset(export_df.columns):
+        return export_df
+
+    aligned = export_df.copy()
+    valid_mask = aligned["沪深300"].notna() & aligned["创业板指数"].notna()
+    cyb_cols = ["创业板指数", "创业板/300比价", "创业板分位", "创业板偏离(%)"]
+    existing_cyb_cols = [col for col in cyb_cols if col in aligned.columns]
+    if existing_cyb_cols:
+        aligned.loc[~valid_mask, existing_cyb_cols] = pd.NA
+
+    if "创业板建议" in aligned.columns and not aligned.empty and not bool(valid_mask.iloc[-1]):
+        aligned.loc[aligned.index[-1], "创业板建议"] = ""
+
+    return aligned
 
 
 def _safe_float(value: Any, digits: int | None = None) -> Optional[float]:
@@ -359,8 +382,14 @@ def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
         }
 
     try:
+        normalized_df = df_sync.copy()
+        if "日期" in normalized_df.columns:
+            normalized_df["日期"] = normalize_date_str(normalized_df["日期"])
+            normalized_df = normalized_df.dropna(subset=["日期"]).sort_values("日期")
+            normalized_df = normalized_df.drop_duplicates(subset=["日期"], keep="last")
+
         client = FeishuBitableClient()
-        payloads = [row.to_dict() for _, row in df_sync.iterrows()]
+        payloads = [row.to_dict() for _, row in normalized_df.iterrows()]
         return client.upsert_index_compare_records(payloads)
     except Exception as exc:
         logger.error(f"飞书多维表格同步异常: {exc}")
@@ -599,7 +628,8 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
     }
 
     if excel_saved:
-        bitable_result = sync_to_feishu_bitable(new_rows_df)
+        # 使用全量日期 upsert，可回填历史缺失并修正旧字段残留。
+        bitable_result = sync_to_feishu_bitable(export_df)
 
     print_terminal_summary(latest_row, conclusions, report_file)
 

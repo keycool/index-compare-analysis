@@ -86,10 +86,15 @@ class FeishuBitableClient:
             yield items[i : i + chunk_size]
 
     @staticmethod
-    def _safe_float(value, default: float = 0.0) -> float:
-        """将任意输入安全转换为有限浮点数，避免 NaN/Inf 导致 JSON 序列化失败。"""
+    def _safe_float(value, default: float = 0.0):
+        """将任意输入安全转换为有限浮点数，空值保持 None 以便飞书字段可留空。"""
         if value is None:
-            return default
+            return None
+        try:
+            if isinstance(value, float) and math.isnan(value):
+                return None
+        except Exception:
+            pass
         try:
             number = float(value)
         except (TypeError, ValueError):
@@ -237,20 +242,20 @@ class FeishuBitableClient:
             "日期": date_ts,
             "中证500": FeishuBitableClient._safe_float(record.get("中证500"), 0.0),
             "中证1000": FeishuBitableClient._safe_float(record.get("中证1000"), 0.0),
-            "中证A500": FeishuBitableClient._safe_float(record.get("中证A500"), 0.0),
+            "创业板指数": FeishuBitableClient._safe_float(record.get("创业板指数"), 0.0),
             "上证综指": FeishuBitableClient._safe_float(record.get("上证综指"), 0.0),
             "500/300比价": FeishuBitableClient._safe_float(record.get("500/300比价"), 0.0),
             "1000/300比价": FeishuBitableClient._safe_float(record.get("1000/300比价"), 0.0),
-            "A500/300比价": FeishuBitableClient._safe_float(record.get("A500/300比价"), 0.0),
+            "创业板/300比价": FeishuBitableClient._safe_float(record.get("创业板/300比价"), 0.0),
             "500分位": FeishuBitableClient._safe_float(record.get("500分位"), 0.0),
             "1000分位": FeishuBitableClient._safe_float(record.get("1000分位"), 0.0),
-            "A500分位": FeishuBitableClient._safe_float(record.get("A500分位"), 0.0),
+            "创业板分位": FeishuBitableClient._safe_float(record.get("创业板分位"), 0.0),
             "500偏离(%)": FeishuBitableClient._safe_float(record.get("500偏离(%)"), 0.0),
             "1000偏离(%)": FeishuBitableClient._safe_float(record.get("1000偏离(%)"), 0.0),
-            "A500偏离(%)": FeishuBitableClient._safe_float(record.get("A500偏离(%)"), 0.0),
+            "创业板偏离(%)": FeishuBitableClient._safe_float(record.get("创业板偏离(%)"), 0.0),
             "500建议": FeishuBitableClient._safe_text(record.get("500建议")),
             "1000建议": FeishuBitableClient._safe_text(record.get("1000建议")),
-            "A500建议": FeishuBitableClient._safe_text(record.get("A500建议")),
+            "创业板建议": FeishuBitableClient._safe_text(record.get("创业板建议")),
         }
 
     def _create_record(self, fields: Dict[str, object]) -> Dict[str, object]:

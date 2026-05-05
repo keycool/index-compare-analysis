@@ -206,7 +206,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         if code in recent_df.columns:
             series = pd.to_numeric(recent_df[code], errors='coerce').copy()
 
-            # 中证A500 历史起始阶段存在被固定首值占住的平线，图表中直接隐藏该段。
+            # 创业板指数 历史起始阶段存在被固定首值占住的平线，图表中直接隐藏该段。
             if code == 'ZZA500':
                 valid = series.dropna()
                 if not valid.empty:
@@ -1159,12 +1159,12 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     else:
         macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
 
-    # 创建比价走势图（分开存储，用于并排布局）
+    # 创建比价走势图（全历史 + 单列满宽布局）
     ratio_charts_html = []
     for target in ['ZZ500', 'ZZ1000', 'ZZA500']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
-            show_full_history = is_lab and target in {'ZZ500', 'ZZ1000'}
+            show_full_history = True
             chart = create_ratio_chart(
                 df,
                 target,
@@ -1591,7 +1591,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
         .ratio-charts-grid {{
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: 1fr;
             gap: 20px;
         }}
 
@@ -1712,7 +1712,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
         @media (max-width: 1400px) {{
             .metrics-grid, .analysis-section {{ grid-template-columns: repeat(2, 1fr); }}
-            .ratio-charts-grid {{ grid-template-columns: 1fr 1fr; }}
+            .ratio-charts-grid {{ grid-template-columns: 1fr; }}
         }}
 
         @media (max-width: 900px) {{
@@ -1911,7 +1911,7 @@ def generate_analysis_html(conclusions):
     icon_map = {
         'ZZ500': ('zz500', '500'),
         'ZZ1000': ('zz1000', '1000'),
-        'ZZA500': ('zza500', 'A500')
+        'ZZA500': ('zza500', '创业板')
     }
 
     for code, data in conclusions.items():

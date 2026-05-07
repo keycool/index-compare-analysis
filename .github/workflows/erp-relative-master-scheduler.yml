@@ -149,6 +149,7 @@ jobs:
         run: |
           python - << 'PY'
           import json
+          import re
           import shutil
           from pathlib import Path
 
@@ -161,7 +162,10 @@ jobs:
           site_dir.mkdir(parents=True, exist_ok=True)
           (site_dir / ".nojekyll").write_text("", encoding="utf-8")
 
-          prod_reports = sorted(reports_dir.glob("index_compare_*.html"))
+          prod_reports = sorted(
+              p for p in reports_dir.glob("index_compare_*.html")
+              if re.match(r"^index_compare_\d{8}_\d{6}\.html$", p.name)
+          )
           if not prod_reports:
               raise FileNotFoundError(f"No production report file found in {reports_dir}")
 

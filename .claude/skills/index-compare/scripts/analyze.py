@@ -164,7 +164,7 @@ def generate_analysis(analysis_results):
     index_names = {
         'ZZ500': '中证500',
         'ZZ1000': '中证1000',
-        'ZZA500': '中证A500'
+        'ZZA500': '创业板指数'
     }
 
     for index_code, data in analysis_results.items():

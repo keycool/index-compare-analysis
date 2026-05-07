@@ -71,8 +71,8 @@ class FeishuWebhook:
                 {"tag": "text", "text": f"{float(latest_data.get('1000/300比价', 0)):.4f}", "color": "blue"},
             ],
             [
-                {"tag": "text", "text": "A500/300: "},
-                {"tag": "text", "text": f"{float(latest_data.get('A500/300比价', 0)):.4f}", "color": "blue"},
+                {"tag": "text", "text": "创业板/300: "},
+                {"tag": "text", "text": f"{float(latest_data.get('创业板/300比价', 0)):.4f}", "color": "blue"},
             ],
             [
                 {"tag": "text", "text": "━━━━━━━━━━━━━━━━━━"},
@@ -87,7 +87,7 @@ class FeishuWebhook:
                 {"tag": "text", "text": f"中证1000: {pick_recommendation('ZZ1000')}"},
             ],
             [
-                {"tag": "text", "text": f"中证A500: {pick_recommendation('ZZA500')}"},
+                {"tag": "text", "text": f"创业板指数: {pick_recommendation('ZZA500')}"},
             ],
         ]
 

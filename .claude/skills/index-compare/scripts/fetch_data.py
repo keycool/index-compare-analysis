@@ -200,6 +200,98 @@ def get_index_data(pro, ts_code, start_date, end_date, config):
                 raise Exception(f"获取 {ts_code} 数据失败，已重试 {retry_times} 次")
 
 
+def _fetch_latest_index_weight(pro, index_code, end_date):
+    """获取某指数最近一期成分权重快照。"""
+    alias_map = {
+        "000300.SH": ["000300.SH", "399300.SZ"],
+        "000016.SH": ["000016.SH"],
+        "000905.SH": ["000905.SH"],
+        "000852.SH": ["000852.SH"],
+        "399006.SZ": ["399006.SZ"],
+    }
+    candidates = alias_map.get(index_code, [index_code])
+    start_date = (datetime.strptime(end_date, "%Y%m%d") - timedelta(days=120)).strftime("%Y%m%d")
+
+    latest = None
+    for code in candidates:
+        try:
+            df = pro.index_weight(index_code=code, start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                continue
+            df["trade_date"] = pd.to_datetime(df["trade_date"], format="%Y%m%d", errors="coerce")
+            df = df.dropna(subset=["trade_date"]).sort_values("trade_date")
+            if df.empty:
+                continue
+            last_day = df["trade_date"].max()
+            snapshot = df[df["trade_date"] == last_day][["con_code", "weight"]].copy()
+            snapshot["weight"] = pd.to_numeric(snapshot["weight"], errors="coerce").fillna(0.0)
+            snapshot = snapshot.groupby("con_code", as_index=False)["weight"].sum()
+            snapshot["index_code"] = code
+            snapshot["trade_date"] = last_day.strftime("%Y-%m-%d")
+            latest = snapshot
+            break
+        except Exception:
+            continue
+    return latest
+
+
+def _calc_overlap_ratio(weight_a: pd.DataFrame, weight_b: pd.DataFrame) -> float:
+    """计算两个指数在当前权重快照下的重叠率（0-1）。"""
+    if weight_a is None or weight_b is None or weight_a.empty or weight_b.empty:
+        return 0.0
+
+    a = weight_a.set_index("con_code")["weight"]
+    b = weight_b.set_index("con_code")["weight"]
+    merged = pd.concat([a.rename("a"), b.rename("b")], axis=1).fillna(0.0)
+    overlap_weight = merged[["a", "b"]].min(axis=1).sum()
+    return float(overlap_weight / 100.0)
+
+
+def save_overlap_snapshot(pro, config, end_date, output_path):
+    """
+    保存指数成分重叠快照（试验用途）。
+    """
+    indices = config.get("indices", {})
+    base_code = indices.get("HS300", {}).get("code")
+    if not base_code:
+        return
+
+    base_weight = _fetch_latest_index_weight(pro, base_code, end_date)
+    if base_weight is None or base_weight.empty:
+        return
+
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "base_index": "HS300",
+        "base_code": base_code,
+        "base_trade_date": str(base_weight["trade_date"].iloc[0]),
+        "targets": {},
+    }
+
+    for key, info in indices.items():
+        if key == "HS300":
+            continue
+        if info.get("role") != "target":
+            continue
+        code = info.get("code")
+        snap = _fetch_latest_index_weight(pro, code, end_date)
+        if snap is None or snap.empty:
+            continue
+        overlap = _calc_overlap_ratio(snap, base_weight)
+        payload["targets"][key] = {
+            "name": info.get("name", key),
+            "code": code,
+            "trade_date": str(snap["trade_date"].iloc[0]),
+            "overlap_ratio": round(overlap, 4),
+            "independent_ratio": round(max(0.0, 1.0 - overlap), 4),
+        }
+
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
 def fetch_all_data(output_path, start_date='20070101', token=None, force_update=False):
     """
     获取所有指数数据（支持增量更新）
@@ -308,6 +400,12 @@ def fetch_all_data(output_path, start_date='20070101', token=None, force_update=
 
     # 保存数据
     combined.to_csv(output_file, encoding='utf-8-sig')
+
+    # 保存成分重叠快照（用于净比价试验）
+    try:
+        save_overlap_snapshot(pro, config, end_date, "data/overlap_snapshot.json")
+    except Exception as exc:
+        print(f"  [WARN] 成分重叠快照生成失败: {exc}")
 
     update_type = "增量" if is_incremental else "完整"
     print(f"\n[{update_type}更新] 数据已保存: {output_file}")

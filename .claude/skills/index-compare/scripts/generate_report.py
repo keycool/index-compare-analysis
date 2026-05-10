@@ -25,6 +25,18 @@ def load_config():
         return json.load(f)
 
 
+def load_overlap_snapshot() -> Dict[str, Any]:
+    """加载成分重叠快照（试验数据）。"""
+    snapshot_path = Path(__file__).parent.parent / 'data' / 'overlap_snapshot.json'
+    if not snapshot_path.exists():
+        return {}
+    try:
+        with open(snapshot_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False):
     """
     创建比价走势图 - 深色主题
@@ -199,6 +211,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         'ZZ500': '#10b981',   # 翠绿
         'ZZ1000': '#8b5cf6',  # 紫罗兰
         'ZZA500': '#f97316',  # 橙色
+        'SH50': '#ef4444',    # 红色
         'SHCI': '#64748b'     # 灰色
     }
 
@@ -1019,6 +1032,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         str: 报告文件路径
     """
     config = load_config()
+    overlap_snapshot = load_overlap_snapshot()
     indices_config = config['indices']
     ma_window = config['analysis']['ma_window']
     recent_days = config['analysis']['recent_days']
@@ -1035,7 +1049,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     price_chart = create_price_chart(df, indices_config, recent_days, light_theme=use_reference_chart_style)
     price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
     price_summary_items = []
-    for code in ['HS300', 'ZZ500', 'ZZ1000', 'ZZA500']:
+    for code in ['HS300', 'ZZ500', 'ZZ1000', 'ZZA500', 'SH50']:
         if code in df.columns:
             latest_value = df[code].dropna().iloc[-1]
             display_name = indices_config.get(code, {}).get('name', code)
@@ -1160,8 +1174,8 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
 
     # 创建比价走势图（全历史 + 单列满宽布局）
-    ratio_charts_html = []
-    for target in ['ZZ500', 'ZZ1000', 'ZZA500']:
+    ratio_chart_blocks_html = []
+    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
             show_full_history = True
@@ -1174,7 +1188,28 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                 light_theme=use_reference_chart_style,
                 show_full_history=show_full_history,
             )
-            ratio_charts_html.append(chart.to_html(full_html=False, include_plotlyjs='cdn'))
+            chart_html = chart.to_html(full_html=False, include_plotlyjs='cdn')
+
+            note_html = ''
+            target_meta = overlap_snapshot.get('targets', {}).get(target, {})
+            raw_col = f'{target}_ratio'
+            net_col = f'{target}_net_ratio'
+            if target in ['ZZA500', 'SH50'] and target_meta and raw_col in df.columns and net_col in df.columns:
+                raw_series = pd.to_numeric(df[raw_col], errors='coerce').dropna()
+                net_series = pd.to_numeric(df[net_col], errors='coerce').dropna()
+                if not raw_series.empty and not net_series.empty:
+                    raw_value = float(raw_series.iloc[-1])
+                    net_value = float(net_series.iloc[-1])
+                    overlap_pct = float(target_meta.get('overlap_ratio', 0.0)) * 100.0
+                    note_html = (
+                        f'<div class="overview-subtitle" style="margin:10px 8px 2px 8px;color:#64748b;">'
+                        f'去重叠净比价试验：原始比价 {raw_value:.4f}，净比价 {net_value:.4f}，重叠率约 {overlap_pct:.1f}%'
+                        f'</div>'
+                    )
+
+            ratio_chart_blocks_html.append(
+                f'<div class="ratio-chart-wrapper">{chart_html}{note_html}</div>'
+            )
 
     # 生成指标卡片HTML
     cards_html = generate_cards_html(conclusions, df)
@@ -1774,7 +1809,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                 </div>
             </div>
             <div class="ratio-charts-grid">
-                {''.join([f'<div class="ratio-chart-wrapper">{chart}</div>' for chart in ratio_charts_html])}
+                {''.join(ratio_chart_blocks_html)}
             </div>
         </div>
 
@@ -1815,29 +1850,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 def generate_cards_html(conclusions, df):
     """生成指标卡片HTML - 金融终端风格"""
     cards = []
-
-    # 沪深300卡片（基准）
-    hs300_latest = df['HS300'].iloc[-1]
-    cards.append(f"""
-        <div class="metric-card benchmark">
-            <div class="metric-header">
-                <div class="metric-name">沪深300</div>
-                <span class="metric-badge badge-benchmark">基准</span>
-            </div>
-            <div class="metric-value">{hs300_latest:,.2f}</div>
-            <div class="metric-label">最新收盘点位</div>
-            <div class="metric-stats">
-                <div class="stat-row">
-                    <span class="stat-label">角色定位</span>
-                    <span class="stat-value neutral">比价基准</span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">代表市场</span>
-                    <span class="stat-value">大盘蓝筹</span>
-                </div>
-            </div>
-        </div>
-    """)
 
     # 目标指数卡片
     for code, data in conclusions.items():
@@ -1911,7 +1923,8 @@ def generate_analysis_html(conclusions):
     icon_map = {
         'ZZ500': ('zz500', '500'),
         'ZZ1000': ('zz1000', '1000'),
-        'ZZA500': ('zza500', '创业板')
+        'ZZA500': ('zza500', '创'),
+        'SH50': ('zz500', '50')
     }
 
     for code, data in conclusions.items():
@@ -1982,7 +1995,7 @@ def generate_analysis_html(conclusions):
                 <div class="analysis-item">
                     <div class="analysis-item-header">
                         <span class="analysis-item-title">均值回归</span>
-                        <span class="analysis-item-value" style="{d_color}">{data['deviation']['value']:+.2f}% ({data['deviation']['status']})</span>
+                        <span class="analysis-item-value" style="{d_color}">{data['deviation'].get('zscore', 0):+.2f}σ ({data['deviation']['status']})</span>
                     </div>
                     <div class="analysis-item-desc">{data['deviation']['description']}</div>
                 </div>

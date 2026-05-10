@@ -413,28 +413,34 @@ def print_terminal_summary(latest_row: Dict[str, Any], conclusions: Dict[str, An
 
     latest_date = latest_row.get("日期", "未知")
     print(f"\n[DATA] 最新数据 ({latest_date}):")
-    print("+-------------+----------+----------+----------+")
-    print("| 指标        | 中证500  | 中证1000 | 创业板指数 |")
-    print("+-------------+----------+----------+----------+")
+    def _v(key: str, digits: int = 4) -> float:
+        return float(latest_row.get(key, 0) or 0)
+
+    print("+-------------+----------+----------+----------+----------+")
+    print("| 指标        | 中证500  | 中证1000 | 创业板指数 | 上证50指数 |")
+    print("+-------------+----------+----------+----------+----------+")
     print(
-        f"| 当前比价    | {float(latest_row.get('500/300比价', 0)):>8.4f} | "
-        f"{float(latest_row.get('1000/300比价', 0)):>8.4f} | "
-        f"{float(latest_row.get('创业板/300比价', 0)):>8.4f} |"
+        f"| 当前比价    | {_v('500/300比价'):>8.4f} | "
+        f"{_v('1000/300比价'):>8.4f} | "
+        f"{_v('创业板/300比价'):>8.4f} | "
+        f"{conclusions.get('SH50', {}).get('current_ratio', 0):>8.4f} |"
     )
     print(
-        f"| 历史分位    | {float(latest_row.get('500分位', 0)):>7.1f}% | "
-        f"{float(latest_row.get('1000分位', 0)):>7.1f}% | "
-        f"{float(latest_row.get('创业板分位', 0)):>7.1f}% |"
+        f"| 历史分位    | {_v('500分位', 1):>7.1f}% | "
+        f"{_v('1000分位', 1):>7.1f}% | "
+        f"{_v('创业板分位', 1):>7.1f}% | "
+        f"{conclusions.get('SH50', {}).get('percentile', {}).get('value', 0):>7.1f}% |"
     )
     print(
-        f"| 30日偏离    | {float(latest_row.get('500偏离(%)', 0)):>+7.1f}% | "
-        f"{float(latest_row.get('1000偏离(%)', 0)):>+7.1f}% | "
-        f"{float(latest_row.get('创业板偏离(%)', 0)):>+7.1f}% |"
+        f"| 30日偏离    | {_v('500偏离(%)', 2):>+7.1f}% | "
+        f"{_v('1000偏离(%)', 2):>+7.1f}% | "
+        f"{_v('创业板偏离(%)', 2):>+7.1f}% | "
+        f"{conclusions.get('SH50', {}).get('deviation', {}).get('value', 0):>+7.1f}% |"
     )
-    print("+-------------+----------+----------+----------+")
+    print("+-------------+----------+----------+----------+----------+")
 
     print("\n[RECOMMEND] 配置建议:")
-    for code, name in [("ZZ500", "中证500"), ("ZZ1000", "中证1000"), ("ZZA500", "创业板指数")]:
+    for code, name in [("ZZ500", "中证500"), ("ZZ1000", "中证1000"), ("ZZA500", "创业板指数"), ("SH50", "上证50指数")]:
         recommendation = conclusions.get(code, {}).get("recommendation", {})
         action = recommendation.get("action", "-")
         icon = recommendation.get("icon", "")
@@ -466,7 +472,7 @@ def quick_query(index_code: Optional[str] = None) -> None:
     df = pd.read_csv(processed_file, parse_dates=["trade_date"])
     latest_date = df.iloc[-1]["trade_date"].strftime("%Y-%m-%d")
 
-    valid_codes = ["ZZ500", "ZZ1000", "ZZA500"]
+    valid_codes = ["ZZ500", "ZZ1000", "ZZA500", "SH50"]
     if index_code and index_code not in valid_codes:
         print(f"[错误] 指数代码 {index_code} 不存在")
         print(f"\n支持的代码: {', '.join(valid_codes)}")
@@ -482,34 +488,36 @@ def quick_query(index_code: Optional[str] = None) -> None:
 
     if len(display_codes) > 1:
         print("最新数据:")
-        print("┌─────────────┬──────────┬──────────┬──────────┐")
-        print("│ 指标        │ 中证500  │ 中证1000 │ 创业板指数 │")
-        print("├─────────────┼──────────┼──────────┼──────────┤")
+        print("┌─────────────┬──────────┬──────────┬──────────┬──────────┐")
+        print("│ 指标        │ 中证500  │ 中证1000 │ 创业板指数 │ 上证50指数 │")
+        print("├─────────────┼──────────┼──────────┼──────────┼──────────┤")
 
         zz500 = conclusions.get("ZZ500", {})
         zz1000 = conclusions.get("ZZ1000", {})
         zza500 = conclusions.get("ZZA500", {})
+        sh50 = conclusions.get("SH50", {})
 
         print(
             f"│ 当前比价    │ {zz500.get('current_ratio', 0):>8.4f} │ "
-            f"{zz1000.get('current_ratio', 0):>8.4f} │ {zza500.get('current_ratio', 0):>8.4f} │"
+            f"{zz1000.get('current_ratio', 0):>8.4f} │ {zza500.get('current_ratio', 0):>8.4f} │ {sh50.get('current_ratio', 0):>8.4f} │"
         )
         print(
             f"│ 历史分位    │ {zz500.get('percentile', {}).get('value', 0):>7.1f}% │ "
             f"{zz1000.get('percentile', {}).get('value', 0):>7.1f}% │ "
-            f"{zza500.get('percentile', {}).get('value', 0):>7.1f}% │"
+            f"{zza500.get('percentile', {}).get('value', 0):>7.1f}% │ {sh50.get('percentile', {}).get('value', 0):>7.1f}% │"
         )
         print(
             f"│ 30日偏离    │ {zz500.get('deviation', {}).get('value', 0):>+7.1f}% │ "
             f"{zz1000.get('deviation', {}).get('value', 0):>+7.1f}% │ "
-            f"{zza500.get('deviation', {}).get('value', 0):>+7.1f}% │"
+            f"{zza500.get('deviation', {}).get('value', 0):>+7.1f}% │ {sh50.get('deviation', {}).get('value', 0):>+7.1f}% │"
         )
 
         zz500_text = f"{zz500.get('recommendation', {}).get('icon', '')} {zz500.get('recommendation', {}).get('action', '')}"
         zz1000_text = f"{zz1000.get('recommendation', {}).get('icon', '')} {zz1000.get('recommendation', {}).get('action', '')}"
         zza500_text = f"{zza500.get('recommendation', {}).get('icon', '')} {zza500.get('recommendation', {}).get('action', '')}"
-        print(f"│ 配置建议    │ {zz500_text:^8} │ {zz1000_text:^8} │ {zza500_text:^8} │")
-        print("└─────────────┴──────────┴──────────┴──────────┘")
+        sh50_text = f"{sh50.get('recommendation', {}).get('icon', '')} {sh50.get('recommendation', {}).get('action', '')}"
+        print(f"│ 配置建议    │ {zz500_text:^8} │ {zz1000_text:^8} │ {zza500_text:^8} │ {sh50_text:^8} │")
+        print("└─────────────┴──────────┴──────────┴──────────┴──────────┘")
         print()
 
     for code in display_codes:

@@ -24,6 +24,12 @@
       "role": "target",
       "description": "成长型核心指数，反映创业板市场整体表现"
     },
+    "SH50": {
+      "code": "000016.SH",
+      "name": "上证50指数",
+      "role": "target",
+      "description": "超大盘蓝筹代表指数，用于与沪深300做相对强弱比较"
+    },
     "SHCI": {
       "code": "000001.SH",
       "name": "上证综指",

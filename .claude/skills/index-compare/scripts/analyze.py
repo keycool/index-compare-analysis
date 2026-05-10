@@ -73,26 +73,27 @@ def get_trend_status(trend):
     return trend_map.get(trend, ("趋势不明", 0))
 
 
-def get_deviation_status(deviation):
+def get_deviation_status(deviation, zscore):
     """
     获取偏离度状态描述
 
     Args:
         deviation: 偏离度百分比
+        zscore: 偏离Z分数
 
     Returns:
         tuple: (状态, 描述, 得分)
     """
-    if deviation > 10:
-        return ("严重超买", "大幅偏离均线上方，短期回调风险较高", -2)
-    elif deviation > 5:
-        return ("超买", "偏离均线上方，需警惕可能的短期回调", -1)
-    elif deviation > -5:
-        return ("正常", "在均线附近波动，属于正常状态", 0)
-    elif deviation > -10:
-        return ("超卖", "偏离均线下方，可能迎来短期反弹", 1)
+    if zscore >= 2.0:
+        return ("严重超买", "短期回调风险较高，建议控制追高节奏。", -2)
+    elif zscore >= 1.0:
+        return ("超买", "估值有透支迹象，注意波动放大风险。", -1)
+    elif zscore <= -2.0:
+        return ("严重超卖", "估值压缩较充分，反弹修复概率较高。", 2)
+    elif zscore <= -1.0:
+        return ("超卖", "处于低位区间，具备阶段性修复空间。", 1)
     else:
-        return ("严重超卖", "大幅偏离均线下方，反弹概率较高", 2)
+        return ("正常", "处于常态波动区间，均值回归信号不强。", 0)
 
 
 def calculate_recommendation_score(percentile_score, trend_score, deviation_score, percentile_value):
@@ -164,7 +165,8 @@ def generate_analysis(analysis_results):
     index_names = {
         'ZZ500': '中证500',
         'ZZ1000': '中证1000',
-        'ZZA500': '创业板指数'
+        'ZZA500': '创业板指数',
+        'SH50': '上证50指数'
     }
 
     for index_code, data in analysis_results.items():
@@ -174,6 +176,7 @@ def generate_analysis(analysis_results):
         percentile = data['percentile']
         trend = data['trend']
         deviation = data['deviation']
+        zscore = data.get('zscore', 0)
 
         # 分位分析
         p_status, p_desc, p_suggest, p_score = get_percentile_status(percentile, config)
@@ -182,7 +185,7 @@ def generate_analysis(analysis_results):
         t_desc, t_score = get_trend_status(trend)
 
         # 偏离度分析
-        d_status, d_desc, d_score = get_deviation_status(deviation)
+        d_status, d_desc, d_score = get_deviation_status(deviation, zscore)
 
         # 计算综合建议（传入分位值用于调整趋势方向）
         total_score = calculate_recommendation_score(p_score, t_score, d_score, percentile)
@@ -210,6 +213,7 @@ def generate_analysis(analysis_results):
             },
             'deviation': {
                 'value': deviation,
+                'zscore': zscore,
                 'status': d_status,
                 'description': d_desc,
                 'score': d_score
@@ -221,17 +225,17 @@ def generate_analysis(analysis_results):
                 'reasons': [
                     f"历史分位 {percentile:.1f}%，{p_status}",
                     f"近期趋势：{trend}",
-                    f"均线偏离 {deviation:+.2f}%，{d_status}"
+                    f"均线偏离 {deviation:+.2f}% / {zscore:+.2f}σ，{d_status}"
                 ]
             },
             'summary': generate_summary(index_name, percentile, p_status, trend,
-                                       deviation, d_status, recommendation, rec_icon)
+                                       deviation, zscore, d_status, recommendation, rec_icon)
         }
 
     return conclusions
 
 
-def generate_summary(name, percentile, p_status, trend, deviation, d_status, recommendation, icon):
+def generate_summary(name, percentile, p_status, trend, deviation, zscore, d_status, recommendation, icon):
     """
     生成文字摘要
 
@@ -249,8 +253,8 @@ def generate_summary(name, percentile, p_status, trend, deviation, d_status, rec
 2. 趋势判断：{trend}
    近期比价走势呈现{trend}态势。
 
-3. 均值回归：偏离度 {deviation:+.2f}%（{d_status}）
-   当前比价{"高于" if deviation > 0 else "低于"}30日均线{abs(deviation):.2f}%。
+3. 均值回归：偏离度 {deviation:+.2f}% / {zscore:+.2f}σ（{d_status}）
+   当前比价{"高于" if deviation > 0 else "低于"}30日均线{abs(deviation):.2f}%，相对30日波动率为{zscore:+.2f}σ。
 
 4. 配置建议：{icon} {recommendation}
    综合以上分析，建议对{name}采取【{recommendation}】策略。"""

@@ -48,6 +48,7 @@ jobs:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
 
           FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_SECRET: ${{ secrets.CSI_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET }}
 
           # 按你的要求：ID/SECRET 继续沿用原有统一配置
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}

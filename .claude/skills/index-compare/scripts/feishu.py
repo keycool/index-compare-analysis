@@ -2,9 +2,13 @@
 飞书Webhook推送模块（指数比价分析）
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
 from typing import Any, Dict
 
 import requests
@@ -15,8 +19,9 @@ logger = logging.getLogger(__name__)
 class FeishuWebhook:
     """飞书机器人Webhook推送类"""
 
-    def __init__(self, webhook_url: str | None = None):
+    def __init__(self, webhook_url: str | None = None, webhook_secret: str | None = None):
         self.webhook_url = webhook_url or os.environ.get("FEISHU_WEBHOOK_URL")
+        self.webhook_secret = (webhook_secret or os.environ.get("FEISHU_WEBHOOK_SECRET") or "").strip()
 
     def send(self, latest_data: Dict[str, Any], conclusions: Dict[str, Any], title: str = "指数比价分析") -> bool:
         if not self.webhook_url:
@@ -27,6 +32,8 @@ class FeishuWebhook:
         if not payload:
             logger.warning("飞书消息内容为空，跳过推送")
             return False
+
+        payload = self._attach_signature(payload)
 
         try:
             response = requests.post(
@@ -102,3 +109,19 @@ class FeishuWebhook:
                 }
             },
         }
+
+    def _attach_signature(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """If FEISHU_WEBHOOK_SECRET is configured, include Feishu signature fields."""
+        if not self.webhook_secret:
+            return payload
+
+        timestamp = str(int(time.time()))
+        string_to_sign = f"{timestamp}\n{self.webhook_secret}"
+        sign = base64.b64encode(
+            hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
+        ).decode("utf-8")
+
+        signed_payload = dict(payload)
+        signed_payload["timestamp"] = timestamp
+        signed_payload["sign"] = sign
+        return signed_payload

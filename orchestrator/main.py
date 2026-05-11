@@ -200,6 +200,7 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
         env["ERP_SHARED_SIGNAL_PATH"] = str(ERP_SIGNAL)
         env["EQUITY_PREMIUM_OUTPUT_PATH"] = str(ERP_ROOT / "equity_premium_enhanced.xlsx")
         env["FEISHU_WEBHOOK_URL"] = env.get("ERP_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
+        env["FEISHU_WEBHOOK_SECRET"] = env.get("ERP_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
         env["FEISHU_APP_TOKEN"] = env.get("ERP_FEISHU_APP_TOKEN") or env.get("FEISHU_APP_TOKEN", "")
         env["FEISHU_TABLE_ID"] = env.get("ERP_FEISHU_TABLE_ID") or env.get("FEISHU_TABLE_ID", "")
     elif target == "relative":
@@ -208,6 +209,7 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
         env["INDEX_COMPARE_OUTPUT_PATH"] = str(CSI_ROOT / "index_compare_enhanced.xlsx")
         env["REQUIRE_BITABLE_SYNC"] = env.get("REQUIRE_BITABLE_SYNC", "true")
         env["FEISHU_WEBHOOK_URL"] = env.get("CSI_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
+        env["FEISHU_WEBHOOK_SECRET"] = env.get("CSI_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
         env["FEISHU_APP_TOKEN"] = env.get("CSI_FEISHU_APP_TOKEN") or env.get("FEISHU_APP_TOKEN", "")
         env["FEISHU_TABLE_ID"] = env.get("CSI_FEISHU_TABLE_ID") or env.get("FEISHU_TABLE_ID", "")
     else:

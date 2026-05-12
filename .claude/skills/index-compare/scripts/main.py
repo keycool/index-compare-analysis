@@ -120,10 +120,12 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     p500_series = calc_expanding_percentile(df.get("ZZ500_ratio"), df.index).round(1)
     p1000_series = calc_expanding_percentile(df.get("ZZ1000_ratio"), df.index).round(1)
     pcyb_series = calc_expanding_percentile(df.get("ZZA500_ratio"), df.index).round(1)
+    p50_series = calc_expanding_percentile(df.get("SH50_ratio"), df.index).round(1)
 
     d500_series = calc_deviation_series(df.get("ZZ500_ratio"), df.get("ZZ500_MA30"), df.index).round(2)
     d1000_series = calc_deviation_series(df.get("ZZ1000_ratio"), df.get("ZZ1000_MA30"), df.index).round(2)
     dcyb_series = calc_deviation_series(df.get("ZZA500_ratio"), df.get("ZZA500_MA30"), df.index).round(2)
+    d50_series = calc_deviation_series(df.get("SH50_ratio"), df.get("SH50_MA30"), df.index).round(2)
     export_df = pd.DataFrame(
         {
             "日期": df["trade_date"].dt.strftime("%Y-%m-%d"),
@@ -131,28 +133,34 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "中证500": df.get("ZZ500"),
             "中证1000": df.get("ZZ1000"),
             "创业板指数": df.get("ZZA500"),
+            "上证50指数": df.get("SH50"),
             "上证综指": df.get("SHCI"),
             "500/300比价": df.get("ZZ500_ratio"),
             "1000/300比价": df.get("ZZ1000_ratio"),
             "创业板/300比价": df.get("ZZA500_ratio"),
+            "50/300比价": df.get("SH50_ratio"),
             "500分位": p500_series,
             "1000分位": p1000_series,
             "创业板分位": pcyb_series,
+            "50分位": p50_series,
             "500偏离(%)": d500_series,
             "1000偏离(%)": d1000_series,
             "创业板偏离(%)": dcyb_series,
+            "50偏离(%)": d50_series,
         }
     )
 
     export_df["500建议"] = ""
     export_df["1000建议"] = ""
     export_df["创业板建议"] = ""
+    export_df["50建议"] = ""
 
     if not export_df.empty:
         latest_idx = export_df.index[-1]
         export_df.loc[latest_idx, "500建议"] = conclusions.get("ZZ500", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "1000建议"] = conclusions.get("ZZ1000", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "创业板建议"] = conclusions.get("ZZA500", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "50建议"] = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
 
     export_df["数据源"] = "tushare"
 
@@ -161,16 +169,20 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "中证500",
         "中证1000",
         "创业板指数",
+        "上证50指数",
         "上证综指",
         "500/300比价",
         "1000/300比价",
         "创业板/300比价",
+        "50/300比价",
         "500分位",
         "1000分位",
         "创业板分位",
+        "50分位",
         "500偏离(%)",
         "1000偏离(%)",
         "创业板偏离(%)",
+        "50偏离(%)",
     ]
     for col in number_cols:
         if col in export_df.columns:
@@ -185,19 +197,24 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "中证500",
         "中证1000",
         "创业板指数",
+        "上证50指数",
         "上证综指",
         "500/300比价",
         "1000/300比价",
         "创业板/300比价",
+        "50/300比价",
         "500分位",
         "1000分位",
         "创业板分位",
+        "50分位",
         "500偏离(%)",
         "1000偏离(%)",
         "创业板偏离(%)",
+        "50偏离(%)",
         "500建议",
         "1000建议",
         "创业板建议",
+        "50建议",
         "数据源",
     ]
     return export_df[ordered_cols]
@@ -263,16 +280,20 @@ def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
                     "zz500": _safe_float(row.get("中证500"), 4),
                     "zz1000": _safe_float(row.get("中证1000"), 4),
                     "zza500": _safe_float(row.get("创业板指数"), 4),
+                    "sh50": _safe_float(row.get("上证50指数"), 4),
                     "shci": _safe_float(row.get("上证综指"), 4),
                     "zz500_ratio": _safe_float(row.get("500/300比价"), 6),
                     "zz1000_ratio": _safe_float(row.get("1000/300比价"), 6),
                     "zza500_ratio": _safe_float(row.get("创业板/300比价"), 6),
+                    "sh50_ratio": _safe_float(row.get("50/300比价"), 6),
                     "zz500_percentile": _safe_float(row.get("500分位"), 1),
                     "zz1000_percentile": _safe_float(row.get("1000分位"), 1),
                     "zza500_percentile": _safe_float(row.get("创业板分位"), 1),
+                    "sh50_percentile": _safe_float(row.get("50分位"), 1),
                     "zz500_deviation": _safe_float(row.get("500偏离(%)"), 2),
                     "zz1000_deviation": _safe_float(row.get("1000偏离(%)"), 2),
                     "zza500_deviation": _safe_float(row.get("创业板偏离(%)"), 2),
+                    "sh50_deviation": _safe_float(row.get("50偏离(%)"), 2),
                 }
             )
 
@@ -290,6 +311,7 @@ def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
                 "zz500_recommendation": str(latest_row.get("500建议", "")),
                 "zz1000_recommendation": str(latest_row.get("1000建议", "")),
                 "zza500_recommendation": str(latest_row.get("创业板建议", "")),
+                "sh50_recommendation": str(latest_row.get("50建议", "")),
             },
         }
 

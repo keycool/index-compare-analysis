@@ -30,6 +30,18 @@
       "role": "target",
       "description": "超大盘蓝筹代表指数，用于与沪深300做相对强弱比较"
     },
+    "VAL300": {
+      "code": "000919.CSI",
+      "name": "300价值指数",
+      "role": "target",
+      "description": "沪深300价值风格指数，用于与300成长指数做风格比价"
+    },
+    "GRO300": {
+      "code": "000918.CSI",
+      "name": "300成长指数",
+      "role": "reference",
+      "description": "沪深300成长风格指数，作为300价值比价分母"
+    },
     "SHCI": {
       "code": "000001.SH",
       "name": "上证综指",

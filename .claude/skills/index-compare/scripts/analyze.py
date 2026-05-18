@@ -166,7 +166,8 @@ def generate_analysis(analysis_results):
         'ZZ500': '中证500',
         'ZZ1000': '中证1000',
         'ZZA500': '创业板指数',
-        'SH50': '上证50指数'
+        'SH50': '上证50指数',
+        'VAL300': '300价值指数'
     }
 
     for index_code, data in analysis_results.items():
@@ -245,10 +246,16 @@ def generate_summary(name, percentile, p_status, trend, deviation, zscore, d_sta
     Returns:
         str: 摘要文字
     """
+    if name == "上证50指数":
+        benchmark_name = "创业板指数"
+    elif name == "300价值指数":
+        benchmark_name = "300成长指数"
+    else:
+        benchmark_name = "沪深300"
     summary = f"""【{name}】分析结论：
 
 1. 历史分位：{percentile:.1f}%（{p_status}）
-   当前{name}相对沪深300的比价处于历史{p_status}区域。
+   当前{name}相对{benchmark_name}的比价处于历史{p_status}区域。
 
 2. 趋势判断：{trend}
    近期比价走势呈现{trend}态势。

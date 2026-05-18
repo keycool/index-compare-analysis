@@ -138,7 +138,7 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "500/300比价": df.get("ZZ500_ratio"),
             "1000/300比价": df.get("ZZ1000_ratio"),
             "创业板/300比价": df.get("ZZA500_ratio"),
-            "50/300比价": df.get("SH50_ratio"),
+            "50/创业板比价": df.get("SH50_ratio"),
             "500分位": p500_series,
             "1000分位": p1000_series,
             "创业板分位": pcyb_series,
@@ -174,7 +174,7 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "500/300比价",
         "1000/300比价",
         "创业板/300比价",
-        "50/300比价",
+        "50/创业板比价",
         "500分位",
         "1000分位",
         "创业板分位",
@@ -202,7 +202,7 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "500/300比价",
         "1000/300比价",
         "创业板/300比价",
-        "50/300比价",
+        "50/创业板比价",
         "500分位",
         "1000分位",
         "创业板分位",
@@ -285,7 +285,7 @@ def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
                     "zz500_ratio": _safe_float(row.get("500/300比价"), 6),
                     "zz1000_ratio": _safe_float(row.get("1000/300比价"), 6),
                     "zza500_ratio": _safe_float(row.get("创业板/300比价"), 6),
-                    "sh50_ratio": _safe_float(row.get("50/300比价"), 6),
+                    "sh50_ratio": _safe_float(row.get("50/创业板比价"), 6),
                     "zz500_percentile": _safe_float(row.get("500分位"), 1),
                     "zz1000_percentile": _safe_float(row.get("1000分位"), 1),
                     "zza500_percentile": _safe_float(row.get("创业板分位"), 1),
@@ -445,7 +445,7 @@ def print_terminal_summary(latest_row: Dict[str, Any], conclusions: Dict[str, An
         f"| 当前比价    | {_v('500/300比价'):>8.4f} | "
         f"{_v('1000/300比价'):>8.4f} | "
         f"{_v('创业板/300比价'):>8.4f} | "
-        f"{conclusions.get('SH50', {}).get('current_ratio', 0):>8.4f} |"
+        f"{_v('50/创业板比价'):>8.4f} |"
     )
     print(
         f"| 历史分位    | {_v('500分位', 1):>7.1f}% | "

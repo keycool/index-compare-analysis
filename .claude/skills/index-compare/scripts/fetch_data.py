@@ -208,6 +208,8 @@ def _fetch_latest_index_weight(pro, index_code, end_date):
         "000905.SH": ["000905.SH"],
         "000852.SH": ["000852.SH"],
         "399006.SZ": ["399006.SZ"],
+        "000919.CSI": ["000919.CSI", "000919.SH"],
+        "000918.CSI": ["000918.CSI", "000918.SH"],
     }
     candidates = alias_map.get(index_code, [index_code])
     start_date = (datetime.strptime(end_date, "%Y%m%d") - timedelta(days=120)).strftime("%Y%m%d")

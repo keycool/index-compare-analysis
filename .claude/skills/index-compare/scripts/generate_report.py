@@ -37,7 +37,7 @@ def load_overlap_snapshot() -> Dict[str, Any]:
         return {}
 
 
-def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False):
+def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False, ratio_base='HS300'):
     """
     创建比价走势图 - 深色主题
 
@@ -56,6 +56,11 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
     ma_col = f'{target}_MA{ma_window}'
 
     chart_df = df.copy()
+    # 裁掉比价序列前段无效区间，避免显示空白时间轴
+    ratio_valid = pd.to_numeric(chart_df[ratio_col], errors='coerce').dropna()
+    if not ratio_valid.empty:
+        chart_df = chart_df.loc[ratio_valid.index.min():].copy()
+
     if target == 'ZZA500' and target in chart_df.columns:
         target_series = chart_df[target].dropna()
         if not target_series.empty:
@@ -74,7 +79,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         x=recent_df.index,
         y=recent_df[ratio_col],
         mode='lines',
-        name=f'{target}/HS300 比价',
+        name=f'{target}/{ratio_base} 比价',
         line=dict(color='#fbbf24', width=2),
         hovertemplate='日期: %{x}<br>比价: %{y:.4f}<extra></extra>'
     ))
@@ -1173,20 +1178,25 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     else:
         macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
 
+    # 分组定义：主要三指数 vs 特色指数
+    core_codes = ['ZZ500', 'ZZ1000', 'ZZA500']
+    feature_codes = ['SH50', 'VAL300']
+
     # 创建比价走势图（全历史 + 单列满宽布局）
-    ratio_chart_blocks_html = []
-    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50']:
+    ratio_chart_blocks = {}
+    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'VAL300']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
             show_full_history = True
             chart = create_ratio_chart(
                 df,
                 target,
-                f'{name} vs 沪深300',
+                f'{name} vs {"创业板指数" if target == "SH50" else ("300成长指数" if target == "VAL300" else "沪深300")}',
                 ma_window,
                 recent_days,
                 light_theme=use_reference_chart_style,
                 show_full_history=show_full_history,
+                ratio_base=('ZZA500' if target == 'SH50' else ('GRO300' if target == 'VAL300' else 'HS300')),
             )
             chart_html = chart.to_html(full_html=False, include_plotlyjs='cdn')
 
@@ -1207,15 +1217,16 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                         f'</div>'
                     )
 
-            ratio_chart_blocks_html.append(
-                f'<div class="ratio-chart-wrapper">{chart_html}{note_html}</div>'
-            )
+            ratio_chart_blocks[target] = f'<div class="ratio-chart-wrapper">{chart_html}{note_html}</div>'
 
-    # 生成指标卡片HTML
-    cards_html = generate_cards_html(conclusions, df)
+    core_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in core_codes if code in ratio_chart_blocks])
+    feature_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in feature_codes if code in ratio_chart_blocks])
 
-    # 生成分析结论HTML
-    analysis_html = generate_analysis_html(conclusions)
+    # 分组指标卡与分析
+    core_cards_html = generate_cards_html(conclusions, df, codes=core_codes)
+    feature_cards_html = generate_cards_html(conclusions, df, codes=feature_codes)
+    core_analysis_html = generate_analysis_html(conclusions, codes=core_codes)
+    feature_analysis_html = generate_analysis_html(conclusions, codes=feature_codes)
 
     # 组装完整HTML - 金融终端风格
     page_label = 'LAB' if is_lab else 'LIVE'
@@ -1798,23 +1809,37 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="chart-wrapper">{price_chart_html}</div>
         </div>
 
-        {cards_html}
-
-        <!-- 比价图并排布局 -->
+        <!-- 主要三指数对比 -->
         <div class="charts-section">
             <div class="section-header">
                 <div class="section-title">
                     <div class="section-icon">⚖️</div>
-                    <h2>比价走势对比</h2>
+                    <h2>主要三指数对比</h2>
                 </div>
             </div>
+            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">中证500 / 中证1000 / 创业板指数，相对沪深300</div>
+            {core_cards_html}
             <div class="ratio-charts-grid">
-                {''.join(ratio_chart_blocks_html)}
+                {core_ratio_html}
             </div>
+            {core_analysis_html}
         </div>
 
-        <!-- 分析区域 -->
-        {analysis_html}
+        <!-- 特色指数对比 -->
+        <div class="charts-section">
+            <div class="section-header">
+                <div class="section-title">
+                    <div class="section-icon">✦</div>
+                    <h2>特色指数对比</h2>
+                </div>
+            </div>
+            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">上证50相对创业板指数；300价值指数相对300成长指数</div>
+            {feature_cards_html}
+            <div class="ratio-charts-grid">
+                {feature_ratio_html}
+            </div>
+            {feature_analysis_html}
+        </div>
 
         <div class="risk-banner">
             <div class="risk-icon">!</div>
@@ -1847,12 +1872,18 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     return str(report_file)
 
 
-def generate_cards_html(conclusions, df):
+def generate_cards_html(conclusions, df, codes=None):
     """生成指标卡片HTML - 金融终端风格"""
     cards = []
 
+    if codes is None:
+        ordered_codes = list(conclusions.keys())
+    else:
+        ordered_codes = [c for c in codes if c in conclusions]
+
     # 目标指数卡片
-    for code, data in conclusions.items():
+    for code in ordered_codes:
+        data = conclusions[code]
         percentile = data['percentile']['value']
         deviation = data['deviation']['value']
         trend_changes = data['trend']['changes']
@@ -1888,6 +1919,12 @@ def generate_cards_html(conclusions, df):
             trend_class = 'neutral'
             trend_arrow = '→'
 
+        if code == "SH50":
+            ratio_label = "相对创业板指数比价"
+        elif code == "VAL300":
+            ratio_label = "相对300成长指数比价"
+        else:
+            ratio_label = "相对沪深300比价"
         cards.append(f"""
             <div class="metric-card">
                 <div class="metric-header">
@@ -1895,7 +1932,7 @@ def generate_cards_html(conclusions, df):
                     <span class="metric-badge {p_badge}">{data['percentile']['status']}</span>
                 </div>
                 <div class="metric-value">{data['current_ratio']:.4f}</div>
-                <div class="metric-label">相对沪深300比价</div>
+                <div class="metric-label">{ratio_label}</div>
                 <div class="metric-stats">
                     <div class="stat-row">
                         <span class="stat-label">历史分位</span>
@@ -1916,7 +1953,7 @@ def generate_cards_html(conclusions, df):
     return f'<div class="metrics-grid">{"".join(cards)}</div>'
 
 
-def generate_analysis_html(conclusions):
+def generate_analysis_html(conclusions, codes=None):
     """生成分析结论HTML - 金融终端风格"""
     blocks = []
 
@@ -1924,10 +1961,17 @@ def generate_analysis_html(conclusions):
         'ZZ500': ('zz500', '500'),
         'ZZ1000': ('zz1000', '1000'),
         'ZZA500': ('zza500', '创'),
-        'SH50': ('zz500', '50')
+        'SH50': ('zz500', '50'),
+        'VAL300': ('zz1000', '价')
     }
 
-    for code, data in conclusions.items():
+    if codes is None:
+        ordered_codes = list(conclusions.keys())
+    else:
+        ordered_codes = [c for c in codes if c in conclusions]
+
+    for code in ordered_codes:
+        data = conclusions[code]
         rec = data['recommendation']
         icon_class, icon_text = icon_map.get(code, ('', ''))
 
@@ -1966,7 +2010,7 @@ def generate_analysis_html(conclusions):
                 <div class="analysis-icon {icon_class}">{icon_text}</div>
                 <div>
                     <div class="analysis-title">{data['name']} 分析</div>
-                    <div class="analysis-subtitle">vs 沪深300 比价</div>
+                    <div class="analysis-subtitle">{"vs 创业板指数 比价" if code == "SH50" else ("vs 300成长指数 比价" if code == "VAL300" else "vs 沪深300 比价")}</div>
                 </div>
             </div>
             <div class="analysis-body">

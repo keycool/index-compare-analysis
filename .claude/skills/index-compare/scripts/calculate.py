@@ -198,11 +198,8 @@ def process_data(input_path, output_path):
     print(f"  数据行数: {len(df)}")
     print(f"  数据列: {list(df.columns)}")
 
-    # 获取基准指数
-    base_col = 'HS300'  # 沪深300作为基准
-
     # 获取目标指数
-    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50']
+    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'VAL300']
 
     # 计算比价和相关指标
     analysis_results = {}
@@ -212,11 +209,16 @@ def process_data(input_path, output_path):
             print(f"  警告: 缺少 {target} 数据，跳过")
             continue
 
-        print(f"\n计算 {target} vs {base_col}...")
+        ratio_base_col = 'HS300'
+        if target == 'SH50':
+            ratio_base_col = 'ZZA500'
+        elif target == 'VAL300':
+            ratio_base_col = 'GRO300'
+        print(f"\n计算 {target} vs {ratio_base_col}...")
 
         # 计算比价
         ratio_col = f'{target}_ratio'
-        df[ratio_col] = calculate_ratio(df, target, base_col)
+        df[ratio_col] = calculate_ratio(df, target, ratio_base_col)
 
         # 试验：重叠校正净比价（仅对创业板/上证50优先关注，其他目标也可复用）
         overlap_ratio = (

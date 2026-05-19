@@ -30,6 +30,7 @@ class FeishuBitableClient:
         self.app_secret = os.getenv("FEISHU_APP_SECRET")
         self.app_token = os.getenv("FEISHU_APP_TOKEN")
         self.table_id = os.getenv("FEISHU_TABLE_ID")
+        self.sh50_ratio_field = "50/创业板比价"
 
         self._tenant_token: Optional[str] = None
         self._token_expire_time = 0
@@ -281,11 +282,19 @@ class FeishuBitableClient:
             "创业板偏离(%)",
             "创业板建议",
             "上证50指数",
-            "50/创业板比价",
             "50分位",
             "50偏离(%)",
             "50建议",
         }
+        # 兼容历史表结构：优先使用新字段“50/创业板比价”，若不存在则回退“50/300比价”
+        if "50/创业板比价" in names:
+            self.sh50_ratio_field = "50/创业板比价"
+        elif "50/300比价" in names:
+            self.sh50_ratio_field = "50/300比价"
+        else:
+            required = set(required)
+            required.add("50/创业板比价 或 50/300比价")
+
         missing = sorted(required - names)
         if missing:
             raise RuntimeError(
@@ -294,15 +303,14 @@ class FeishuBitableClient:
                 + "。请先补齐对应列名后再同步。"
             )
 
-    @staticmethod
-    def _build_csi_fields(record: Dict[str, float | str]) -> Dict[str, object]:
+    def _build_csi_fields(self, record: Dict[str, float | str]) -> Dict[str, object]:
         """
         仅构造 CSI 相关字段，不覆盖 ERP 既有字段。
         日期作为对齐主键，仍会一并写入。
         """
         date_ts = FeishuBitableClient._to_ms_timestamp(str(record["日期"]))
 
-        return {
+        fields = {
             "日期": date_ts,
             "中证500": FeishuBitableClient._safe_float(record.get("中证500"), 0.0),
             "中证1000": FeishuBitableClient._safe_float(record.get("中证1000"), 0.0),
@@ -312,7 +320,6 @@ class FeishuBitableClient:
             "500/300比价": FeishuBitableClient._safe_float(record.get("500/300比价"), 0.0),
             "1000/300比价": FeishuBitableClient._safe_float(record.get("1000/300比价"), 0.0),
             "创业板/300比价": FeishuBitableClient._safe_float(record.get("创业板/300比价"), 0.0),
-            "50/创业板比价": FeishuBitableClient._safe_float(record.get("50/创业板比价"), 0.0),
             "500分位": FeishuBitableClient._safe_float(record.get("500分位"), 0.0),
             "1000分位": FeishuBitableClient._safe_float(record.get("1000分位"), 0.0),
             "创业板分位": FeishuBitableClient._safe_float(record.get("创业板分位"), 0.0),
@@ -326,6 +333,8 @@ class FeishuBitableClient:
             "创业板建议": FeishuBitableClient._safe_text(record.get("创业板建议")),
             "50建议": FeishuBitableClient._safe_text(record.get("50建议")),
         }
+        fields[self.sh50_ratio_field] = FeishuBitableClient._safe_float(record.get("50/创业板比价"), 0.0)
+        return fields
 
     def _create_record(self, fields: Dict[str, object]) -> Dict[str, object]:
         response = requests.post(

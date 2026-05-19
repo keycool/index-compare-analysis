@@ -903,6 +903,16 @@ def create_macro_overview_reference_chart(erp_records, index_df):
         'historical_mean': historical_mean,
         'percentile': percentile,
     }
+    # 上一个同比位置：优先取“最新日期 - 7天”的同周位置，若无交易日则回退到该日前最近交易日
+    prev_target_date = latest_row['date'] - pd.Timedelta(days=7)
+    prev_candidates = merged_df[merged_df['date'] <= prev_target_date]
+    if not prev_candidates.empty:
+        prev_row = prev_candidates.iloc[-1]
+        summary['prev_week_value'] = float(prev_row['equity_premium'])
+        summary['prev_week_date'] = prev_row['date'].strftime('%Y.%m.%d')
+    else:
+        summary['prev_week_value'] = None
+        summary['prev_week_date'] = None
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -1097,6 +1107,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
     macro_reference_html = ''
     macro_reference_summary_html = ''
+    macro_reference_kpis_html = ''
     macro_reference_chart, macro_reference_summary = create_macro_overview_reference_chart(erp_records, df)
     if macro_reference_chart is not None and macro_reference_summary is not None:
         reference_chart_id = 'macro-reference-chart'
@@ -1175,6 +1186,32 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             f"{macro_reference_summary['historical_mean']:.2f}，当前值高于历史上 "
             f"{macro_reference_summary['percentile']:.2f}% 的时期"
         )
+        prev_week_value = macro_reference_summary.get('prev_week_value')
+        prev_week_date = macro_reference_summary.get('prev_week_date')
+        latest_value_text = (
+            f"{macro_reference_summary['latest_value']:.2f}（{macro_reference_summary['date']}）"
+        )
+        prev_week_text = (
+            f"{prev_week_value:.2f}（{prev_week_date}）"
+            if prev_week_value is not None and prev_week_date
+            else "暂无可比日期"
+        )
+        macro_reference_kpis_html = f"""
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;">
+            <div style="flex:1 1 260px;min-width:220px;background:#ffffff;border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <span style="font-size:12px;color:#64748b;white-space:nowrap;">股权溢价最新值</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;">{latest_value_text}</span>
+            </div>
+            <div style="flex:1 1 260px;min-width:220px;background:#ffffff;border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <span style="font-size:12px;color:#64748b;white-space:nowrap;">历史分位（分类数）</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:#1d4ed8;white-space:nowrap;">{macro_reference_summary['percentile']:.2f}%</span>
+            </div>
+            <div style="flex:1 1 260px;min-width:220px;background:#ffffff;border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <span style="font-size:12px;color:#64748b;white-space:nowrap;">同比值</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;">{prev_week_text}</span>
+            </div>
+        </div>
+        """
     else:
         macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
 
@@ -1793,7 +1830,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         </div>
 
         <!-- 第一排：股权溢价指数 -->
-        <div class="charts-section overview-section"><div class="section-header"><div class="section-title"><div class="section-icon">◎</div><div><h2>股权溢价指数</h2><div class="overview-subtitle">{macro_reference_summary_html if macro_reference_summary_html else '溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。'}</div></div></div></div><div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">值越大代表投资价值越大；参考线采用截至当日的历史分位估算：机会值(70分位)、中位值(50分位)、危险值(30分位)。</div><div class="chart-wrapper">{macro_reference_html}</div></div>
+        <div class="charts-section overview-section"><div class="section-header"><div class="section-title"><div class="section-icon">◎</div><div><h2>股权溢价指数</h2><div class="overview-subtitle">{macro_reference_summary_html if macro_reference_summary_html else '溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。'}</div></div></div></div><div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">值越大代表投资价值越大；参考线采用截至当日的历史分位估算：机会值(70分位)、中位值(50分位)、危险值(30分位)。</div><div class="chart-wrapper">{macro_reference_html}</div>{macro_reference_kpis_html}</div>
 
         <!-- 第二排开始：原 Index Report 主体 -->
         <div class="charts-section">

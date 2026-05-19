@@ -81,7 +81,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         mode='lines',
         name=f'{target}/{ratio_base} 比价',
         line=dict(color='#fbbf24', width=2),
-        hovertemplate='日期: %{x}<br>比价: %{y:.4f}<extra></extra>'
+        hovertemplate='比价 %{y:.4f}<extra></extra>'
     ))
 
     # 移动平均线
@@ -91,7 +91,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         mode='lines',
         name=f'{ma_window}日均线',
         line=dict(color='#94a3b8', width=1.5, dash='dash'),
-        hovertemplate='日期: %{x}<br>均线: %{y:.4f}<extra></extra>'
+        hovertemplate='30均 %{y:.4f}<extra></extra>'
     ))
 
     recent_ma120 = chart_df[ratio_col].rolling(window=120).mean().loc[recent_df.index]
@@ -101,7 +101,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         mode='lines',
         name='120日均线',
         line=dict(color='#60a5fa', width=1.5, dash='dot'),
-        hovertemplate='日期: %{x}<br>120日均线: %{y:.4f}<extra></extra>'
+        hovertemplate='120均 %{y:.4f}<extra></extra>'
     ))
 
     # 添加历史分位区域（使用显示范围内的数据计算最高最低点）
@@ -176,6 +176,7 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
             gridcolor=x_grid,
             linecolor=x_line,
             tickfont=dict(color=tick_color, size=10),
+            hoverformat='%Y.%m.%d',
             rangeslider=dict(
                 visible=True,
                 thickness=0.10,
@@ -240,7 +241,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
                 mode='lines',
                 name=info['name'],
                 line=dict(color=colors.get(code, '#94a3b8'), width=1.5),
-                hovertemplate=f"{info['name']}<br>日期: %{{x}}<br>点位: %{{y:.2f}}<extra></extra>"
+                hovertemplate=f"{info['name']} %{{y:.2f}}<extra></extra>"
             ))
 
     title_color = '#334155' if light_theme else '#f1f5f9'
@@ -272,7 +273,8 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         xaxis=dict(
             gridcolor=x_grid,
             linecolor=x_line,
-            tickfont=dict(color=tick_color)
+            tickfont=dict(color=tick_color),
+            hoverformat='%Y.%m.%d'
         ),
         yaxis=dict(
             gridcolor=x_grid,
@@ -385,7 +387,7 @@ def create_equity_premium_chart(records, recent_days=1000):
         mode='lines',
         name='股权溢价指数',
         line=dict(color='#3ec3ff', width=2.5),
-        hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>'
+        hovertemplate='溢价 %{y:.2f}%<extra></extra>'
     ))
 
     if 'earnings_yield' in recent_df.columns:
@@ -395,7 +397,7 @@ def create_equity_premium_chart(records, recent_days=1000):
             mode='lines',
             name='盈利收益率',
             line=dict(color='#ffb85c', width=1.6),
-            hovertemplate='日期: %{x}<br>盈利收益率: %{y:.2f}%<extra></extra>'
+            hovertemplate='盈利 %{y:.2f}%<extra></extra>'
         ))
 
     if 'bond_yield' in recent_df.columns:
@@ -405,7 +407,7 @@ def create_equity_premium_chart(records, recent_days=1000):
             mode='lines',
             name='10年国债收益率',
             line=dict(color='#26c281', width=1.6),
-            hovertemplate='日期: %{x}<br>10年国债收益率: %{y:.2f}%<extra></extra>'
+            hovertemplate='10Y国债 %{y:.2f}%<extra></extra>'
         ))
 
     fig.add_hline(
@@ -437,7 +439,8 @@ def create_equity_premium_chart(records, recent_days=1000):
         xaxis=dict(
             gridcolor='rgba(255,255,255,0.05)',
             linecolor='rgba(255,255,255,0.1)',
-            tickfont=dict(color='#64748b')
+            tickfont=dict(color='#64748b'),
+            hoverformat='%Y.%m.%d'
         ),
         yaxis=dict(
             gridcolor='rgba(255,255,255,0.05)',
@@ -491,7 +494,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             line=dict(color='#3ec3ff', width=2.8),
             fill='tozeroy',
             fillcolor='rgba(62, 195, 255, 0.10)',
-            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
+            hovertemplate='溢价 %{y:.2f}%<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -503,7 +506,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             mode='lines',
             name='沪深300',
             line=dict(color='#fbbf24', width=2.2),
-            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+            hovertemplate='300 %{y:.2f}<extra></extra>',
         ),
         secondary_y=True,
     )
@@ -572,6 +575,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             gridcolor='rgba(255,255,255,0.05)',
             linecolor='rgba(255,255,255,0.1)',
             tickfont=dict(color='#64748b'),
+            hoverformat='%Y.%m.%d',
             range=[first_date, last_date],
             showspikes=experimental,
             spikemode='across',
@@ -685,7 +689,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             line=dict(color='#3ec3ff', width=2.8),
             fill='tozeroy',
             fillcolor='rgba(62, 195, 255, 0.10)',
-            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
+            hovertemplate='溢价 %{y:.2f}%<extra></extra>',
         ),
         row=1,
         col=1,
@@ -698,7 +702,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             mode='lines',
             name='沪深300',
             line=dict(color='#fbbf24', width=2.2),
-            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+            hovertemplate='300 %{y:.2f}<extra></extra>',
         ),
         row=1,
         col=1,
@@ -713,7 +717,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             line=dict(color='#3ec3ff', width=2.8),
             fill='tozeroy',
             fillcolor='rgba(62, 195, 255, 0.10)',
-            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
+            hovertemplate='溢价 %{y:.2f}%<extra></extra>',
         ),
         row=2,
         col=1,
@@ -726,7 +730,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             mode='lines',
             name=f'沪深300(近{focus_years}年)',
             line=dict(color='#fbbf24', width=2.2),
-            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+            hovertemplate='300 %{y:.2f}<extra></extra>',
         ),
         row=2,
         col=1,
@@ -786,6 +790,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
         gridcolor='rgba(255,255,255,0.05)',
         linecolor='rgba(255,255,255,0.1)',
         tickfont=dict(color='#64748b'),
+        hoverformat='%Y.%m.%d',
         rangeslider=dict(visible=False),
     )
     fig.update_xaxes(
@@ -796,6 +801,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
         gridcolor='rgba(255,255,255,0.05)',
         linecolor='rgba(255,255,255,0.1)',
         tickfont=dict(color='#64748b', size=10),
+        hoverformat='%Y.%m.%d',
         showspikes=True,
         spikemode='across',
         spikesnap='cursor',
@@ -923,7 +929,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='股权溢价指数',
             line=dict(color='#4b4b4b', width=2.4),
-            hovertemplate='日期: %{x}<br>股权溢价指数: %{y:.2f}<extra></extra>',
+            hovertemplate='溢价 %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -934,7 +940,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='机会值(70分位)',
             line=dict(color='#324d94', width=1.4),
-            hovertemplate='日期: %{x}<br>机会值: %{y:.2f}<extra></extra>',
+            hovertemplate='机会(70) %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -945,7 +951,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='中位值(50分位)',
             line=dict(color='#0d7fd1', width=1.4),
-            hovertemplate='日期: %{x}<br>中位值: %{y:.2f}<extra></extra>',
+            hovertemplate='中位(50) %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -956,7 +962,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='危险值(30分位)',
             line=dict(color='#6f97e7', width=1.4),
-            hovertemplate='日期: %{x}<br>危险值: %{y:.2f}<extra></extra>',
+            hovertemplate='危险(30) %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -968,7 +974,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             name='沪深300',
             line=dict(color='#1e90ff', width=1.2),
             opacity=0.9,
-            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
+            hovertemplate='300点位 %{y:.2f}<extra></extra>',
         ),
         secondary_y=True,
     )
@@ -1007,6 +1013,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             gridcolor='rgba(148,163,184,0.18)',
             linecolor='rgba(148,163,184,0.35)',
             tickfont=dict(color='#64748b'),
+            hoverformat='%Y.%m.%d',
             rangeslider=dict(
                 visible=True,
                 thickness=0.10,

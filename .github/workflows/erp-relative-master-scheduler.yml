@@ -1,6 +1,9 @@
 name: erp-relative-master-scheduler
 
 on:
+  push:
+    branches:
+      - master
   schedule:
     # GitHub cron uses UTC (Mon-Fri):
     # 00:00 UTC = 08:00 Asia/Shanghai

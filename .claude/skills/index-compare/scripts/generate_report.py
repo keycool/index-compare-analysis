@@ -217,7 +217,9 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         'ZZ500': '#10b981',   # 翠绿
         'ZZ1000': '#8b5cf6',  # 紫罗兰
         'ZZA500': '#f97316',  # 橙色
-        'SH50': '#ef4444',    # 红色
+        'SH50': '#dc2626',    # 深红
+        'VAL300': '#b45309',  # 棕金
+        'GRO300': '#0f766e',  # 青绿
         'SHCI': '#64748b'     # 灰色
     }
 
@@ -240,7 +242,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
                 y=series,
                 mode='lines',
                 name=info['name'],
-                line=dict(color=colors.get(code, '#94a3b8'), width=1.5),
+                line=dict(color=colors.get(code, '#94a3b8'), width=(2.2 if code in {'SH50', 'VAL300', 'GRO300'} else 1.5)),
                 hovertemplate=f"{info['name']} %{{y:.2f}}<extra></extra>"
             ))
 
@@ -1204,18 +1206,18 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             else "暂无可比日期"
         )
         macro_reference_kpis_html = f"""
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;">
-            <div style="flex:1 1 260px;min-width:220px;background:#ffffff;border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                <span style="font-size:12px;color:#64748b;white-space:nowrap;">股权溢价最新值</span>
-                <span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;">{latest_value_text}</span>
+        <div class="macro-kpi-bar">
+            <div class="compact-kpi-card compact-kpi-primary">
+                <span class="compact-kpi-label">股权溢价最新值</span>
+                <span class="compact-kpi-value">{latest_value_text}</span>
             </div>
-            <div style="flex:1 1 260px;min-width:220px;background:#ffffff;border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                <span style="font-size:12px;color:#64748b;white-space:nowrap;">历史分位（分类数）</span>
-                <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:#1d4ed8;white-space:nowrap;">{macro_reference_summary['percentile']:.2f}%</span>
+            <div class="compact-kpi-card">
+                <span class="compact-kpi-label">历史分位（分类数）</span>
+                <span class="compact-kpi-value compact-kpi-pill neutral">{macro_reference_summary['percentile']:.2f}%</span>
             </div>
-            <div style="flex:1 1 260px;min-width:220px;background:#ffffff;border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                <span style="font-size:12px;color:#64748b;white-space:nowrap;">同比值</span>
-                <span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#0f172a;white-space:nowrap;">{prev_week_text}</span>
+            <div class="compact-kpi-card">
+                <span class="compact-kpi-label">同比值</span>
+                <span class="compact-kpi-value">{prev_week_text}</span>
             </div>
         </div>
         """
@@ -1261,14 +1263,13 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                         f'</div>'
                     )
 
-            ratio_chart_blocks[target] = f'<div class="ratio-chart-wrapper">{chart_html}{note_html}</div>'
+            kpi_bar_html = generate_compact_kpi_bar_html(conclusions, target)
+            ratio_chart_blocks[target] = f'<div class="ratio-chart-wrapper">{chart_html}{kpi_bar_html}{note_html}</div>'
 
     core_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in core_codes if code in ratio_chart_blocks])
     feature_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in feature_codes if code in ratio_chart_blocks])
 
     # 分组指标卡与分析
-    core_cards_html = generate_cards_html(conclusions, df, codes=core_codes)
-    feature_cards_html = generate_cards_html(conclusions, df, codes=feature_codes)
     core_analysis_html = generate_analysis_html(conclusions, codes=core_codes)
     feature_analysis_html = generate_analysis_html(conclusions, codes=feature_codes)
 
@@ -1691,6 +1692,88 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             padding: 8px;
         }}
 
+        .compact-kpi-bar {{
+            display: grid;
+            grid-template-columns: 1.3fr repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }}
+
+        .compact-kpi-card {{
+            min-width: 0;
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(135deg, rgba(255,251,240,0.98), rgba(255,241,214,0.94));
+            border: 1px solid rgba(245, 158, 11, .18);
+            border-radius: 10px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            box-shadow: 0 10px 20px rgba(180, 83, 9, 0.10);
+            backdrop-filter: blur(8px);
+        }}
+
+        .compact-kpi-primary {{
+            justify-content: flex-start;
+            gap: 12px;
+            background: linear-gradient(135deg, rgba(255,253,245,0.99), rgba(254,243,199,0.96));
+        }}
+
+        .compact-kpi-card::before {{
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(160deg, rgba(255,255,255,0.52), rgba(255,255,255,0.06) 42%, rgba(251,191,36,0.10) 100%);
+            pointer-events: none;
+        }}
+
+        .compact-kpi-card > * {{
+            position: relative;
+            z-index: 1;
+        }}
+
+        .compact-kpi-label {{
+            font-size: 12px;
+            color: #64748b;
+            white-space: nowrap;
+        }}
+
+        .compact-kpi-note {{
+            font-size: 11px;
+            color: #94a3b8;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+
+        .compact-kpi-value {{
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 16px;
+            font-weight: 700;
+            color: #0f172a;
+            white-space: nowrap;
+        }}
+
+        .compact-kpi-pill {{
+            font-size: 14px;
+            padding: 2px 10px;
+            border-radius: 999px;
+        }}
+
+        .macro-kpi-bar {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }}
+
+        .macro-kpi-bar .compact-kpi-card {{
+            flex: 1 1 260px;
+            min-width: 220px;
+        }}
+
         /* 分析卡片 */
         .analysis-section {{
             display: grid;
@@ -1803,10 +1886,12 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         @media (max-width: 1400px) {{
             .metrics-grid, .analysis-section {{ grid-template-columns: repeat(2, 1fr); }}
             .ratio-charts-grid {{ grid-template-columns: 1fr; }}
+            .compact-kpi-bar {{ grid-template-columns: repeat(2, 1fr); }}
         }}
 
         @media (max-width: 900px) {{
             .metrics-grid, .analysis-section, .ratio-charts-grid {{ grid-template-columns: 1fr; }}
+            .compact-kpi-bar {{ grid-template-columns: 1fr; }}
             .hero h1 {{ font-size: 36px; }}
             .container {{ padding: 20px; }}
         }}
@@ -1862,7 +1947,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                 </div>
             </div>
             <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">中证500 / 中证1000 / 创业板指数，相对沪深300</div>
-            {core_cards_html}
             <div class="ratio-charts-grid">
                 {core_ratio_html}
             </div>
@@ -1878,7 +1962,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                 </div>
             </div>
             <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">上证50相对创业板指数；300价值指数相对300成长指数</div>
-            {feature_cards_html}
             <div class="ratio-charts-grid">
                 {feature_ratio_html}
             </div>
@@ -1995,6 +2078,70 @@ def generate_cards_html(conclusions, df, codes=None):
         """)
 
     return f'<div class="metrics-grid">{"".join(cards)}</div>'
+
+
+def generate_compact_kpi_bar_html(conclusions, code):
+    """生成图表下方紧凑指标条。"""
+    if code not in conclusions:
+        return ''
+
+    data = conclusions[code]
+    percentile = data['percentile']['value']
+    deviation = data['deviation']['value']
+    trend_5d = data['trend']['changes']['5d']
+
+    if percentile < 40:
+        p_class = 'positive'
+    elif percentile > 60:
+        p_class = 'negative'
+    else:
+        p_class = 'neutral'
+
+    if deviation < -5:
+        d_class = 'positive'
+    elif deviation > 5:
+        d_class = 'negative'
+    else:
+        d_class = 'neutral'
+
+    if trend_5d > 0:
+        trend_class = 'positive'
+        trend_arrow = '↑'
+    elif trend_5d < 0:
+        trend_class = 'negative'
+        trend_arrow = '↓'
+    else:
+        trend_class = 'neutral'
+        trend_arrow = '→'
+
+    if code == "SH50":
+        ratio_label = "相对创业板指数比价"
+    elif code == "VAL300":
+        ratio_label = "相对300成长指数比价"
+    else:
+        ratio_label = "相对沪深300比价"
+
+    return f"""
+        <div class="compact-kpi-bar">
+            <div class="compact-kpi-card compact-kpi-primary">
+                <span class="compact-kpi-label">{data['name']}</span>
+                <span class="compact-kpi-value">{data['current_ratio']:.4f}</span>
+                <span class="compact-kpi-note">{ratio_label}</span>
+            </div>
+            <div class="compact-kpi-card">
+                <span class="compact-kpi-label">历史分位</span>
+                <span class="compact-kpi-value compact-kpi-pill {p_class}">{percentile:.1f}%</span>
+            </div>
+            <div class="compact-kpi-card">
+                <span class="compact-kpi-label">均线偏离</span>
+                <span class="compact-kpi-value compact-kpi-pill {d_class}">{deviation:+.2f}%</span>
+            </div>
+            <div class="compact-kpi-card">
+                <span class="compact-kpi-label">5日变化</span>
+                <span class="compact-kpi-value compact-kpi-pill {trend_class}">{trend_arrow} {trend_5d:+.2f}%</span>
+            </div>
+        </div>
+    """
 
 
 def generate_analysis_html(conclusions, codes=None):

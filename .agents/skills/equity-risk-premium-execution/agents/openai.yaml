@@ -1,0 +1,7 @@
+interface:
+  display_name: "ERP Execution"
+  short_description: "运行与调优 ERP 执行层、日报与持仓映射"
+  default_prompt: "Use $equity-risk-premium-execution to generate or explain the latest ERP execution plan, config, and daily summary."
+
+policy:
+  allow_implicit_invocation: true

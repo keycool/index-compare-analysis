@@ -135,6 +135,8 @@ jobs:
             csi300-relative-index/reports/index_compare_*.html
             csi300-relative-index/.claude/skills/index-compare/data/*.json
             csi300-relative-index/.claude/skills/index-compare/data/*.csv
+            csi300-relative-index/orchestrator/output/*.json
+            csi300-relative-index/orchestrator/output/*.md
             external/equity-risk-premium/equity_premium_enhanced.xlsx
             external/equity-risk-premium/dashboard/data/equity_premium.json
             external/equity-risk-premium/dashboard/data/equity_premium.js

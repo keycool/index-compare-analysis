@@ -302,6 +302,14 @@ class FeishuBitableClient:
                 + ", ".join(missing)
                 + "。请先补齐对应列名后再同步。"
             )
+        self._table_field_names = names
+
+    def _table_has_field(self, field_name: str) -> bool:
+        names = getattr(self, "_table_field_names", None)
+        if names is None:
+            names = self.get_table_field_names()
+            self._table_field_names = names
+        return field_name in names
 
     def _build_csi_fields(self, record: Dict[str, float | str]) -> Dict[str, object]:
         """
@@ -334,6 +342,18 @@ class FeishuBitableClient:
             "50建议": FeishuBitableClient._safe_text(record.get("50建议")),
         }
         fields[self.sh50_ratio_field] = FeishuBitableClient._safe_float(record.get("50/创业板比价"), 0.0)
+
+        optional_fields = {
+            "300价值指数": FeishuBitableClient._safe_float(record.get("300价值指数"), 0.0),
+            "300成长指数": FeishuBitableClient._safe_float(record.get("300成长指数"), 0.0),
+            "300价值/成长比价": FeishuBitableClient._safe_float(record.get("300价值/成长比价"), 0.0),
+            "300价值分位": FeishuBitableClient._safe_float(record.get("300价值分位"), 0.0),
+            "300价值偏离(%)": FeishuBitableClient._safe_float(record.get("300价值偏离(%)"), 0.0),
+            "300价值建议": FeishuBitableClient._safe_text(record.get("300价值建议")),
+        }
+        for field_name, field_value in optional_fields.items():
+            if self._table_has_field(field_name):
+                fields[field_name] = field_value
         return fields
 
     def _create_record(self, fields: Dict[str, object]) -> Dict[str, object]:

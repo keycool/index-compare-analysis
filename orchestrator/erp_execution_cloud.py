@@ -21,6 +21,7 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -38,18 +39,67 @@ DEFAULT_RENDER_SCRIPT = Path(__file__).resolve().parent / "render_erp_daily_summ
 
 BASE_URL = "https://open.feishu.cn/open-apis"
 AUTH_URL = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+MOJIBAKE_MAP = {
+    "鏍囬厤": "标配",
+    "瓒呴厤": "超配",
+    "浣庨厤": "低配",
+    "寮虹儓瓒呴厤": "强烈超配",
+    "寮虹儓浣庨厤": "强烈低配",
+    "娌繁300": "沪深300",
+    "涓婅瘉50": "上证50",
+    "鍒涗笟鏉": "创业板",
+    "涓瘉500": "中证500",
+    "涓瘉1000": "中证1000",
+    "绾㈠埄ETF": "红利ETF",
+    "鍒涗笟鏉垮寮": "创业板增强",
+    "鍒涗笟鏉挎寚": "创业板指",
+    "涓婅瘉50ETF": "上证50ETF",
+    "涓瘉500ETF": "中证500ETF",
+    "涓瘉1000ETF": "中证1000ETF",
+    "鍗佸勾鏈熷浗鍊篍TF": "十年期国债ETF",
+    "鎭掔敓娑堣垂ETF": "恒生消费ETF",
+    "绉戝垱50ETF": "科创50ETF",
+    "鏃ユ湡": "日期",
+    "鑲℃潈婧环鎸囨暟": "股权溢价指数",
+    "500寤鸿": "500建议",
+    "1000寤鸿": "1000建议",
+    "鍒涗笟鏉垮缓璁": "创业板建议",
+    "50寤鸿": "50建议",
+    "500/300姣斾环": "500/300比价",
+    "1000/300姣斾环": "1000/300比价",
+    "鍒涗笟鏉?300姣斾环": "创业板/300比价",
+    "鍒涗笟鏉300姣斾环": "创业板/300比价",
+    "50/鍒涗笟鏉挎瘮浠": "50/创业板比价",
+    "50/300姣斾环": "50/300比价",
+    "300浠峰€?鎴愰暱姣斾环": "300价值/成长比价",
+    "300浠峰€煎垎浣": "300价值分位",
+    "300浠峰€煎缓璁": "300价值建议",
+    "椤圭洰鍚嶇О": "项目名称",
+    "閲戦": "金额",
+    "鏉ユ簮": "来源",
+    "鈪＄骇鍒嗙被": "Ⅱ级分类",
+    "II绾у垎绫": "Ⅱ级分类",
+    "浜岀骇鍒嗙被": "二级分类",
+    "鈪㈢骇鍒嗙被": "Ⅲ级分类",
+    "III绾у垎绫": "Ⅲ级分类",
+    "涓夌骇鍒嗙被": "三级分类",
+}
+
+BUCKET_METADATA = {
+    "hs300": {"label": "沪深300", "sleeve": "defensive"},
+    "sh50": {"label": "上证50", "sleeve": "defensive"},
+    "cyb": {"label": "创业板", "sleeve": "aggressive"},
+    "zz500": {"label": "中证500", "sleeve": "aggressive"},
+    "zz1000": {"label": "中证1000", "sleeve": "aggressive"},
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate ERP execution plan via Feishu OpenAPI")
-    parser.add_argument(
-        "--erp-app-token",
-        default=os.environ.get("ERP_EXEC_ERP_APP_TOKEN", DEFAULT_ERP_APP_TOKEN),
-    )
-    parser.add_argument(
-        "--erp-table-id",
-        default=os.environ.get("ERP_EXEC_ERP_TABLE_ID", DEFAULT_ERP_TABLE_ID),
-    )
+    parser.add_argument("--erp-app-token", default=os.environ.get("ERP_EXEC_ERP_APP_TOKEN", DEFAULT_ERP_APP_TOKEN))
+    parser.add_argument("--erp-table-id", default=os.environ.get("ERP_EXEC_ERP_TABLE_ID", DEFAULT_ERP_TABLE_ID))
     parser.add_argument(
         "--relative-app-token",
         default=os.environ.get("ERP_EXEC_RELATIVE_APP_TOKEN", DEFAULT_RELATIVE_APP_TOKEN),
@@ -58,30 +108,38 @@ def parse_args() -> argparse.Namespace:
         "--relative-table-id",
         default=os.environ.get("ERP_EXEC_RELATIVE_TABLE_ID", DEFAULT_RELATIVE_TABLE_ID),
     )
-    parser.add_argument(
-        "--asset-app-token",
-        default=os.environ.get("ERP_EXEC_ASSET_APP_TOKEN", DEFAULT_ASSET_APP_TOKEN),
-    )
-    parser.add_argument(
-        "--asset-table-id",
-        default=os.environ.get("ERP_EXEC_ASSET_TABLE_ID", DEFAULT_ASSET_TABLE_ID),
-    )
+    parser.add_argument("--asset-app-token", default=os.environ.get("ERP_EXEC_ASSET_APP_TOKEN", DEFAULT_ASSET_APP_TOKEN))
+    parser.add_argument("--asset-table-id", default=os.environ.get("ERP_EXEC_ASSET_TABLE_ID", DEFAULT_ASSET_TABLE_ID))
     parser.add_argument(
         "--execution-config-path",
         default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)),
     )
-    parser.add_argument(
-        "--output",
-        default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)),
-    )
+    parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
     parser.add_argument("--page-size", type=int, default=500)
     return parser.parse_args()
+
+
+def repair_text(text: str) -> str:
+    fixed = unicodedata.normalize("NFKC", text).strip()
+    for bad, good in MOJIBAKE_MAP.items():
+        fixed = fixed.replace(bad, good)
+    return fixed
 
 
 def normalize_text(value: Any) -> str:
     if value is None:
         return ""
-    return unicodedata.normalize("NFKC", str(value)).strip()
+    return repair_text(str(value))
+
+
+def sanitize_structure(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {normalize_text(key): sanitize_structure(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_structure(item) for item in value]
+    if isinstance(value, str):
+        return normalize_text(value)
+    return value
 
 
 def normalize_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -99,7 +157,6 @@ def get_first(row: dict[str, Any], *names: str) -> Any:
 def parse_date(value: Any) -> datetime | None:
     if value is None:
         return None
-
     if isinstance(value, (int, float)):
         try:
             number = int(value)
@@ -108,7 +165,7 @@ def parse_date(value: Any) -> datetime | None:
         if abs(number) >= 10_000_000_000:
             number = number // 1000
         try:
-            return datetime.fromtimestamp(number)
+            return datetime.fromtimestamp(number, SHANGHAI_TZ)
         except Exception:
             return None
 
@@ -118,16 +175,14 @@ def parse_date(value: Any) -> datetime | None:
 
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
         try:
-            return datetime.strptime(text, fmt)
+            return datetime.strptime(text, fmt).replace(tzinfo=SHANGHAI_TZ)
         except ValueError:
             continue
     return None
 
 
 def safe_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, list):
+    if value is None or isinstance(value, list):
         return None
     try:
         number = float(value)
@@ -157,11 +212,7 @@ class FeishuBitableReader:
         self._tenant_expiry = 0.0
 
     def _refresh_token(self) -> None:
-        response = requests.post(
-            AUTH_URL,
-            json={"app_id": self.app_id, "app_secret": self.app_secret},
-            timeout=15,
-        )
+        response = requests.post(AUTH_URL, json={"app_id": self.app_id, "app_secret": self.app_secret}, timeout=15)
         response.raise_for_status()
         payload = response.json()
         if payload.get("code") != 0:
@@ -213,14 +264,7 @@ def recommendation_multiplier(text: str | None, mapping: dict[str, float]) -> fl
     return float(mapping.get(normalize_text(text), 1.0))
 
 
-def piecewise_linear_weight(
-    percentile: float,
-    low_threshold: float,
-    high_threshold: float,
-    low_weight: float,
-    neutral_weight: float,
-    high_weight: float,
-) -> float:
+def piecewise_linear_weight(percentile: float, low_threshold: float, high_threshold: float, low_weight: float, neutral_weight: float, high_weight: float) -> float:
     midpoint = (low_threshold + high_threshold) / 2.0
     if percentile <= low_threshold:
         return low_weight
@@ -236,57 +280,43 @@ def piecewise_linear_weight(
 
 
 def normalize_to_weights(scores: dict[str, float]) -> dict[str, float]:
-    positive = {k: max(0.0, float(v)) for k, v in scores.items()}
+    positive = {key: max(0.0, float(value)) for key, value in scores.items()}
     total = sum(positive.values())
     if total <= 0:
         equal = 1.0 / len(positive) if positive else 0.0
-        return {k: equal for k in positive}
-    return {k: value / total for k, value in positive.items()}
-
-
-BUCKET_METADATA = {
-    "hs300": {"label": "沪深300", "sleeve": "defensive"},
-    "sh50": {"label": "上证50", "sleeve": "defensive"},
-    "cyb": {"label": "创业板", "sleeve": "aggressive"},
-    "zz500": {"label": "中证500", "sleeve": "aggressive"},
-    "zz1000": {"label": "中证1000", "sleeve": "aggressive"},
-}
+        return {key: equal for key in positive}
+    return {key: value / total for key, value in positive.items()}
 
 
 def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_lookup: set[str]) -> str | None:
-    if name in ignored_lookup:
+    fixed_name = normalize_text(name)
+    if fixed_name in ignored_lookup:
         return "__IGNORE__"
-    if name in alias_lookup:
-        return alias_lookup[name]
-    if "红利" in name:
+    if fixed_name in alias_lookup:
+        return alias_lookup[fixed_name]
+    if "红利" in fixed_name:
         return "sh50"
-    if "创业板" in name:
+    if "创业板" in fixed_name:
         return "cyb"
-    if "1000" in name:
+    if "1000" in fixed_name:
         return "zz1000"
-    if "500" in name:
+    if "500" in fixed_name:
         return "zz500"
-    if "50" in name:
+    if "50" in fixed_name:
         return "sh50"
-    if "300" in name:
+    if "300" in fixed_name:
         return "hs300"
-    if "国债" in name or "科创50" in name or "恒生消费" in name:
+    if "国债" in fixed_name or "科创50" in fixed_name or "恒生消费" in fixed_name:
         return "__IGNORE__"
     return None
 
 
-def aggregate_current_holdings(
-    rows: list[dict[str, Any]],
-    alias_map: dict[str, str],
-    ignored_holdings: set[str],
-) -> tuple[dict[str, float], list[dict[str, Any]]]:
+def aggregate_current_holdings(rows: list[dict[str, Any]], alias_map: dict[str, str], ignored_holdings: set[str]) -> tuple[dict[str, float], list[dict[str, Any]]]:
     aggregated: dict[str, float] = {}
     unmapped: list[dict[str, Any]] = []
 
     for row in rows:
-        third_level = parse_multiselect(
-            get_first(row, "Ⅲ级分类", "III级分类", "三级分类")
-        )
+        third_level = parse_multiselect(get_first(row, "Ⅲ级分类", "III级分类", "三级分类"))
         if "ERP" not in third_level:
             continue
 
@@ -320,8 +350,10 @@ def latest_valid_row(rows: list[dict[str, Any]], required_aliases: list[str]) ->
         if not any(get_first(row, alias) not in (None, "", []) for alias in required_aliases):
             continue
         candidates.append((dt, row))
+
     if not candidates:
         raise ValueError("No valid dated rows found")
+
     candidates.sort(key=lambda item: item[0])
     return candidates[-1][1]
 
@@ -333,8 +365,10 @@ def compute_erp_snapshot(rows: list[dict[str, Any]], thresholds: dict[str, float
         premium = safe_float(get_first(row, "股权溢价指数"))
         if dt and premium is not None:
             valid.append((dt, premium))
+
     if not valid:
         raise ValueError("ERP table has no valid premium history")
+
     valid.sort(key=lambda item: item[0])
     latest_date, latest_value = valid[-1]
     history = [value for _, value in valid]
@@ -358,10 +392,7 @@ def compute_erp_snapshot(rows: list[dict[str, Any]], thresholds: dict[str, float
 
 
 def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    latest = latest_valid_row(
-        rows,
-        ["500建议", "1000建议", "创业板建议", "50建议", "300价值建议"],
-    )
+    latest = latest_valid_row(rows, ["500建议", "1000建议", "创业板建议", "50建议", "300价值建议"])
     dt = parse_date(get_first(latest, "日期"))
     if not dt:
         raise ValueError("Relative row missing valid date")
@@ -410,12 +441,7 @@ def compute_val300_style_snapshot(relative_snapshot: dict[str, Any]) -> dict[str
     }
 
 
-def build_target_weights(
-    erp_snapshot: dict[str, Any],
-    relative_snapshot: dict[str, Any],
-    val300_style_snapshot: dict[str, Any],
-    execution_config: dict[str, Any],
-) -> dict[str, dict[str, Any]]:
+def build_target_weights(erp_snapshot: dict[str, Any], relative_snapshot: dict[str, Any], val300_style_snapshot: dict[str, Any], execution_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     aggressive_total = float(erp_snapshot["aggressive_weight"])
     recs = relative_snapshot["recommendations"]
     value_style_rec = normalize_text(val300_style_snapshot.get("recommendation") or "标配")
@@ -447,15 +473,9 @@ def build_target_weights(
     sh50_target = min(sh50_target, float(alpha_bucket_caps.get("sh50", 0.18)))
 
     aggressive_scores = {
-        "cyb": float(alpha_base_weights.get("cyb", 0.3))
-        * recommendation_multiplier(recs.get("cyb"), recommendation_multipliers)
-        * float(growth_tilt.get("cyb", 1.0)),
-        "zz500": float(alpha_base_weights.get("zz500", 0.4))
-        * recommendation_multiplier(recs.get("zz500"), recommendation_multipliers)
-        * float(growth_tilt.get("zz500", 1.0)),
-        "zz1000": float(alpha_base_weights.get("zz1000", 0.3))
-        * recommendation_multiplier(recs.get("zz1000"), recommendation_multipliers)
-        * float(growth_tilt.get("zz1000", 1.0)),
+        "cyb": float(alpha_base_weights.get("cyb", 0.3)) * recommendation_multiplier(recs.get("cyb"), recommendation_multipliers) * float(growth_tilt.get("cyb", 1.0)),
+        "zz500": float(alpha_base_weights.get("zz500", 0.4)) * recommendation_multiplier(recs.get("zz500"), recommendation_multipliers) * float(growth_tilt.get("zz500", 1.0)),
+        "zz1000": float(alpha_base_weights.get("zz1000", 0.3)) * recommendation_multiplier(recs.get("zz1000"), recommendation_multipliers) * float(growth_tilt.get("zz1000", 1.0)),
     }
 
     aggressive_alpha_total = alpha_budget * aggressive_total
@@ -483,9 +503,7 @@ def build_target_weights(
         "target_weight": round(sh50_target, 4),
     }
 
-    used_alpha_weight = sh50_target + sum(
-        float(item["target_weight"]) for item in targets.values() if item["bucket"] != "sh50"
-    )
+    used_alpha_weight = sh50_target + sum(float(item["target_weight"]) for item in targets.values() if item["bucket"] != "sh50")
     hs300_target = max(0.0, 1.0 - used_alpha_weight)
     targets["hs300"] = {
         "bucket": "hs300",
@@ -498,11 +516,7 @@ def build_target_weights(
     return targets
 
 
-def build_rebalance_plan(
-    current_holdings: dict[str, float],
-    unmapped_holdings: list[dict[str, Any]],
-    targets: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
+def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: list[dict[str, Any]], targets: dict[str, dict[str, Any]]) -> dict[str, Any]:
     managed_total = round(sum(current_holdings.values()), 2)
     unmapped_total = round(sum(item["amount"] for item in unmapped_holdings), 2)
     total_erp_amount = round(managed_total + unmapped_total, 2)
@@ -519,16 +533,7 @@ def build_rebalance_plan(
         elif delta_amount < 0:
             action = "sell"
 
-        positions.append(
-            {
-                **target,
-                "current_amount": current_amount,
-                "current_weight": current_weight,
-                "target_amount": target_amount,
-                "delta_amount": delta_amount,
-                "action": action,
-            }
-        )
+        positions.append({**target, "current_amount": current_amount, "current_weight": current_weight, "target_amount": target_amount, "delta_amount": delta_amount, "action": action})
 
     positions.sort(key=lambda item: (item["sleeve"], item["bucket"]))
 
@@ -551,19 +556,9 @@ def save_output(path: Path, payload: dict[str, Any]) -> None:
 def render_daily_summary() -> Path | None:
     if not DEFAULT_RENDER_SCRIPT.exists():
         return None
-    completed = subprocess.run(
-        [sys.executable, str(DEFAULT_RENDER_SCRIPT)],
-        cwd=DEFAULT_RENDER_SCRIPT.parent.parent,
-        text=True,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-    )
+    completed = subprocess.run([sys.executable, str(DEFAULT_RENDER_SCRIPT)], cwd=DEFAULT_RENDER_SCRIPT.parent.parent, text=True, capture_output=True, encoding="utf-8", errors="replace", check=False)
     if completed.returncode != 0:
-        raise RuntimeError(
-            f"Failed to render daily summary: {completed.stderr.strip() or completed.stdout.strip()}"
-        )
+        raise RuntimeError(f"Failed to render daily summary: {completed.stderr.strip() or completed.stdout.strip()}")
     output_text = (completed.stdout or "").strip()
     if not output_text:
         return None
@@ -590,10 +585,7 @@ def print_summary(payload: dict[str, Any]) -> None:
         print(f"VAL300/GRO300: {style['ratio']:.4f} / {style['percentile']:.2f}% / {style['recommendation']}")
     print(f"Managed ERP capital: {portfolio['managed_amount']:.2f}")
     for item in portfolio["positions"]:
-        print(
-            f"  - {item['label']}: current {item['current_amount']:.2f} -> target {item['target_amount']:.2f} "
-            f"({item['action']} {item['delta_amount']:+.2f})"
-        )
+        print(f"  - {item['label']}: current {item['current_amount']:.2f} -> target {item['target_amount']:.2f} ({item['action']} {item['delta_amount']:+.2f})")
 
 
 def main() -> None:
@@ -603,24 +595,17 @@ def main() -> None:
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
     reader = FeishuBitableReader(app_id, app_secret)
 
-    execution_config = json.loads(Path(args.execution_config_path).read_text(encoding="utf-8"))
+    execution_config = sanitize_structure(json.loads(Path(args.execution_config_path).read_text(encoding="utf-8")))
 
     erp_rows = reader.list_all_records(args.erp_app_token, args.erp_table_id, args.page_size)
     relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
     asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
 
-    erp_snapshot = compute_erp_snapshot(
-        erp_rows,
-        execution_config["percentile_thresholds"],
-        execution_config["aggressive_weights"],
-    )
+    erp_snapshot = compute_erp_snapshot(erp_rows, execution_config["percentile_thresholds"], execution_config["aggressive_weights"])
     relative_snapshot = compute_relative_snapshot(relative_rows)
     val300_style_snapshot = compute_val300_style_snapshot(relative_snapshot)
 
-    alias_map = {
-        normalize_text(key): normalize_text(value)
-        for key, value in execution_config.get("holding_alias_map", {}).items()
-    }
+    alias_map = {normalize_text(key): normalize_text(value) for key, value in execution_config.get("holding_alias_map", {}).items()}
     ignored_holdings = {normalize_text(item) for item in execution_config.get("ignored_erp_holdings", [])}
     current_holdings, unmapped_holdings = aggregate_current_holdings(asset_rows, alias_map, ignored_holdings)
 
@@ -630,7 +615,7 @@ def main() -> None:
     payload = {
         "version": "1.0",
         "signal_type": "erp_execution_plan",
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds"),
         "inputs": {
             "mode": "cloud_openapi",
             "erp_table": {"app_token": args.erp_app_token, "table_id": args.erp_table_id},
@@ -639,11 +624,7 @@ def main() -> None:
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },
-        "signals": {
-            "erp": erp_snapshot,
-            "relative": relative_snapshot,
-            "val300_style": val300_style_snapshot,
-        },
+        "signals": {"erp": erp_snapshot, "relative": relative_snapshot, "val300_style": val300_style_snapshot},
         "portfolio": portfolio,
     }
 

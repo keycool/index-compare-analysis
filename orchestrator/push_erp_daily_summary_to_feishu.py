@@ -107,7 +107,8 @@ def build_payload(plan: dict, summary_text: str) -> dict:
             ]
         )
 
-    content.append([{"tag": "text", "text": "摘要文件已更新，可在本地查看完整 Markdown 日报。"}])
+    if summary_text.strip():
+        content.append([{"tag": "text", "text": "完整 Markdown 日报已生成。"}])
 
     return {
         "msg_type": "post",
@@ -165,7 +166,12 @@ def main() -> None:
     if result.get("code") != 0:
         raise RuntimeError(f"Feishu push failed: {result}")
 
-    print(json.dumps({"success": True, "message": "pushed", "date": plan["signals"]["relative"]["date"]}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"success": True, "message": "pushed", "date": plan["signals"]["relative"]["date"]},
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -123,6 +123,44 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     }
 
 
+def build_fallback_text_payload(plan: dict) -> dict:
+    erp = plan["signals"]["erp"]
+    relative = plan["signals"]["relative"]
+    style = plan["signals"].get("val300_style", {})
+    positions = sorted(
+        plan["portfolio"]["positions"],
+        key=lambda item: abs(float(item.get("delta_amount", 0.0))),
+        reverse=True,
+    )[:5]
+
+    lines = [
+        "ERP执行日报",
+        f"日期: {relative['date']}",
+        f"ERP分位: {erp['percentile']:.2f}%",
+        f"进攻/防守: {erp['aggressive_weight'] * 100:.2f}% / {erp['defensive_weight'] * 100:.2f}%",
+        (
+            f"Relative: 500={relative['recommendations']['zz500'] or '标配'}; "
+            f"1000={relative['recommendations']['zz1000'] or '标配'}; "
+            f"创业板={relative['recommendations']['cyb'] or '标配'}; "
+            f"50={relative['recommendations']['sh50'] or '标配'}"
+        ),
+    ]
+    if style.get("available"):
+        lines.append(
+            f"300价值/成长: 比价 {style['ratio']:.4f}; 分位 {style['percentile']:.2f}%; 建议 {style['recommendation']}"
+        )
+    lines.append("Top调仓:")
+    for item in positions:
+        direction = "加仓" if item["delta_amount"] > 0 else "减仓" if item["delta_amount"] < 0 else "保持"
+        lines.append(
+            f"{item['label']}: 当前 {item['current_amount']:,.0f}, 目标 {item['target_amount']:,.0f}, {direction} {abs(item['delta_amount']):,.0f}"
+        )
+    return {
+        "msg_type": "text",
+        "content": {"text": "\n".join(lines)},
+    }
+
+
 def attach_signature(payload: dict, secret: str) -> dict:
     if not secret:
         return payload
@@ -155,14 +193,25 @@ def main() -> None:
     payload = build_payload(plan, summary_text)
     payload = attach_signature(payload, resolve_webhook_secret())
 
+    secret = resolve_webhook_secret()
     response = requests.post(
         webhook_url,
         headers={"Content-Type": "application/json"},
-        data=json.dumps(payload, ensure_ascii=False),
+        data=json.dumps(attach_signature(payload, secret), ensure_ascii=False),
         timeout=15,
     )
     response.raise_for_status()
     result = response.json()
+    if result.get("code") == 19024:
+        fallback = build_fallback_text_payload(plan)
+        retry = requests.post(
+            webhook_url,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(attach_signature(fallback, secret), ensure_ascii=False),
+            timeout=15,
+        )
+        retry.raise_for_status()
+        result = retry.json()
     if result.get("code") != 0:
         raise RuntimeError(f"Feishu push failed: {result}")
 

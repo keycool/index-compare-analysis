@@ -55,7 +55,7 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     )[:5]
 
     content: list[list[dict[str, str]]] = []
-    content.append([{"tag": "text", "text": "ERP 执行日报"}])
+    content.append([{"tag": "text", "text": "ERP执行日报"}])
     content.append(
         [
             {"tag": "text", "text": f"ERP {erp['date']} | 分位 {erp['percentile']:.2f}% | "},
@@ -115,7 +115,7 @@ def build_payload(plan: dict, summary_text: str) -> dict:
         "content": {
             "post": {
                 "zh_cn": {
-                    "title": f"ERP 执行日报 ({relative['date']})",
+                    "title": f"ERP执行日报 ({relative['date']})",
                     "content": content,
                 }
             }

@@ -1,0 +1,84 @@
+name: erp-execution-cloud
+
+on:
+  schedule:
+    # 09:00 Asia/Shanghai on the 13th and 28th of every month.
+    - cron: "0 1 13 * *"
+    - cron: "0 1 28 * *"
+  workflow_dispatch:
+    inputs:
+      push_summary:
+        description: "Push ERP execution summary to Feishu webhook after generation"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: erp-execution-cloud
+  cancel-in-progress: false
+
+jobs:
+  run-erp-execution-cloud:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Resolve push mode
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "ERP_EXECUTION_PUSH_SUMMARY=true" >> "$GITHUB_ENV"
+          elif [ "${{ inputs.push_summary }}" = "true" ]; then
+            echo "ERP_EXECUTION_PUSH_SUMMARY=true" >> "$GITHUB_ENV"
+          else
+            echo "ERP_EXECUTION_PUSH_SUMMARY=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run ERP execution workflow
+        run: |
+          if [ "$ERP_EXECUTION_PUSH_SUMMARY" = "true" ]; then
+            python orchestrator/run_erp_execution_cloud.py --push-summary
+          else
+            python orchestrator/run_erp_execution_cloud.py
+          fi
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          ERP_EXEC_ERP_APP_TOKEN: ${{ secrets.ERP_EXEC_ERP_APP_TOKEN || secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          ERP_EXEC_ERP_TABLE_ID: ${{ secrets.ERP_EXEC_ERP_TABLE_ID || secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+          ERP_EXEC_RELATIVE_APP_TOKEN: ${{ secrets.ERP_EXEC_RELATIVE_APP_TOKEN || secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          ERP_EXEC_RELATIVE_TABLE_ID: ${{ secrets.ERP_EXEC_RELATIVE_TABLE_ID || secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+          ERP_EXEC_ASSET_APP_TOKEN: ${{ secrets.ERP_EXEC_ASSET_APP_TOKEN }}
+          ERP_EXEC_ASSET_TABLE_ID: ${{ secrets.ERP_EXEC_ASSET_TABLE_ID }}
+          ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL || secrets.ERP_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
+          ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET || secrets.ERP_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET }}
+          ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}
+
+      - name: Upload ERP execution artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: erp-execution-cloud-${{ github.run_id }}
+          path: |
+            orchestrator/output/erp_execution_plan.json
+            orchestrator/output/erp_daily_summary.md
+          if-no-files-found: warn
+          retention-days: 30

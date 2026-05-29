@@ -27,21 +27,18 @@ def load_json(path: Path) -> dict:
 
 
 def resolve_webhook_url() -> str:
-    return (
-        os.environ.get("ERP_DAILY_FEISHU_WEBHOOK_URL")
-        or os.environ.get("ERP_FEISHU_WEBHOOK_URL")
-        or os.environ.get("FEISHU_WEBHOOK_URL")
-        or ""
-    ).strip()
+    return (os.environ.get("ERP_DAILY_FEISHU_WEBHOOK_URL") or "").strip()
 
 
 def resolve_webhook_secret() -> str:
-    return (
-        os.environ.get("ERP_DAILY_FEISHU_WEBHOOK_SECRET")
-        or os.environ.get("ERP_FEISHU_WEBHOOK_SECRET")
-        or os.environ.get("FEISHU_WEBHOOK_SECRET")
-        or ""
-    ).strip()
+    return (os.environ.get("ERP_DAILY_FEISHU_WEBHOOK_SECRET") or "").strip()
+
+
+def describe_webhook(url: str) -> str:
+    if not url:
+        return "webhook_source=ERP_DAILY_FEISHU_WEBHOOK_URL webhook_tail=<missing>"
+    tail = url.rstrip("/").split("/")[-1]
+    return f"webhook_source=ERP_DAILY_FEISHU_WEBHOOK_URL webhook_tail={tail[-8:]}"
 
 
 def build_payload(plan: dict, summary_text: str) -> dict:
@@ -180,7 +177,7 @@ def main() -> None:
     webhook_url = resolve_webhook_url()
     if not webhook_url:
         raise RuntimeError(
-            "Missing Feishu webhook URL. Set ERP_DAILY_FEISHU_WEBHOOK_URL, ERP_FEISHU_WEBHOOK_URL, or FEISHU_WEBHOOK_URL."
+            "Missing Feishu webhook URL. Set ERP_DAILY_FEISHU_WEBHOOK_URL."
         )
 
     if not PLAN_PATH.exists():
@@ -194,6 +191,7 @@ def main() -> None:
     payload = attach_signature(payload, resolve_webhook_secret())
 
     secret = resolve_webhook_secret()
+    print(f"[PUSH] {describe_webhook(webhook_url)}")
     response = requests.post(
         webhook_url,
         headers={"Content-Type": "application/json"},
@@ -203,6 +201,7 @@ def main() -> None:
     response.raise_for_status()
     result = response.json()
     if result.get("code") == 19024:
+        print("[PUSH] keyword check blocked post payload, retrying with plain text fallback")
         fallback = build_fallback_text_payload(plan)
         retry = requests.post(
             webhook_url,

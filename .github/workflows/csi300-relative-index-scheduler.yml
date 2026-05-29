@@ -1,10 +1,10 @@
-name: csi300-relative-index-manual
+name: csi300-relative-index-manual-deprecated
 
 on:
   workflow_dispatch:
     inputs:
       force_update:
-        description: "Force full update (true/false)"
+        description: "[Deprecated fallback only] Force full update (true/false)"
         required: false
         default: "false"
         type: string
@@ -21,10 +21,18 @@ concurrency:
 
 jobs:
   run-csi300-relative-index:
+    name: deprecated-fallback-only
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
     steps:
+      - name: Deprecation notice
+        run: |
+          echo "::warning title=Deprecated workflow::This workflow is kept only as a CSI-only fallback. Prefer erp-relative-master-scheduler for normal runs."
+          echo "[NOTICE] Deprecated fallback workflow"
+          echo "[NOTICE] Preferred workflow: erp-relative-master-scheduler"
+          echo "[NOTICE] Use this only when the master workflow is blocked by ERP checkout/dependency/runtime failures."
+
       - name: Checkout
         uses: actions/checkout@v6
 

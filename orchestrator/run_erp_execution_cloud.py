@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 EXECUTION_SCRIPT = ROOT / "erp_execution_cloud.py"
-PUSH_SCRIPT = ROOT / "push_erp_daily_summary_to_feishu_v2.py"
+PUSH_SCRIPT = ROOT / "push_erp_daily_summary_to_feishu_v3.py"
 
 
 def parse_args() -> argparse.Namespace:

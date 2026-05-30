@@ -35,7 +35,7 @@ DEFAULT_ASSET_TABLE_ID = "tbl1qLL1iXMykQRd"
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "output" / "erp_execution_plan.json"
 DEFAULT_EXECUTION_CONFIG_PATH = Path(__file__).resolve().parent / "erp_execution_config.json"
-DEFAULT_RENDER_SCRIPT = Path(__file__).resolve().parent / "render_erp_daily_summary_v2.py"
+DEFAULT_RENDER_SCRIPT = Path(__file__).resolve().parent / "render_erp_daily_summary_v3.py"
 
 BASE_URL = "https://open.feishu.cn/open-apis"
 AUTH_URL = f"{BASE_URL}/auth/v3/tenant_access_token/internal"

@@ -441,7 +441,13 @@ def compute_val300_style_snapshot(relative_snapshot: dict[str, Any]) -> dict[str
     }
 
 
-def build_target_weights(erp_snapshot: dict[str, Any], relative_snapshot: dict[str, Any], val300_style_snapshot: dict[str, Any], execution_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def build_target_weights(
+    erp_snapshot: dict[str, Any],
+    relative_snapshot: dict[str, Any],
+    val300_style_snapshot: dict[str, Any],
+    execution_config: dict[str, Any],
+    current_holdings: dict[str, float],
+) -> dict[str, dict[str, Any]]:
     aggressive_total = float(erp_snapshot["aggressive_weight"])
     recs = relative_snapshot["recommendations"]
     value_style_rec = normalize_text(val300_style_snapshot.get("recommendation") or "标配")
@@ -452,6 +458,8 @@ def build_target_weights(erp_snapshot: dict[str, Any], relative_snapshot: dict[s
     alpha_budget_weights = execution_config["alpha_budget_weights"]
     alpha_base_weights = execution_config["alpha_base_weights"]
     alpha_bucket_caps = execution_config["alpha_bucket_caps"]
+    reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
+    reentry_min_current_amount = float(execution_config.get("reentry_min_current_amount", 1000.0))
     thresholds = execution_config["percentile_thresholds"]
 
     value_tilt = float(value_style_tilt.get(value_style_rec, 1.0))
@@ -483,14 +491,29 @@ def build_target_weights(erp_snapshot: dict[str, Any], relative_snapshot: dict[s
 
     targets: dict[str, dict[str, Any]] = {}
     for bucket, local_weight in aggressive_weights.items():
+        bucket_percentile = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
+        current_amount = float(current_holdings.get(bucket, 0.0))
+        reentry_threshold = reentry_thresholds.get(bucket)
+        reentry_blocked = (
+            reentry_threshold is not None
+            and bucket_percentile is not None
+            and current_amount <= reentry_min_current_amount
+            and float(bucket_percentile) > float(reentry_threshold)
+        )
+
         target_weight = aggressive_alpha_total * local_weight
         target_weight = min(target_weight, float(alpha_bucket_caps.get(bucket, 1.0)))
+        if reentry_blocked:
+            target_weight = 0.0
         targets[bucket] = {
             "bucket": bucket,
             "label": BUCKET_METADATA[bucket]["label"],
             "sleeve": "aggressive",
             "signal": recs.get(bucket) or "标配",
             "style_overlay": value_style_rec,
+            "current_percentile": round(float(bucket_percentile), 2) if bucket_percentile is not None else None,
+            "reentry_threshold": float(reentry_threshold) if reentry_threshold is not None else None,
+            "reentry_blocked": reentry_blocked,
             "target_weight": round(target_weight, 4),
         }
 
@@ -514,7 +537,6 @@ def build_target_weights(erp_snapshot: dict[str, Any], relative_snapshot: dict[s
         "target_weight": round(hs300_target, 4),
     }
     return targets
-
 
 def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: list[dict[str, Any]], targets: dict[str, dict[str, Any]]) -> dict[str, Any]:
     managed_total = round(sum(current_holdings.values()), 2)
@@ -609,7 +631,7 @@ def main() -> None:
     ignored_holdings = {normalize_text(item) for item in execution_config.get("ignored_erp_holdings", [])}
     current_holdings, unmapped_holdings = aggregate_current_holdings(asset_rows, alias_map, ignored_holdings)
 
-    targets = build_target_weights(erp_snapshot, relative_snapshot, val300_style_snapshot, execution_config)
+    targets = build_target_weights(erp_snapshot, relative_snapshot, val300_style_snapshot, execution_config, current_holdings)
     portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets)
 
     payload = {

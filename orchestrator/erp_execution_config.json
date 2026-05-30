@@ -71,6 +71,12 @@
     "zz1000": 0.08,
     "cyb": 0.08
   },
+  "aggressive_reentry_percentiles": {
+    "zz500": 40.0,
+    "zz1000": 35.0,
+    "cyb": 30.0
+  },
+  "reentry_min_current_amount": 1000.0,
   "holding_alias_map": {
     "\u6caa\u6df1300ETF": "hs300",
     "300ETF": "hs300",

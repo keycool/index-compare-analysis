@@ -135,6 +135,32 @@ GitHub Actions artifact 中应包含：
 
 不要只看 PowerShell 直接输出。
 
+5. 高分位空仓后再入场有单独闸门
+
+执行层现在额外支持：
+
+- `aggressive_reentry_percentiles`
+- `reentry_min_current_amount`
+
+含义是：
+
+- 如果某个进攻桶当前已经基本空仓
+- 且它的 Relative 历史分位仍高于再入场阈值
+- 那本轮执行计划不会重新加仓
+
+默认是：
+
+- `中证500` 要低到 `40%` 以下才允许从接近空仓重新回补
+- `中证1000` 要低到 `35%` 以下
+- `创业板` 要低到 `30%` 以下
+
+这是为了避免出现：
+
+- 高位一路减仓
+- 还没跌到真正便宜的位置
+- 只因为建议文案回到 `标配`
+- 就又在 70%-80% 分位附近把仓位补回去
+
 ## 相关脚本
 
 - [erp_execution_cloud.py](/D:/CC/index-compare-analysis/orchestrator/erp_execution_cloud.py)

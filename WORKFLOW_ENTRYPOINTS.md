@@ -210,6 +210,7 @@
 
 - `aggressive_weights`
 - `alpha_budget_weights`
+- `aggressive_reentry_percentiles`
 - `recommendation_multipliers`
 - `alpha_base_weights`
 - `alpha_bucket_caps`

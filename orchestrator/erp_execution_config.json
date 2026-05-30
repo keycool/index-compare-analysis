@@ -77,6 +77,34 @@
     "cyb": 30.0
   },
   "reentry_min_current_amount": 1000.0,
+  "trajectory_overlay": {
+    "enabled": true,
+    "hot": {
+      "deviation_min": 4.0,
+      "change_5d_min": 3.0,
+      "multiplier": 0.6
+    },
+    "warm": {
+      "deviation_min": 2.0,
+      "change_5d_min": 1.0,
+      "multiplier": 0.8
+    },
+    "repair_strong": {
+      "deviation_max": -3.0,
+      "change_5d_min": 0.0,
+      "multiplier": 1.15
+    },
+    "repair_light": {
+      "deviation_max": -1.0,
+      "change_5d_min": 0.0,
+      "multiplier": 1.05
+    },
+    "falling": {
+      "deviation_max": 0.0,
+      "change_5d_max": 0.0,
+      "multiplier": 0.85
+    }
+  },
   "holding_alias_map": {
     "\u6caa\u6df1300ETF": "hs300",
     "300ETF": "hs300",

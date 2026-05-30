@@ -397,6 +397,27 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not dt:
         raise ValueError("Relative row missing valid date")
 
+    dated_rows = []
+    for row in rows:
+        row_dt = parse_date(get_first(row, "日期"))
+        if row_dt:
+            dated_rows.append((row_dt, row))
+    dated_rows.sort(key=lambda item: item[0])
+
+    def compute_ratio_change(field_name: str, periods: int = 5) -> float | None:
+        history: list[tuple[datetime, float]] = []
+        for row_dt, row in dated_rows:
+            value = safe_float(get_first(row, field_name))
+            if value is not None:
+                history.append((row_dt, value))
+        if len(history) <= periods:
+            return None
+        latest_value = history[-1][1]
+        base_value = history[-1 - periods][1]
+        if base_value == 0:
+            return None
+        return round((latest_value / base_value - 1.0) * 100.0, 2)
+
     return {
         "date": dt.strftime("%Y-%m-%d"),
         "recommendations": {
@@ -418,6 +439,20 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "cyb_percentile": safe_float(get_first(latest, "创业板分位")),
             "sh50_percentile": safe_float(get_first(latest, "50分位")),
             "val300_percentile": safe_float(get_first(latest, "300价值分位")),
+        },
+        "deviations": {
+            "zz500_deviation": safe_float(get_first(latest, "500偏离(%)")),
+            "zz1000_deviation": safe_float(get_first(latest, "1000偏离(%)")),
+            "cyb_deviation": safe_float(get_first(latest, "创业板偏离(%)")),
+            "sh50_deviation": safe_float(get_first(latest, "50偏离(%)")),
+            "val300_deviation": safe_float(get_first(latest, "300价值偏离(%)")),
+        },
+        "changes": {
+            "zz500_change_5d": compute_ratio_change("500/300比价", 5),
+            "zz1000_change_5d": compute_ratio_change("1000/300比价", 5),
+            "cyb_change_5d": compute_ratio_change("创业板/300比价", 5),
+            "sh50_change_5d": compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
+            "val300_change_5d": compute_ratio_change("300价值/成长比价", 5),
         },
         "style": {
             "val300_recommendation": normalize_text(get_first(latest, "300价值建议")),
@@ -441,6 +476,39 @@ def compute_val300_style_snapshot(relative_snapshot: dict[str, Any]) -> dict[str
     }
 
 
+def trajectory_multiplier(
+    deviation: float | None,
+    change_5d: float | None,
+    trajectory_config: dict[str, Any],
+) -> tuple[float, str]:
+    if not trajectory_config.get("enabled", True):
+        return 1.0, "trajectory overlay disabled"
+    if deviation is None or change_5d is None:
+        return 1.0, "trajectory metrics unavailable"
+
+    hot = trajectory_config.get("hot", {})
+    if deviation >= float(hot.get("deviation_min", 4.0)) or change_5d >= float(hot.get("change_5d_min", 3.0)):
+        return float(hot.get("multiplier", 0.6)), "trajectory hot"
+
+    warm = trajectory_config.get("warm", {})
+    if deviation >= float(warm.get("deviation_min", 2.0)) or change_5d >= float(warm.get("change_5d_min", 1.0)):
+        return float(warm.get("multiplier", 0.8)), "trajectory warm"
+
+    repair_strong = trajectory_config.get("repair_strong", {})
+    if deviation <= float(repair_strong.get("deviation_max", -3.0)) and change_5d > float(repair_strong.get("change_5d_min", 0.0)):
+        return float(repair_strong.get("multiplier", 1.15)), "trajectory repair strong"
+
+    repair_light = trajectory_config.get("repair_light", {})
+    if deviation <= float(repair_light.get("deviation_max", -1.0)) and change_5d > float(repair_light.get("change_5d_min", 0.0)):
+        return float(repair_light.get("multiplier", 1.05)), "trajectory repair light"
+
+    falling = trajectory_config.get("falling", {})
+    if deviation < float(falling.get("deviation_max", 0.0)) and change_5d < float(falling.get("change_5d_max", 0.0)):
+        return float(falling.get("multiplier", 0.85)), "trajectory falling"
+
+    return 1.0, "trajectory neutral"
+
+
 def build_target_weights(
     erp_snapshot: dict[str, Any],
     relative_snapshot: dict[str, Any],
@@ -460,6 +528,7 @@ def build_target_weights(
     alpha_bucket_caps = execution_config["alpha_bucket_caps"]
     reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
     reentry_min_current_amount = float(execution_config.get("reentry_min_current_amount", 1000.0))
+    trajectory_config = execution_config.get("trajectory_overlay", {})
     thresholds = execution_config["percentile_thresholds"]
 
     value_tilt = float(value_style_tilt.get(value_style_rec, 1.0))
@@ -492,6 +561,8 @@ def build_target_weights(
     targets: dict[str, dict[str, Any]] = {}
     for bucket, local_weight in aggressive_weights.items():
         bucket_percentile = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
+        bucket_deviation = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
+        bucket_change_5d = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
         current_amount = float(current_holdings.get(bucket, 0.0))
         reentry_threshold = reentry_thresholds.get(bucket)
         reentry_blocked = (
@@ -500,11 +571,18 @@ def build_target_weights(
             and current_amount <= reentry_min_current_amount
             and float(bucket_percentile) > float(reentry_threshold)
         )
+        traj_multiplier, traj_reason = trajectory_multiplier(
+            bucket_deviation,
+            bucket_change_5d,
+            trajectory_config,
+        )
 
         target_weight = aggressive_alpha_total * local_weight
         target_weight = min(target_weight, float(alpha_bucket_caps.get(bucket, 1.0)))
         if reentry_blocked:
             target_weight = 0.0
+        else:
+            target_weight *= traj_multiplier
         targets[bucket] = {
             "bucket": bucket,
             "label": BUCKET_METADATA[bucket]["label"],
@@ -512,8 +590,12 @@ def build_target_weights(
             "signal": recs.get(bucket) or "标配",
             "style_overlay": value_style_rec,
             "current_percentile": round(float(bucket_percentile), 2) if bucket_percentile is not None else None,
+            "current_deviation": round(float(bucket_deviation), 2) if bucket_deviation is not None else None,
+            "change_5d": round(float(bucket_change_5d), 2) if bucket_change_5d is not None else None,
             "reentry_threshold": float(reentry_threshold) if reentry_threshold is not None else None,
             "reentry_blocked": reentry_blocked,
+            "trajectory_multiplier": round(float(traj_multiplier), 2),
+            "trajectory_reason": traj_reason,
             "target_weight": round(target_weight, 4),
         }
 

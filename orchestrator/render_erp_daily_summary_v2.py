@@ -17,6 +17,13 @@ PLAN_PATH = ROOT / "output" / "erp_execution_plan.json"
 CONFIG_PATH = ROOT / "erp_execution_config.json"
 OUTPUT_PATH = ROOT / "output" / "erp_daily_summary.md"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+BUCKET_ORDER = {
+    "hs300": 0,
+    "sh50": 1,
+    "cyb": 2,
+    "zz500": 3,
+    "zz1000": 4,
+}
 
 
 def load_json(path: Path) -> dict:
@@ -49,6 +56,10 @@ def reentry_text(item: dict) -> str | None:
     return f"标配，但当前分位 {percentile:.2f}% 高于重入阈值 {threshold:.2f}%，暂不回补"
 
 
+def ordered_positions(positions: list[dict]) -> list[dict]:
+    return sorted(positions, key=lambda item: BUCKET_ORDER.get(item.get("bucket", ""), 99))
+
+
 def main() -> None:
     plan = load_json(PLAN_PATH)
     config = load_json(CONFIG_PATH)
@@ -57,7 +68,7 @@ def main() -> None:
     relative = plan["signals"]["relative"]
     val300 = plan["signals"].get("val300_style", {})
     portfolio = plan["portfolio"]
-    positions = portfolio["positions"]
+    positions = ordered_positions(portfolio["positions"])
 
     lines: list[str] = []
     lines.append("# ERP 日报摘要")

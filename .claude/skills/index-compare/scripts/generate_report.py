@@ -8,9 +8,11 @@
 import os
 import json
 import argparse
+import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -35,6 +37,157 @@ def load_overlap_snapshot() -> Dict[str, Any]:
             return json.load(f)
     except Exception:
         return {}
+
+
+def download_hsi_factsheet(pdf_path: Path) -> bool:
+    """下载恒生指数官方 factsheet PDF。"""
+    url = 'https://www.hsi.com.hk/static/uploads/contents/en/dl_centre/factsheets/hsie.pdf'
+    try:
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            ['curl', '-L', '--http1.1', '--silent', '--show-error', url, '-o', str(pdf_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return result.returncode == 0 and pdf_path.exists() and pdf_path.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def parse_hsi_factsheet_snapshot(pdf_path: Path) -> Optional[Dict[str, Any]]:
+    """从恒生指数官方 factsheet 中提取当前 PE 快照。"""
+    try:
+        from pypdf import PdfReader
+    except Exception:
+        return None
+
+    try:
+        reader = PdfReader(str(pdf_path))
+        text = '\n'.join(page.extract_text() or '' for page in reader.pages[:4])
+    except Exception:
+        return None
+
+    fundamentals_match = re.search(
+        r'INDEX FUNDAMENTALS.*?HSI\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)',
+        text,
+        re.S,
+    )
+    as_of_match = re.search(r'All data as at\s+([0-9]{1,2}\s+[A-Za-z]{3}\s+[0-9]{4})', text)
+
+    if not fundamentals_match:
+        return None
+
+    dividend_yield = float(fundamentals_match.group(1))
+    pe_ratio = float(fundamentals_match.group(5))
+
+    return {
+        'pe_ratio': pe_ratio,
+        'dividend_yield': dividend_yield,
+        'factsheet_date': as_of_match.group(1) if as_of_match else None,
+    }
+
+
+def fetch_us10y_snapshot() -> Optional[Dict[str, Any]]:
+    """获取最新 10 年美债收益率快照。"""
+    token = os.environ.get('TUSHARE_TOKEN')
+    if not token:
+        return None
+
+    try:
+        import tushare as ts
+
+        ts.set_token(token)
+        pro = ts.pro_api()
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - pd.Timedelta(days=20)).strftime('%Y%m%d')
+        df = pro.us_tycr(start_date=start_date, end_date=end_date, fields='date,y10')
+        if df is None or df.empty:
+            return None
+        latest = df.iloc[0]
+        return {
+            'rate_date': str(latest['date']),
+            'us10y': float(latest['y10']),
+        }
+    except Exception:
+        return None
+
+
+def build_hsi_erp_snapshot() -> Optional[Dict[str, Any]]:
+    """构建恒生股权溢价快照。"""
+    cache_dir = Path(__file__).parent.parent / 'data' / '_cache'
+    pdf_path = cache_dir / 'hsie.pdf'
+    if not download_hsi_factsheet(pdf_path):
+        return None
+
+    factsheet = parse_hsi_factsheet_snapshot(pdf_path)
+    treasury = fetch_us10y_snapshot()
+    if not factsheet or not treasury:
+        return None
+
+    earnings_yield = round(100.0 / factsheet['pe_ratio'], 2)
+    erp = round(earnings_yield - treasury['us10y'], 2)
+
+    return {
+        'factsheet_date': factsheet['factsheet_date'],
+        'rate_date': treasury['rate_date'],
+        'pe_ratio': factsheet['pe_ratio'],
+        'dividend_yield': factsheet['dividend_yield'],
+        'earnings_yield': earnings_yield,
+        'us10y': treasury['us10y'],
+        'erp': erp,
+    }
+
+
+def generate_hsi_erp_snapshot_html(snapshot: Optional[Dict[str, Any]]) -> str:
+    """生成恒生股权溢价快照 HTML。"""
+    if not snapshot:
+        return ''
+
+    erp_color = '#10b981' if snapshot['erp'] >= 0 else '#f43f5e'
+    if snapshot['erp'] >= 1.5:
+        interpretation = '恒生 ERP 为正且较高，说明股权盈利收益率明显高于 10Y 美债，股债性价比偏向股票。'
+    elif snapshot['erp'] >= 0:
+        interpretation = '恒生 ERP 为正，说明股权盈利收益率略高于 10Y 美债，股债性价比温和偏向股票。'
+    elif snapshot['erp'] >= -1.0:
+        interpretation = '恒生 ERP 为负，说明股权盈利收益率略低于 10Y 美债，股债性价比暂时不占优。'
+    else:
+        interpretation = '恒生 ERP 明显为负，说明股权盈利收益率低于 10Y 美债较多，股债性价比明显偏弱。'
+    note = (
+        f"口径：HSI PE 来自恒生指数官方月度 factsheet（{snapshot['factsheet_date']}），"
+        f"10 年美债来自 Tushare us_tycr（{snapshot['rate_date']}）。"
+    )
+    return f"""
+        <div class="ratio-chart-wrapper" style="padding:18px 18px 10px 18px;">
+            <div class="section-header" style="margin-bottom:12px;">
+                <div class="section-title">
+                    <div class="section-icon">◎</div>
+                    <h2>恒生股权溢价快照</h2>
+                </div>
+            </div>
+            <div class="compact-kpi-bar">
+                <div class="compact-kpi-card compact-kpi-primary">
+                    <span class="compact-kpi-label">恒生 ERP</span>
+                    <span class="compact-kpi-value" style="color:{erp_color};">{snapshot['erp']:+.2f}%</span>
+                </div>
+                <div class="compact-kpi-card">
+                    <span class="compact-kpi-label">HSI PE</span>
+                    <span class="compact-kpi-value">{snapshot['pe_ratio']:.2f}x</span>
+                </div>
+                <div class="compact-kpi-card">
+                    <span class="compact-kpi-label">盈利收益率</span>
+                    <span class="compact-kpi-value">{snapshot['earnings_yield']:.2f}%</span>
+                </div>
+                <div class="compact-kpi-card">
+                    <span class="compact-kpi-label">10Y 美债</span>
+                    <span class="compact-kpi-value">{snapshot['us10y']:.2f}%</span>
+                </div>
+            </div>
+            <div class="overview-subtitle" style="margin:12px 8px 0 8px;color:#cbd5e1;">{interpretation}</div>
+            <div class="overview-subtitle" style="margin:12px 8px 0 8px;color:#64748b;">{note}</div>
+        </div>
+    """
 
 
 def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False, ratio_base='HS300'):
@@ -223,7 +376,14 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         'SHCI': '#64748b'     # 灰色
     }
 
+    colors.update({
+        'HSI': '#2563eb',
+        'HKTECH': '#db2777',
+    })
+
     for code, info in indices_config.items():
+        if code == 'HSI':
+            continue
         if code in recent_df.columns:
             series = pd.to_numeric(recent_df[code], errors='coerce').copy()
 
@@ -1227,13 +1387,21 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     # 分组定义：主要三指数 vs 特色指数
     core_codes = ['ZZ500', 'ZZ1000', 'ZZA500']
     feature_codes = ['SH50', 'VAL300']
+    external_codes = ['HKTECH']
 
     # 创建比价走势图（全历史 + 单列满宽布局）
     ratio_chart_blocks = {}
-    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'VAL300']:
+    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'VAL300', 'HKTECH']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
             show_full_history = True
+            benchmark_name = "沪深300"
+            if target == 'SH50':
+                benchmark_name = "创业板指数"
+            elif target == 'VAL300':
+                benchmark_name = "300成长指数"
+            elif target == 'HKTECH':
+                benchmark_name = "恒生指数"
             chart = create_ratio_chart(
                 df,
                 target,
@@ -1242,8 +1410,9 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                 recent_days,
                 light_theme=use_reference_chart_style,
                 show_full_history=show_full_history,
-                ratio_base=('ZZA500' if target == 'SH50' else ('GRO300' if target == 'VAL300' else 'HS300')),
+                ratio_base=('ZZA500' if target == 'SH50' else ('GRO300' if target == 'VAL300' else ('HSI' if target == 'HKTECH' else 'HS300'))),
             )
+            chart.update_layout(title=dict(text=f'{name} vs {benchmark_name}'))
             chart_html = chart.to_html(full_html=False, include_plotlyjs='cdn')
 
             note_html = ''
@@ -1268,10 +1437,13 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
     core_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in core_codes if code in ratio_chart_blocks])
     feature_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in feature_codes if code in ratio_chart_blocks])
+    external_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in external_codes if code in ratio_chart_blocks])
 
     # 分组指标卡与分析
     core_analysis_html = generate_analysis_html(conclusions, codes=core_codes)
     feature_analysis_html = generate_analysis_html(conclusions, codes=feature_codes)
+    external_analysis_html = generate_analysis_html(conclusions, codes=external_codes)
+    hsi_erp_snapshot_html = generate_hsi_erp_snapshot_html(build_hsi_erp_snapshot())
 
     # 组装完整HTML - 金融终端风格
     page_label = 'LAB' if is_lab else 'LIVE'
@@ -1968,6 +2140,22 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             {feature_analysis_html}
         </div>
 
+        <!-- \u5916\u56f4\u80a1\u5e02\u6307\u6570 -->
+        <div class="charts-section">
+            <div class="section-header">
+                <div class="section-title">
+                    <div class="section-icon">&#127757;</div>
+                    <h2>\u5916\u56f4\u80a1\u5e02\u6307\u6570</h2>
+                </div>
+            </div>
+            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">\u6052\u751f\u79d1\u6280\u6307\u6570\u76f8\u5bf9\u6052\u751f\u6307\u6570\uff0c\u7528\u4e8e\u89c2\u5bdf\u6e2f\u80a1\u5185\u90e8\u7684\u79d1\u6280 / \u5927\u76d8\u98ce\u683c\u5207\u6362</div>
+            {hsi_erp_snapshot_html}
+            <div class="ratio-charts-grid">
+                {external_ratio_html}
+            </div>
+            {external_analysis_html}
+        </div>
+
         <div class="risk-banner">
             <div class="risk-icon">!</div>
             <div>
@@ -2045,11 +2233,12 @@ def generate_cards_html(conclusions, df, codes=None):
         else:
             trend_class = 'neutral'
             trend_arrow = '→'
-
         if code == "SH50":
             ratio_label = "相对创业板指数比价"
         elif code == "VAL300":
             ratio_label = "相对300成长指数比价"
+        elif code == "HKTECH":
+            ratio_label = "相对恒生指数比价"
         else:
             ratio_label = "相对沪深300比价"
         cards.append(f"""
@@ -2111,16 +2300,17 @@ def generate_compact_kpi_bar_html(conclusions, code):
         trend_class = 'negative'
         trend_arrow = '↓'
     else:
-        trend_class = 'neutral'
-        trend_arrow = '→'
+        trend_class = "neutral"
+        trend_arrow = '?'
 
     if code == "SH50":
         ratio_label = "相对创业板指数比价"
     elif code == "VAL300":
         ratio_label = "相对300成长指数比价"
+    elif code == "HKTECH":
+        ratio_label = "相对恒生指数比价"
     else:
         ratio_label = "相对沪深300比价"
-
     return f"""
         <div class="compact-kpi-bar">
             <div class="compact-kpi-card compact-kpi-primary">
@@ -2201,7 +2391,7 @@ def generate_analysis_html(conclusions, codes=None):
                 <div class="analysis-icon {icon_class}">{icon_text}</div>
                 <div>
                     <div class="analysis-title">{data['name']} 分析</div>
-                    <div class="analysis-subtitle">{"vs 创业板指数 比价" if code == "SH50" else ("vs 300成长指数 比价" if code == "VAL300" else "vs 沪深300 比价")}</div>
+                    <div class="analysis-subtitle">{"vs 创业板指数 比价" if code == "SH50" else ("vs 300成长指数 比价" if code == "VAL300" else ("vs 恒生指数 比价" if code == "HKTECH" else "vs 沪深300 比价"))}</div>
                 </div>
             </div>
             <div class="analysis-body">

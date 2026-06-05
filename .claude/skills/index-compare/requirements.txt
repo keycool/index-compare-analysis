@@ -5,3 +5,4 @@ plotly
 scipy
 requests
 openpyxl
+pypdf

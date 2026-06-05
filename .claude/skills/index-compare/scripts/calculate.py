@@ -199,7 +199,7 @@ def process_data(input_path, output_path):
     print(f"  数据列: {list(df.columns)}")
 
     # 获取目标指数
-    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'VAL300']
+    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'VAL300', 'HKTECH']
 
     # 计算比价和相关指标
     analysis_results = {}
@@ -214,6 +214,8 @@ def process_data(input_path, output_path):
             ratio_base_col = 'ZZA500'
         elif target == 'VAL300':
             ratio_base_col = 'GRO300'
+        elif target == 'HKTECH':
+            ratio_base_col = 'HSI'
         print(f"\n计算 {target} vs {ratio_base_col}...")
 
         # 计算比价

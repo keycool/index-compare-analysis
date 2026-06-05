@@ -176,11 +176,18 @@ def get_index_data(pro, ts_code, start_date, end_date, config):
 
     for attempt in range(retry_times):
         try:
-            df = pro.index_daily(
-                ts_code=ts_code,
-                start_date=start_date,
-                end_date=end_date
-            )
+            if ts_code in {'HSI', 'HKTECH'}:
+                df = pro.index_global(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+            else:
+                df = pro.index_daily(
+                    ts_code=ts_code,
+                    start_date=start_date,
+                    end_date=end_date
+                )
 
             if df is None or df.empty:
                 raise ValueError(f"未获取到 {ts_code} 的数据")

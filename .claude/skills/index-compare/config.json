@@ -10,25 +10,25 @@
       "code": "000905.SH",
       "name": "中证500",
       "role": "target",
-      "description": "中盘股代表，剔除沪深300后的前500只股票"
+      "description": "中盘股代表，剔除沪深300后的中盘宽基指数"
     },
     "ZZ1000": {
       "code": "000852.SH",
       "name": "中证1000",
       "role": "target",
-      "description": "小盘股代表，剔除中证800后的前1000只股票"
+      "description": "小盘股代表，用于观察高弹性风格相对表现"
     },
     "ZZA500": {
       "code": "399006.SZ",
       "name": "创业板指数",
       "role": "target",
-      "description": "成长型核心指数，反映创业板市场整体表现"
+      "description": "成长风格核心指数，用于观察成长因子强弱"
     },
     "SH50": {
       "code": "000016.SH",
       "name": "上证50指数",
       "role": "target",
-      "description": "超大盘蓝筹代表指数，用于与沪深300做相对强弱比较"
+      "description": "超大盘蓝筹代表指数，用于与创业板指数做风格对比"
     },
     "VAL300": {
       "code": "000919.CSI",
@@ -46,14 +46,30 @@
       "code": "000001.SH",
       "name": "上证综指",
       "role": "reference",
-      "description": "市场整体参考指标"
+      "description": "市场整体参考指数"
+    },
+    "HSI": {
+      "code": "HSI",
+      "name": "恒生指数",
+      "role": "reference",
+      "description": "港股大盘基准指数，用于外围股市风格参考"
+    },
+    "HKTECH": {
+      "code": "HKTECH",
+      "name": "恒生科技指数",
+      "role": "external_target",
+      "description": "港股科技成长指数，用于与恒生指数做风格比价"
     }
   },
   "analysis": {
     "ma_window": 30,
     "recent_days": 2500,
     "percentile_base": "all_history",
-    "trend_windows": [5, 10, 20],
+    "trend_windows": [
+      5,
+      10,
+      20
+    ],
     "deviation_threshold": 0.05
   },
   "percentile_levels": {

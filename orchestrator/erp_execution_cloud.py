@@ -35,7 +35,7 @@ DEFAULT_ASSET_TABLE_ID = "tbl1qLL1iXMykQRd"
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "output" / "erp_execution_plan.json"
 DEFAULT_EXECUTION_CONFIG_PATH = Path(__file__).resolve().parent / "erp_execution_config.json"
-DEFAULT_RENDER_SCRIPT = Path(__file__).resolve().parent / "render_erp_daily_summary_v3.py"
+DEFAULT_RENDER_SCRIPT = Path(__file__).resolve().parent / "render_erp_daily_summary_v4.py"
 
 BASE_URL = "https://open.feishu.cn/open-apis"
 AUTH_URL = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
@@ -89,7 +89,7 @@ MOJIBAKE_MAP = {
 
 BUCKET_METADATA = {
     "hs300": {"label": "沪深300", "sleeve": "defensive"},
-    "sh50": {"label": "上证50", "sleeve": "defensive"},
+    "sh50": {"label": "防守价值（上证50/红利）", "sleeve": "defensive"},
     "cyb": {"label": "创业板", "sleeve": "aggressive"},
     "zz500": {"label": "中证500", "sleeve": "aggressive"},
     "zz1000": {"label": "中证1000", "sleeve": "aggressive"},
@@ -182,22 +182,43 @@ def parse_date(value: Any) -> datetime | None:
 
 
 def safe_float(value: Any) -> float | None:
-    if value is None or isinstance(value, list):
+    if value is None:
         return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(number):
-        return None
-    return number
+    candidates = cell_texts(value)
+    if len(candidates) > 1:
+        candidates.append("".join(candidates))
+    for candidate in candidates:
+        text = candidate.replace(",", "").replace("￥", "").replace("¥", "").strip()
+        if text.endswith("%"):
+            text = text[:-1].strip()
+        if not text:
+            continue
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            return number
+    return None
 
 
 def parse_multiselect(value: Any) -> list[str]:
+    return cell_texts(value)
+
+
+def cell_texts(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
-        return [normalize_text(item) for item in value if normalize_text(item)]
+        texts: list[str] = []
+        for item in value:
+            texts.extend(cell_texts(item))
+        return [text for text in texts if text]
+    if isinstance(value, dict):
+        for key in ("text", "name", "value", "display_value", "formatted_value", "title"):
+            if key in value:
+                return cell_texts(value[key])
+        return []
     text = normalize_text(value)
     return [text] if text else []
 
@@ -294,6 +315,8 @@ def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_look
         return "__IGNORE__"
     if fixed_name in alias_lookup:
         return alias_lookup[fixed_name]
+    if "国债" in fixed_name or "科创50" in fixed_name or "恒生消费" in fixed_name:
+        return "__IGNORE__"
     if "红利" in fixed_name:
         return "sh50"
     if "创业板" in fixed_name:
@@ -306,8 +329,6 @@ def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_look
         return "sh50"
     if "300" in fixed_name:
         return "hs300"
-    if "国债" in fixed_name or "科创50" in fixed_name or "恒生消费" in fixed_name:
-        return "__IGNORE__"
     return None
 
 
@@ -339,6 +360,25 @@ def aggregate_current_holdings(rows: list[dict[str, Any]], alias_map: dict[str, 
             )
 
     return aggregated, unmapped
+
+
+def build_holding_breakdown(rows: list[dict[str, Any]], alias_map: dict[str, str], ignored_holdings: set[str]) -> dict[str, list[dict[str, Any]]]:
+    breakdown: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        third_level = parse_multiselect(get_first(row, "Ⅲ级分类", "III级分类", "三级分类"))
+        if "ERP" not in third_level:
+            continue
+
+        name = normalize_text(get_first(row, "项目名称", "标的", "名称"))
+        amount = safe_float(get_first(row, "金额", "市值", "资产金额")) or 0.0
+        bucket = resolve_holding_bucket(name, alias_map, ignored_holdings)
+        if not bucket or bucket == "__IGNORE__":
+            continue
+        breakdown.setdefault(bucket, []).append({"name": name, "amount": round(amount, 2)})
+
+    for items in breakdown.values():
+        items.sort(key=lambda item: item["amount"], reverse=True)
+    return breakdown
 
 
 def latest_valid_row(rows: list[dict[str, Any]], required_aliases: list[str]) -> dict[str, Any]:
@@ -526,6 +566,7 @@ def build_target_weights(
     alpha_budget_weights = execution_config["alpha_budget_weights"]
     alpha_base_weights = execution_config["alpha_base_weights"]
     alpha_bucket_caps = execution_config["alpha_bucket_caps"]
+    forced_exit_thresholds = execution_config.get("forced_exit_percentiles", {})
     reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
     reentry_min_current_amount = float(execution_config.get("reentry_min_current_amount", 1000.0))
     trajectory_config = execution_config.get("trajectory_overlay", {})
@@ -543,11 +584,21 @@ def build_target_weights(
     )
     alpha_budget = max(0.0, min(alpha_budget, 0.45))
 
+    sh50_percentile = relative_snapshot["percentiles"].get("sh50_percentile")
+    sh50_forced_exit_threshold = forced_exit_thresholds.get("sh50")
+    sh50_forced_exit = (
+        sh50_forced_exit_threshold is not None
+        and sh50_percentile is not None
+        and float(sh50_percentile) >= float(sh50_forced_exit_threshold)
+    )
+
     sh50_target = alpha_budget * (1.0 - aggressive_total)
     sh50_target *= recommendation_multiplier(recs.get("sh50"), recommendation_multipliers)
     sh50_target *= value_tilt
     sh50_target *= float(growth_tilt.get("sh50_bonus", 1.0))
     sh50_target = min(sh50_target, float(alpha_bucket_caps.get("sh50", 0.18)))
+    if sh50_forced_exit:
+        sh50_target = 0.0
 
     aggressive_scores = {
         "cyb": float(alpha_base_weights.get("cyb", 0.3)) * recommendation_multiplier(recs.get("cyb"), recommendation_multipliers) * float(growth_tilt.get("cyb", 1.0)),
@@ -564,6 +615,12 @@ def build_target_weights(
         bucket_deviation = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
         bucket_change_5d = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
         current_amount = float(current_holdings.get(bucket, 0.0))
+        forced_exit_threshold = forced_exit_thresholds.get(bucket)
+        forced_exit = (
+            forced_exit_threshold is not None
+            and bucket_percentile is not None
+            and float(bucket_percentile) >= float(forced_exit_threshold)
+        )
         reentry_threshold = reentry_thresholds.get(bucket)
         reentry_blocked = (
             reentry_threshold is not None
@@ -579,7 +636,9 @@ def build_target_weights(
 
         target_weight = aggressive_alpha_total * local_weight
         target_weight = min(target_weight, float(alpha_bucket_caps.get(bucket, 1.0)))
-        if reentry_blocked:
+        if forced_exit:
+            target_weight = 0.0
+        elif reentry_blocked:
             target_weight = 0.0
         else:
             target_weight *= traj_multiplier
@@ -592,6 +651,8 @@ def build_target_weights(
             "current_percentile": round(float(bucket_percentile), 2) if bucket_percentile is not None else None,
             "current_deviation": round(float(bucket_deviation), 2) if bucket_deviation is not None else None,
             "change_5d": round(float(bucket_change_5d), 2) if bucket_change_5d is not None else None,
+            "forced_exit_threshold": float(forced_exit_threshold) if forced_exit_threshold is not None else None,
+            "forced_exit": forced_exit,
             "reentry_threshold": float(reentry_threshold) if reentry_threshold is not None else None,
             "reentry_blocked": reentry_blocked,
             "trajectory_multiplier": round(float(traj_multiplier), 2),
@@ -605,6 +666,9 @@ def build_target_weights(
         "sleeve": "defensive",
         "signal": recs.get("sh50") or "标配",
         "style_overlay": value_style_rec,
+        "current_percentile": round(float(sh50_percentile), 2) if sh50_percentile is not None else None,
+        "forced_exit_threshold": float(sh50_forced_exit_threshold) if sh50_forced_exit_threshold is not None else None,
+        "forced_exit": sh50_forced_exit,
         "target_weight": round(sh50_target, 4),
     }
 
@@ -620,7 +684,7 @@ def build_target_weights(
     }
     return targets
 
-def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: list[dict[str, Any]], targets: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: list[dict[str, Any]], targets: dict[str, dict[str, Any]], holding_breakdown: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
     managed_total = round(sum(current_holdings.values()), 2)
     unmapped_total = round(sum(item["amount"] for item in unmapped_holdings), 2)
     total_erp_amount = round(managed_total + unmapped_total, 2)
@@ -637,7 +701,7 @@ def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: 
         elif delta_amount < 0:
             action = "sell"
 
-        positions.append({**target, "current_amount": current_amount, "current_weight": current_weight, "target_amount": target_amount, "delta_amount": delta_amount, "action": action})
+        positions.append({**target, "current_amount": current_amount, "current_weight": current_weight, "target_amount": target_amount, "delta_amount": delta_amount, "action": action, "holding_breakdown": (holding_breakdown or {}).get(bucket, [])})
 
     positions.sort(key=lambda item: (item["sleeve"], item["bucket"]))
 
@@ -712,9 +776,10 @@ def main() -> None:
     alias_map = {normalize_text(key): normalize_text(value) for key, value in execution_config.get("holding_alias_map", {}).items()}
     ignored_holdings = {normalize_text(item) for item in execution_config.get("ignored_erp_holdings", [])}
     current_holdings, unmapped_holdings = aggregate_current_holdings(asset_rows, alias_map, ignored_holdings)
+    holding_breakdown = build_holding_breakdown(asset_rows, alias_map, ignored_holdings)
 
     targets = build_target_weights(erp_snapshot, relative_snapshot, val300_style_snapshot, execution_config, current_holdings)
-    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets)
+    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
 
     payload = {
         "version": "1.0",

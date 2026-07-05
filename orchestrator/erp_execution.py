@@ -77,7 +77,7 @@ GROWTH_STYLE_TILT = {
 
 BUCKET_METADATA = {
     "hs300": {"label": "沪深300", "sleeve": "defensive"},
-    "sh50": {"label": "上证50", "sleeve": "defensive"},
+    "sh50": {"label": "防守价值（上证50/红利）", "sleeve": "defensive"},
     "cyb": {"label": "创业板", "sleeve": "aggressive"},
     "zz500": {"label": "中证500", "sleeve": "aggressive"},
     "zz1000": {"label": "中证1000", "sleeve": "aggressive"},
@@ -232,23 +232,42 @@ def parse_date(value: Any) -> datetime | None:
 def safe_float(value: Any) -> float | None:
     if value is None:
         return None
-    if isinstance(value, list):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(number):
-        return None
-    return number
+    candidates = cell_texts(value)
+    if len(candidates) > 1:
+        candidates.append("".join(candidates))
+    for candidate in candidates:
+        text = candidate.replace(",", "").replace("￥", "").replace("¥", "").strip()
+        if text.endswith("%"):
+            text = text[:-1].strip()
+        if not text:
+            continue
+        try:
+            number = float(text)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            return number
+    return None
 
 
 def parse_multiselect(value: Any) -> list[str]:
+    return cell_texts(value)
+
+
+def cell_texts(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    text = str(value).strip()
+        texts: list[str] = []
+        for item in value:
+            texts.extend(cell_texts(item))
+        return [text for text in texts if text]
+    if isinstance(value, dict):
+        for key in ("text", "name", "value", "display_value", "formatted_value", "title"):
+            if key in value:
+                return cell_texts(value[key])
+        return []
+    text = unicodedata.normalize("NFKC", str(value)).strip()
     return [text] if text else []
 
 
@@ -372,6 +391,37 @@ def aggregate_current_holdings(
             )
 
     return aggregated, unmapped
+
+
+def build_holding_breakdown(
+    rows: list[dict[str, Any]],
+    alias_map: dict[str, str] | None = None,
+    ignored_holdings: set[str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    breakdown: dict[str, list[dict[str, Any]]] = {}
+    alias_lookup = alias_map or HOLDING_ALIAS_MAP
+    ignored_lookup = ignored_holdings or IGNORED_ERP_HOLDINGS
+
+    for row in rows:
+        values = list(row.values())
+        name_value = row.get("????") if "????" in row else (values[1] if len(values) > 1 else None)
+        amount_value = row.get("??") if "??" in row else (values[5] if len(values) > 5 else None)
+        third_level_value = row.get("III???") if "III???" in row else (values[10] if len(values) > 10 else None)
+
+        third_level = parse_multiselect(third_level_value)
+        if "ERP" not in third_level:
+            continue
+
+        name = str(name_value or "").strip()
+        amount = safe_float(amount_value) or 0.0
+        bucket = resolve_holding_bucket(name, alias_lookup, ignored_lookup)
+        if not bucket or bucket == "__IGNORE__":
+            continue
+        breakdown.setdefault(bucket, []).append({"name": name, "amount": round(amount, 2)})
+
+    for items in breakdown.values():
+        items.sort(key=lambda item: item["amount"], reverse=True)
+    return breakdown
 
 
 def latest_valid_row(rows: list[dict[str, Any]], required_fields: list[str]) -> dict[str, Any]:
@@ -614,6 +664,7 @@ def build_rebalance_plan(
     current_holdings: dict[str, float],
     unmapped_holdings: list[dict[str, Any]],
     targets: dict[str, dict[str, Any]],
+    holding_breakdown: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     managed_total = round(sum(current_holdings.values()), 2)
     unmapped_total = round(sum(item["amount"] for item in unmapped_holdings), 2)
@@ -640,6 +691,7 @@ def build_rebalance_plan(
                 "target_amount": target_amount,
                 "delta_amount": delta_amount,
                 "action": action,
+                "holding_breakdown": (holding_breakdown or {}).get(bucket, []),
             }
         )
 
@@ -734,12 +786,13 @@ def main() -> None:
     alias_map = {str(k): str(v) for k, v in execution_config.get("holding_alias_map", HOLDING_ALIAS_MAP).items()}
     ignored_holdings = set(str(item) for item in execution_config.get("ignored_erp_holdings", list(IGNORED_ERP_HOLDINGS)))
     current_holdings, unmapped_holdings = aggregate_current_holdings(asset_rows, alias_map, ignored_holdings)
+    holding_breakdown = build_holding_breakdown(asset_rows, alias_map, ignored_holdings)
     val300_style_snapshot = compute_val300_style_snapshot(
         Path(args.style_data_path).resolve(),
         Path(args.style_config_path).resolve(),
     )
     targets = build_target_weights(erp_snapshot, relative_snapshot, val300_style_snapshot, execution_config)
-    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets)
+    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
 
     payload = {
         "version": "1.0",

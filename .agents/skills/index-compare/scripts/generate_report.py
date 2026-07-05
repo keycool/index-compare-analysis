@@ -8,18 +8,14 @@
 import os
 import json
 import argparse
-import re
-import subprocess
-from io import BytesIO
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.stats import percentileofscore
-import requests
 
 
 def load_config():
@@ -29,524 +25,7 @@ def load_config():
         return json.load(f)
 
 
-def load_overlap_snapshot() -> Dict[str, Any]:
-    """加载成分重叠快照（试验数据）。"""
-    snapshot_path = Path(__file__).parent.parent / 'data' / 'overlap_snapshot.json'
-    if not snapshot_path.exists():
-        return {}
-    try:
-        with open(snapshot_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def get_tushare_token() -> Optional[str]:
-    """优先从环境变量读取 Tushare token，缺失时回退到 skill .env。"""
-    token = os.environ.get('TUSHARE_TOKEN')
-    if token:
-        return token
-
-    env_path = Path(__file__).parent.parent / '.env'
-    if not env_path.exists():
-        return None
-
-    try:
-        with open(env_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                text = line.strip()
-                if not text or text.startswith('#') or '=' not in text:
-                    continue
-                key, value = text.split('=', 1)
-                if key.strip() == 'TUSHARE_TOKEN':
-                    return value.strip()
-    except Exception:
-        return None
-
-    return None
-
-
-def download_hsi_factsheet(pdf_path: Path) -> bool:
-    """下载恒生指数官方 factsheet PDF。"""
-    url = 'https://www.hsi.com.hk/static/uploads/contents/en/dl_centre/factsheets/hsie.pdf'
-    try:
-        pdf_path.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ['curl', '-L', '--http1.1', '--silent', '--show-error', url, '-o', str(pdf_path)],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        return result.returncode == 0 and pdf_path.exists() and pdf_path.stat().st_size > 0
-    except Exception:
-        return False
-
-
-def parse_hsi_factsheet_snapshot(pdf_path: Path) -> Optional[Dict[str, Any]]:
-    """从恒生指数官方 factsheet 中提取当前 PE 快照。"""
-    try:
-        from pypdf import PdfReader
-    except Exception:
-        return None
-
-    try:
-        reader = PdfReader(str(pdf_path))
-        text = '\n'.join(page.extract_text() or '' for page in reader.pages[:4])
-    except Exception:
-        return None
-
-    fundamentals_match = re.search(
-        r'INDEX FUNDAMENTALS.*?HSI\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)\s+([0-9]+\.[0-9]+)',
-        text,
-        re.S,
-    )
-    as_of_match = re.search(r'All data as at\s+([0-9]{1,2}\s+[A-Za-z]{3}\s+[0-9]{4})', text)
-
-    if not fundamentals_match:
-        return None
-
-    dividend_yield = float(fundamentals_match.group(1))
-    pe_ratio = float(fundamentals_match.group(5))
-
-    return {
-        'pe_ratio': pe_ratio,
-        'dividend_yield': dividend_yield,
-        'factsheet_date': as_of_match.group(1) if as_of_match else None,
-    }
-
-
-def fetch_us10y_snapshot() -> Optional[Dict[str, Any]]:
-    """获取最新 10 年美债收益率快照。"""
-    token = get_tushare_token()
-    if not token:
-        return None
-
-    try:
-        import tushare as ts
-
-        ts.set_token(token)
-        pro = ts.pro_api()
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - pd.Timedelta(days=20)).strftime('%Y%m%d')
-        df = pro.us_tycr(start_date=start_date, end_date=end_date, fields='date,y10')
-        if df is None or df.empty:
-            return None
-        latest = df.iloc[0]
-        return {
-            'rate_date': str(latest['date']),
-            'us10y': float(latest['y10']),
-        }
-    except Exception:
-        return None
-
-
-def build_hsi_erp_snapshot() -> Optional[Dict[str, Any]]:
-    """构建恒生股权溢价快照。"""
-    cache_dir = Path(__file__).parent.parent / 'data' / '_cache'
-    pdf_path = cache_dir / 'hsie.pdf'
-    if not download_hsi_factsheet(pdf_path):
-        return None
-
-    factsheet = parse_hsi_factsheet_snapshot(pdf_path)
-    treasury = fetch_us10y_snapshot()
-    if not factsheet or not treasury:
-        return None
-
-    earnings_yield = round(100.0 / factsheet['pe_ratio'], 2)
-    erp = round(earnings_yield - treasury['us10y'], 2)
-
-    return {
-        'factsheet_date': factsheet['factsheet_date'],
-        'rate_date': treasury['rate_date'],
-        'pe_ratio': factsheet['pe_ratio'],
-        'dividend_yield': factsheet['dividend_yield'],
-        'earnings_yield': earnings_yield,
-        'us10y': treasury['us10y'],
-        'erp': erp,
-    }
-
-
-def generate_hsi_erp_snapshot_html(snapshot: Optional[Dict[str, Any]]) -> str:
-    """生成恒生股权溢价快照 HTML。"""
-    if not snapshot:
-        return ''
-
-    erp_color = '#10b981' if snapshot['erp'] >= 0 else '#f43f5e'
-    if snapshot['erp'] >= 1.5:
-        interpretation = '恒生 ERP 为正且较高，说明股权盈利收益率明显高于 10Y 美债，股债性价比偏向股票。'
-    elif snapshot['erp'] >= 0:
-        interpretation = '恒生 ERP 为正，说明股权盈利收益率略高于 10Y 美债，股债性价比温和偏向股票。'
-    elif snapshot['erp'] >= -1.0:
-        interpretation = '恒生 ERP 为负，说明股权盈利收益率略低于 10Y 美债，股债性价比暂时不占优。'
-    else:
-        interpretation = '恒生 ERP 明显为负，说明股权盈利收益率低于 10Y 美债较多，股债性价比明显偏弱。'
-    note = (
-        f"口径：HSI PE 来自恒生指数官方月度 factsheet（{snapshot['factsheet_date']}），"
-        f"10 年美债来自 Tushare us_tycr（{snapshot['rate_date']}）。"
-    )
-    return f"""
-        <div class="ratio-chart-wrapper" style="padding:18px 18px 10px 18px;">
-            <div class="section-header" style="margin-bottom:12px;">
-                <div class="section-title">
-                    <div class="section-icon">◎</div>
-                    <h2>恒生股权溢价快照</h2>
-                </div>
-            </div>
-            <div class="compact-kpi-bar">
-                <div class="compact-kpi-card compact-kpi-primary">
-                    <span class="compact-kpi-label">恒生 ERP</span>
-                    <span class="compact-kpi-value" style="color:{erp_color};">{snapshot['erp']:+.2f}%</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">HSI PE</span>
-                    <span class="compact-kpi-value">{snapshot['pe_ratio']:.2f}x</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">盈利收益率</span>
-                    <span class="compact-kpi-value">{snapshot['earnings_yield']:.2f}%</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">10Y 美债</span>
-                    <span class="compact-kpi-value">{snapshot['us10y']:.2f}%</span>
-                </div>
-            </div>
-            <div class="overview-subtitle" style="margin:12px 8px 0 8px;color:#cbd5e1;">{interpretation}</div>
-            <div class="overview-subtitle" style="margin:12px 8px 0 8px;color:#64748b;">{note}</div>
-        </div>
-    """
-
-
-def fetch_hsi_monthly_pe_history() -> Optional[pd.DataFrame]:
-    """抓取恒生指数月度 PE 历史。"""
-    url = 'https://hkcoding.com/hsi-pe-ratio'
-    try:
-        response = requests.get(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0'},
-            timeout=30,
-        )
-        response.raise_for_status()
-    except Exception:
-        return None
-
-    matches = re.findall(
-        r'\[new Date\((\d{4}),(\d{1,2}),(\d{1,2})\),"Col_A",([0-9]+\.[0-9]+)\]',
-        response.text,
-    )
-    if not matches:
-        return None
-
-    records = []
-    for year, month, day, pe_ratio in matches:
-        records.append(
-            {
-                'date': pd.Timestamp(int(year), int(month) + 1, int(day)),
-                'hsi_pe': float(pe_ratio),
-            }
-        )
-
-    df = pd.DataFrame(records).drop_duplicates(subset=['date']).sort_values('date')
-    return df.reset_index(drop=True)
-
-
-def fetch_official_hsi_monthly_pe_recent() -> Optional[pd.DataFrame]:
-    """抓取恒生指数官方近 12 个月月度 PE。"""
-    url = 'https://www.hsi.com.hk/static/uploads/contents/en/dl_centre/monthly/pe/hsi.xls'
-    try:
-        response = requests.get(
-            url,
-            headers={'User-Agent': 'Mozilla/5.0'},
-            timeout=30,
-        )
-        response.raise_for_status()
-        raw_df = pd.read_excel(BytesIO(response.content), header=2)
-    except Exception:
-        return None
-
-    if raw_df.empty:
-        return None
-
-    first_col = raw_df.columns[0]
-    raw_df = raw_df.rename(columns={first_col: 'date'})
-    pe_col = None
-    for column in raw_df.columns:
-        if str(column).strip() == 'Hang Seng Index':
-            pe_col = column
-            break
-    if pe_col is None:
-        return None
-
-    df = raw_df[['date', pe_col]].copy()
-    df.columns = ['date', 'hsi_pe']
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    df['hsi_pe'] = pd.to_numeric(df['hsi_pe'], errors='coerce')
-    df = df.dropna(subset=['date', 'hsi_pe']).sort_values('date')
-    if df.empty:
-        return None
-    return df.reset_index(drop=True)
-
-
-def fetch_us10y_monthly_history() -> Optional[pd.DataFrame]:
-    """抓取 10Y 美债月度历史。"""
-    token = get_tushare_token()
-    if not token:
-        return None
-
-    try:
-        import tushare as ts
-
-        ts.set_token(token)
-        pro = ts.pro_api()
-        raw_df = pro.us_tycr(
-            start_date='20050101',
-            end_date=datetime.now().strftime('%Y%m%d'),
-            fields='date,y10',
-        )
-    except Exception:
-        return None
-
-    if raw_df is None or raw_df.empty:
-        return None
-
-    df = raw_df.copy()
-    df['date'] = pd.to_datetime(df['date'], format='%Y%m%d', errors='coerce')
-    df['us10y'] = pd.to_numeric(df['y10'], errors='coerce')
-    df = df.dropna(subset=['date', 'us10y']).sort_values('date')
-    if df.empty:
-        return None
-
-    df['month_key'] = df['date'].dt.to_period('M')
-    df = df.groupby('month_key', as_index=False).tail(1)[['date', 'us10y']]
-    return df.reset_index(drop=True)
-
-
-def build_hsi_erp_history(index_df: Optional[pd.DataFrame] = None) -> Optional[Tuple[pd.DataFrame, Dict[str, Any]]]:
-    """构建恒生 ERP 月度历史序列。"""
-    pe_df = fetch_hsi_monthly_pe_history()
-    if pe_df is None or pe_df.empty:
-        return None
-
-    official_recent_df = fetch_official_hsi_monthly_pe_recent()
-    if official_recent_df is not None and not official_recent_df.empty:
-        pe_df = pe_df.set_index('date')
-        pe_df.update(official_recent_df.set_index('date'))
-        pe_df = pe_df.reset_index().sort_values('date')
-
-    us10y_df = fetch_us10y_monthly_history()
-    if us10y_df is None or us10y_df.empty:
-        return None
-
-    merged = pd.merge(pe_df, us10y_df, on='date', how='inner').sort_values('date')
-    if merged.empty:
-        return None
-
-    merged['earnings_yield'] = 100.0 / merged['hsi_pe']
-    merged['hsi_erp'] = merged['earnings_yield'] - merged['us10y']
-
-    if index_df is not None and 'HSI' in index_df.columns:
-        hsi_df = index_df[['HSI']].copy()
-        hsi_df = hsi_df.reset_index().rename(columns={hsi_df.index.name or 'index': 'date'})
-        hsi_df['date'] = pd.to_datetime(hsi_df['date'], errors='coerce')
-        hsi_df['HSI'] = pd.to_numeric(hsi_df['HSI'], errors='coerce')
-        hsi_df = hsi_df.dropna(subset=['date', 'HSI']).sort_values('date')
-        if not hsi_df.empty:
-            hsi_df['month_key'] = hsi_df['date'].dt.to_period('M')
-            hsi_df = hsi_df.groupby('month_key', as_index=False).tail(1)[['date', 'HSI']]
-            merged = pd.merge(merged, hsi_df, on='date', how='left')
-
-    merged = merged.dropna(subset=['hsi_erp']).reset_index(drop=True)
-    if merged.empty:
-        return None
-
-    latest = merged.iloc[-1]
-    erp_series = merged['hsi_erp']
-    summary = {
-        'date': latest['date'].strftime('%Y-%m-%d'),
-        'latest_value': float(latest['hsi_erp']),
-        'historical_mean': float(erp_series.mean()),
-        'percentile': float(percentileofscore(erp_series, latest['hsi_erp'])),
-        'opportunity_value': float(erp_series.quantile(0.70)),
-        'median_value': float(erp_series.quantile(0.50)),
-        'risk_value': float(erp_series.quantile(0.30)),
-        'hsi_pe': float(latest['hsi_pe']),
-        'hsi_index': float(latest['HSI']) if 'HSI' in merged.columns and pd.notna(latest.get('HSI')) else None,
-        'earnings_yield': float(latest['earnings_yield']),
-        'us10y': float(latest['us10y']),
-        'sample_count': int(len(merged)),
-    }
-    return merged, summary
-
-
-def create_hsi_erp_history_chart(history_df: pd.DataFrame, summary: Dict[str, Any]) -> go.Figure:
-    """创建恒生 ERP 月度历史图。"""
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    fig.add_trace(
-        go.Scatter(
-            x=history_df['date'],
-            y=history_df['hsi_erp'],
-            mode='lines',
-            name='恒生 ERP',
-            line=dict(color='#4b4b4b', width=2.4),
-            hovertemplate='日期 %{x|%Y-%m-%d}<br>ERP %{y:.2f}%<extra></extra>',
-        )
-        ,
-        secondary_y=False,
-    )
-
-    if 'HSI' in history_df.columns and history_df['HSI'].notna().any():
-        fig.add_trace(
-            go.Scatter(
-                x=history_df['date'],
-                y=history_df['HSI'],
-                mode='lines',
-                name='恒生指数点位',
-                line=dict(color='#1e90ff', width=1.2),
-                opacity=0.9,
-                hovertemplate='日期 %{x|%Y-%m-%d}<br>HSI %{y:,.0f}<extra></extra>',
-            ),
-            secondary_y=True,
-        )
-
-    fig.add_hline(
-        y=summary['historical_mean'],
-        line_dash='dash',
-        line_color='rgba(75,75,75,0.55)',
-        annotation_text=f"历史均值: {summary['historical_mean']:.2f}",
-        annotation_position='right',
-    )
-
-    fig.update_layout(
-        title=dict(
-            text='恒生股权溢价指数参考版',
-            x=0.5,
-            font=dict(size=15, color='#334155'),
-        ),
-        hovermode='x unified',
-        dragmode='pan',
-        legend=dict(
-            orientation='h',
-            yanchor='bottom',
-            y=1.02,
-            xanchor='center',
-            x=0.5,
-            font=dict(color='#475569', size=11),
-        ),
-        margin=dict(l=50, r=55, t=55, b=55),
-        height=540,
-        paper_bgcolor='#eef4ff',
-        plot_bgcolor='#ffffff',
-        xaxis=dict(
-            title='',
-            gridcolor='rgba(148,163,184,0.18)',
-            linecolor='rgba(148,163,184,0.35)',
-            tickfont=dict(color='#64748b'),
-            hoverformat='%Y.%m.%d',
-            rangeslider=dict(
-                visible=True,
-                thickness=0.10,
-                bgcolor='rgba(191,219,254,0.18)',
-                bordercolor='rgba(148,163,184,0.20)',
-                borderwidth=1,
-            ),
-        ),
-        font=dict(family='JetBrains Mono, Noto Sans SC, sans-serif', color='#334155'),
-    )
-    fig.update_yaxes(
-        title_text='股权溢价指数',
-        secondary_y=False,
-        gridcolor='rgba(148,163,184,0.18)',
-        zerolinecolor='rgba(148,163,184,0.25)',
-        tickfont=dict(color='#64748b'),
-        title_font=dict(color='#475569'),
-    )
-    fig.update_yaxes(
-        title_text='恒生指数点位',
-        secondary_y=True,
-        gridcolor='rgba(0,0,0,0)',
-        tickfont=dict(color='#1d4ed8'),
-        title_font=dict(color='#1d4ed8'),
-    )
-    return fig
-
-
-def generate_hsi_erp_history_html(payload: Optional[Tuple[pd.DataFrame, Dict[str, Any]]]) -> str:
-    """生成恒生 ERP 月度历史模块。"""
-    if not payload:
-        return ''
-
-    history_df, summary = payload
-    hsi_index_text = f"{summary['hsi_index']:,.0f}" if summary.get('hsi_index') is not None else '暂无'
-    chart_html = create_hsi_erp_history_chart(history_df, summary).to_html(
-        full_html=False,
-        include_plotlyjs=False,
-        config={
-            'displaylogo': False,
-            'responsive': True,
-            'scrollZoom': False,
-            'doubleClick': 'reset+autosize',
-        },
-    )
-
-    percentile_class = 'positive' if summary['percentile'] <= 30 else ('negative' if summary['percentile'] >= 70 else 'neutral')
-    subtitle = (
-        f"{summary['date']}，恒生 ERP 最新值 {summary['latest_value']:.2f}，"
-        f"历史均值 {summary['historical_mean']:.2f}，位于历史 {summary['percentile']:.2f}% 分位。"
-    )
-    return f"""
-        <div class="charts-section overview-section">
-            <div class="section-header">
-                <div class="section-title">
-                    <div class="section-icon">◎</div>
-                    <div>
-                        <h2>恒生股权溢价指数</h2>
-                        <div class="overview-subtitle">{subtitle}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">
-                值越大代表投资价值越大；当前采用月度口径。
-            </div>
-            <div class="chart-wrapper">{chart_html}</div>
-            <div class="macro-kpi-bar">
-                <div class="compact-kpi-card compact-kpi-primary">
-                    <span class="compact-kpi-label">恒生 ERP 最新值</span>
-                    <span class="compact-kpi-value">{summary['latest_value']:.2f}%</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">历史分位</span>
-                    <span class="compact-kpi-value compact-kpi-pill {percentile_class}">{summary['percentile']:.2f}%</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">恒生指数点位</span>
-                    <span class="compact-kpi-value">{hsi_index_text}</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">HSI PE</span>
-                    <span class="compact-kpi-value">{summary['hsi_pe']:.2f}x</span>
-                </div>
-                <div class="compact-kpi-card">
-                    <span class="compact-kpi-label">10Y 美债</span>
-                    <span class="compact-kpi-value">{summary['us10y']:.2f}%</span>
-                </div>
-            </div>
-        </div>
-    """
-
-
-def generate_external_market_framework_html() -> str:
-    """生成外围股市观察框架说明。"""
-    return """
-        <div class="ratio-chart-wrapper" style="padding:16px 18px 6px 18px;">
-            <div class="overview-subtitle" style="margin:0 8px 10px 8px;color:#cbd5e1;">
-                <strong>HSI ERP</strong> · <strong>HKTECH/HSI</strong>
-            </div>
-        </div>
-    """
-
-
-def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False, ratio_base='HS300', ratio_name=None):
+def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_theme=False, show_full_history=False):
     """
     创建比价走势图 - 深色主题
 
@@ -562,13 +41,9 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
         plotly Figure
     """
     ratio_col = f'{target}_ratio'
+    ma_col = f'{target}_MA{ma_window}'
 
     chart_df = df.copy()
-    # 裁掉比价序列前段无效区间，避免显示空白时间轴
-    ratio_valid = pd.to_numeric(chart_df[ratio_col], errors='coerce').dropna()
-    if not ratio_valid.empty:
-        chart_df = chart_df.loc[ratio_valid.index.min():].copy()
-
     if target == 'ZZA500' and target in chart_df.columns:
         target_series = chart_df[target].dropna()
         if not target_series.empty:
@@ -582,47 +57,34 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
 
     fig = go.Figure()
 
-    ratio_series = pd.to_numeric(chart_df[ratio_col], errors='coerce')
-    valid_points = int(ratio_series.dropna().shape[0])
-    short_window = 30
-    long_window = 120
-    if valid_points < 120:
-        short_window = 10
-        long_window = 20
-    if valid_points < 20:
-        short_window = 5
-        long_window = 10
-
-    recent_short_ma = ratio_series.rolling(window=short_window).mean().loc[recent_df.index]
-    recent_long_ma = ratio_series.rolling(window=long_window).mean().loc[recent_df.index]
-
     # 比价线
     fig.add_trace(go.Scatter(
         x=recent_df.index,
         y=recent_df[ratio_col],
         mode='lines',
-        name=ratio_name or f'{target}/{ratio_base} 比价',
+        name=f'{target}/HS300 比价',
         line=dict(color='#fbbf24', width=2),
-        hovertemplate='比价 %{y:.4f}<extra></extra>'
+        hovertemplate='日期: %{x}<br>比价: %{y:.4f}<extra></extra>'
     ))
 
     # 移动平均线
     fig.add_trace(go.Scatter(
         x=recent_df.index,
-        y=recent_short_ma,
+        y=recent_df[ma_col],
         mode='lines',
-        name=f'{short_window}日均线',
+        name=f'{ma_window}日均线',
         line=dict(color='#94a3b8', width=1.5, dash='dash'),
-        hovertemplate=f'{short_window}均 ' + '%{y:.4f}<extra></extra>'
+        hovertemplate='日期: %{x}<br>均线: %{y:.4f}<extra></extra>'
     ))
 
+    recent_ma120 = chart_df[ratio_col].rolling(window=120).mean().loc[recent_df.index]
     fig.add_trace(go.Scatter(
         x=recent_df.index,
-        y=recent_long_ma,
+        y=recent_ma120,
         mode='lines',
-        name=f'{long_window}日均线',
+        name='120日均线',
         line=dict(color='#60a5fa', width=1.5, dash='dot'),
-        hovertemplate=f'{long_window}均 ' + '%{y:.4f}<extra></extra>'
+        hovertemplate='日期: %{x}<br>120日均线: %{y:.4f}<extra></extra>'
     ))
 
     # 添加历史分位区域（使用显示范围内的数据计算最高最低点）
@@ -697,7 +159,6 @@ def create_ratio_chart(df, target, title, ma_window=30, recent_days=1000, light_
             gridcolor=x_grid,
             linecolor=x_line,
             tickfont=dict(color=tick_color, size=10),
-            hoverformat='%Y.%m.%d',
             rangeslider=dict(
                 visible=True,
                 thickness=0.10,
@@ -738,25 +199,14 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         'ZZ500': '#10b981',   # 翠绿
         'ZZ1000': '#8b5cf6',  # 紫罗兰
         'ZZA500': '#f97316',  # 橙色
-        'KC50': '#0f766e',    # 青绿
-        'SH50': '#dc2626',    # 深红
-        'VAL300': '#b45309',  # 棕金
-        'GRO300': '#0f766e',  # 青绿
         'SHCI': '#64748b'     # 灰色
     }
 
-    colors.update({
-        'HSI': '#2563eb',
-        'HKTECH': '#db2777',
-    })
-
     for code, info in indices_config.items():
-        if code in {'HSI', 'HKTECH'}:
-            continue
         if code in recent_df.columns:
             series = pd.to_numeric(recent_df[code], errors='coerce').copy()
 
-            # 创业板指数 历史起始阶段存在被固定首值占住的平线，图表中直接隐藏该段。
+            # 中证A500 历史起始阶段存在被固定首值占住的平线，图表中直接隐藏该段。
             if code == 'ZZA500':
                 valid = series.dropna()
                 if not valid.empty:
@@ -771,8 +221,8 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
                 y=series,
                 mode='lines',
                 name=info['name'],
-                line=dict(color=colors.get(code, '#94a3b8'), width=(2.2 if code in {'SH50', 'KC50', 'VAL300', 'GRO300'} else 1.5)),
-                hovertemplate=f"{info['name']} %{{y:.2f}}<extra></extra>"
+                line=dict(color=colors.get(code, '#94a3b8'), width=1.5),
+                hovertemplate=f"{info['name']}<br>日期: %{{x}}<br>点位: %{{y:.2f}}<extra></extra>"
             ))
 
     title_color = '#334155' if light_theme else '#f1f5f9'
@@ -804,8 +254,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
         xaxis=dict(
             gridcolor=x_grid,
             linecolor=x_line,
-            tickfont=dict(color=tick_color),
-            hoverformat='%Y.%m.%d'
+            tickfont=dict(color=tick_color)
         ),
         yaxis=dict(
             gridcolor=x_grid,
@@ -874,28 +323,21 @@ def load_equity_premium_records() -> List[Dict[str, Any]]:
 
     legacy_env_path = os.environ.get('INDEX_COMPARE_ERP_JSON_PATH')
     if legacy_env_path:
-        legacy_candidates = [Path(legacy_env_path)]
+        legacy_path = Path(legacy_env_path)
     else:
-        skill_root = Path(__file__).resolve().parents[1]
-        project_root = Path(__file__).resolve().parents[4]
-        legacy_candidates = [
-            project_root / 'Equity Risk Premium' / 'dashboard' / 'data' / 'equity_premium.json',
-            skill_root.parent.parent / '_erp_fix' / 'dashboard' / 'data' / 'equity_premium.json',
-        ]
+        project_root = Path(__file__).resolve().parents[5]
+        legacy_path = project_root / 'Equity Risk Premium' / 'dashboard' / 'data' / 'equity_premium.json'
 
-    for legacy_path in legacy_candidates:
-        if not legacy_path.exists():
-            continue
-        try:
-            with open(legacy_path, 'r', encoding='utf-8') as f:
-                payload = json.load(f)
-            records = payload.get('records', []) if isinstance(payload, dict) else []
-            if isinstance(records, list):
-                return records
-        except Exception:
-            continue
+    if not legacy_path.exists():
+        return []
 
-    return []
+    try:
+        with open(legacy_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+        records = payload.get('records', []) if isinstance(payload, dict) else []
+        return records if isinstance(records, list) else []
+    except Exception:
+        return []
 
 
 def create_equity_premium_chart(records, recent_days=1000):
@@ -925,7 +367,7 @@ def create_equity_premium_chart(records, recent_days=1000):
         mode='lines',
         name='股权溢价指数',
         line=dict(color='#3ec3ff', width=2.5),
-        hovertemplate='溢价 %{y:.2f}%<extra></extra>'
+        hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>'
     ))
 
     if 'earnings_yield' in recent_df.columns:
@@ -935,7 +377,7 @@ def create_equity_premium_chart(records, recent_days=1000):
             mode='lines',
             name='盈利收益率',
             line=dict(color='#ffb85c', width=1.6),
-            hovertemplate='盈利 %{y:.2f}%<extra></extra>'
+            hovertemplate='日期: %{x}<br>盈利收益率: %{y:.2f}%<extra></extra>'
         ))
 
     if 'bond_yield' in recent_df.columns:
@@ -945,7 +387,7 @@ def create_equity_premium_chart(records, recent_days=1000):
             mode='lines',
             name='10年国债收益率',
             line=dict(color='#26c281', width=1.6),
-            hovertemplate='10Y国债 %{y:.2f}%<extra></extra>'
+            hovertemplate='日期: %{x}<br>10年国债收益率: %{y:.2f}%<extra></extra>'
         ))
 
     fig.add_hline(
@@ -977,8 +419,7 @@ def create_equity_premium_chart(records, recent_days=1000):
         xaxis=dict(
             gridcolor='rgba(255,255,255,0.05)',
             linecolor='rgba(255,255,255,0.1)',
-            tickfont=dict(color='#64748b'),
-            hoverformat='%Y.%m.%d'
+            tickfont=dict(color='#64748b')
         ),
         yaxis=dict(
             gridcolor='rgba(255,255,255,0.05)',
@@ -1032,7 +473,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             line=dict(color='#3ec3ff', width=2.8),
             fill='tozeroy',
             fillcolor='rgba(62, 195, 255, 0.10)',
-            hovertemplate='溢价 %{y:.2f}%<extra></extra>',
+            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -1044,7 +485,7 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             mode='lines',
             name='沪深300',
             line=dict(color='#fbbf24', width=2.2),
-            hovertemplate='300 %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
         ),
         secondary_y=True,
     )
@@ -1113,7 +554,6 @@ def create_macro_overview_chart(erp_records, index_df, recent_days=1000, experim
             gridcolor='rgba(255,255,255,0.05)',
             linecolor='rgba(255,255,255,0.1)',
             tickfont=dict(color='#64748b'),
-            hoverformat='%Y.%m.%d',
             range=[first_date, last_date],
             showspikes=experimental,
             spikemode='across',
@@ -1227,7 +667,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             line=dict(color='#3ec3ff', width=2.8),
             fill='tozeroy',
             fillcolor='rgba(62, 195, 255, 0.10)',
-            hovertemplate='溢价 %{y:.2f}%<extra></extra>',
+            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
         ),
         row=1,
         col=1,
@@ -1240,7 +680,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             mode='lines',
             name='沪深300',
             line=dict(color='#fbbf24', width=2.2),
-            hovertemplate='300 %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
         ),
         row=1,
         col=1,
@@ -1255,7 +695,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             line=dict(color='#3ec3ff', width=2.8),
             fill='tozeroy',
             fillcolor='rgba(62, 195, 255, 0.10)',
-            hovertemplate='溢价 %{y:.2f}%<extra></extra>',
+            hovertemplate='日期: %{x}<br>股权溢价: %{y:.2f}%<extra></extra>',
         ),
         row=2,
         col=1,
@@ -1268,7 +708,7 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
             mode='lines',
             name=f'沪深300(近{focus_years}年)',
             line=dict(color='#fbbf24', width=2.2),
-            hovertemplate='300 %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
         ),
         row=2,
         col=1,
@@ -1328,7 +768,6 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
         gridcolor='rgba(255,255,255,0.05)',
         linecolor='rgba(255,255,255,0.1)',
         tickfont=dict(color='#64748b'),
-        hoverformat='%Y.%m.%d',
         rangeslider=dict(visible=False),
     )
     fig.update_xaxes(
@@ -1339,7 +778,6 @@ def create_macro_overview_dual_panel_chart(erp_records, index_df, focus_years=5)
         gridcolor='rgba(255,255,255,0.05)',
         linecolor='rgba(255,255,255,0.1)',
         tickfont=dict(color='#64748b', size=10),
-        hoverformat='%Y.%m.%d',
         showspikes=True,
         spikemode='across',
         spikesnap='cursor',
@@ -1447,16 +885,6 @@ def create_macro_overview_reference_chart(erp_records, index_df):
         'historical_mean': historical_mean,
         'percentile': percentile,
     }
-    # 上一个同比位置：优先取“最新日期 - 7天”的同周位置，若无交易日则回退到该日前最近交易日
-    prev_target_date = latest_row['date'] - pd.Timedelta(days=7)
-    prev_candidates = merged_df[merged_df['date'] <= prev_target_date]
-    if not prev_candidates.empty:
-        prev_row = prev_candidates.iloc[-1]
-        summary['prev_week_value'] = float(prev_row['equity_premium'])
-        summary['prev_week_date'] = prev_row['date'].strftime('%Y.%m.%d')
-    else:
-        summary['prev_week_value'] = None
-        summary['prev_week_date'] = None
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -1467,7 +895,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='股权溢价指数',
             line=dict(color='#4b4b4b', width=2.4),
-            hovertemplate='溢价 %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>股权溢价指数: %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -1478,7 +906,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='机会值(70分位)',
             line=dict(color='#324d94', width=1.4),
-            hovertemplate='机会(70) %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>机会值: %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -1489,7 +917,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='中位值(50分位)',
             line=dict(color='#0d7fd1', width=1.4),
-            hovertemplate='中位(50) %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>中位值: %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -1500,7 +928,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             mode='lines',
             name='危险值(30分位)',
             line=dict(color='#6f97e7', width=1.4),
-            hovertemplate='危险(30) %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>危险值: %{y:.2f}<extra></extra>',
         ),
         secondary_y=False,
     )
@@ -1512,7 +940,7 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             name='沪深300',
             line=dict(color='#1e90ff', width=1.2),
             opacity=0.9,
-            hovertemplate='300点位 %{y:.2f}<extra></extra>',
+            hovertemplate='日期: %{x}<br>沪深300: %{y:.2f}<extra></extra>',
         ),
         secondary_y=True,
     )
@@ -1551,7 +979,6 @@ def create_macro_overview_reference_chart(erp_records, index_df):
             gridcolor='rgba(148,163,184,0.18)',
             linecolor='rgba(148,163,184,0.35)',
             tickfont=dict(color='#64748b'),
-            hoverformat='%Y.%m.%d',
             rangeslider=dict(
                 visible=True,
                 thickness=0.10,
@@ -1592,7 +1019,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
         str: 报告文件路径
     """
     config = load_config()
-    overlap_snapshot = load_overlap_snapshot()
     indices_config = config['indices']
     ma_window = config['analysis']['ma_window']
     recent_days = config['analysis']['recent_days']
@@ -1609,7 +1035,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     price_chart = create_price_chart(df, indices_config, recent_days, light_theme=use_reference_chart_style)
     price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
     price_summary_items = []
-    for code in ['HS300', 'ZZ500', 'ZZ1000', 'ZZA500', 'SH50']:
+    for code in ['HS300', 'ZZ500', 'ZZ1000', 'ZZA500']:
         if code in df.columns:
             latest_value = df[code].dropna().iloc[-1]
             display_name = indices_config.get(code, {}).get('name', code)
@@ -1652,7 +1078,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
     macro_reference_html = ''
     macro_reference_summary_html = ''
-    macro_reference_kpis_html = ''
     macro_reference_chart, macro_reference_summary = create_macro_overview_reference_chart(erp_records, df)
     if macro_reference_chart is not None and macro_reference_summary is not None:
         reference_chart_id = 'macro-reference-chart'
@@ -1731,112 +1156,31 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             f"{macro_reference_summary['historical_mean']:.2f}，当前值高于历史上 "
             f"{macro_reference_summary['percentile']:.2f}% 的时期"
         )
-        prev_week_value = macro_reference_summary.get('prev_week_value')
-        prev_week_date = macro_reference_summary.get('prev_week_date')
-        latest_value_text = (
-            f"{macro_reference_summary['latest_value']:.2f}（{macro_reference_summary['date']}）"
-        )
-        prev_week_text = (
-            f"{prev_week_value:.2f}（{prev_week_date}）"
-            if prev_week_value is not None and prev_week_date
-            else "暂无可比日期"
-        )
-        macro_reference_kpis_html = f"""
-        <div class="macro-kpi-bar">
-            <div class="compact-kpi-card compact-kpi-primary">
-                <span class="compact-kpi-label">股权溢价最新值</span>
-                <span class="compact-kpi-value">{latest_value_text}</span>
-            </div>
-            <div class="compact-kpi-card">
-                <span class="compact-kpi-label">历史分位（分类数）</span>
-                <span class="compact-kpi-value compact-kpi-pill neutral">{macro_reference_summary['percentile']:.2f}%</span>
-            </div>
-            <div class="compact-kpi-card">
-                <span class="compact-kpi-label">同比值</span>
-                <span class="compact-kpi-value">{prev_week_text}</span>
-            </div>
-        </div>
-        """
     else:
         macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
 
-    # 分组定义：主要三指数 vs 特色指数
-    core_codes = ['ZZ500', 'ZZ1000', 'ZZA500']
-    feature_codes = ['SH50', 'KC50', 'VAL300']
-    external_codes = ['HKTECH']
-
-    # 创建比价走势图（全历史 + 单列满宽布局）
-    ratio_chart_blocks = {}
-    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'KC50', 'VAL300', 'HKTECH']:
+    # 创建比价走势图（分开存储，用于并排布局）
+    ratio_charts_html = []
+    for target in ['ZZ500', 'ZZ1000', 'ZZA500']:
         if f'{target}_ratio' in df.columns:
             name = indices_config[target]['name']
-            show_full_history = True
-            benchmark_name = "沪深300"
-            chart_title = f'{name} vs 沪深300'
-            ratio_base_name = 'HS300'
-            ratio_trace_name = None
-            if target == 'SH50':
-                benchmark_name = "创业板指数"
-                chart_title = f'{name} vs 创业板指数'
-                ratio_base_name = 'ZZA500'
-            elif target == 'KC50':
-                name = "上证50指数"
-                benchmark_name = "科创50指数"
-                chart_title = '上证50指数 vs 科创50指数'
-                ratio_base_name = 'KC50'
-                ratio_trace_name = '上证50/科创50 比价'
-            elif target == 'VAL300':
-                benchmark_name = "300成长指数"
-                chart_title = f'{name} vs 300成长指数'
-                ratio_base_name = 'GRO300'
-            elif target == 'HKTECH':
-                benchmark_name = "恒生指数"
-                chart_title = f'{name} vs 恒生指数'
-                ratio_base_name = 'HSI'
+            show_full_history = is_lab and target in {'ZZ500', 'ZZ1000'}
             chart = create_ratio_chart(
                 df,
                 target,
-                chart_title,
+                f'{name} vs 沪深300',
                 ma_window,
                 recent_days,
                 light_theme=use_reference_chart_style,
                 show_full_history=show_full_history,
-                ratio_base=ratio_base_name,
-                ratio_name=ratio_trace_name,
             )
-            chart.update_layout(title=dict(text=chart_title))
-            chart_html = chart.to_html(full_html=False, include_plotlyjs='cdn')
+            ratio_charts_html.append(chart.to_html(full_html=False, include_plotlyjs='cdn'))
 
-            note_html = ''
-            target_meta = overlap_snapshot.get('targets', {}).get(target, {})
-            raw_col = f'{target}_ratio'
-            net_col = f'{target}_net_ratio'
-            if target in ['ZZA500', 'SH50', 'KC50'] and target_meta and raw_col in df.columns and net_col in df.columns:
-                raw_series = pd.to_numeric(df[raw_col], errors='coerce').dropna()
-                net_series = pd.to_numeric(df[net_col], errors='coerce').dropna()
-                if not raw_series.empty and not net_series.empty:
-                    raw_value = float(raw_series.iloc[-1])
-                    net_value = float(net_series.iloc[-1])
-                    overlap_pct = float(target_meta.get('overlap_ratio', 0.0)) * 100.0
-                    note_html = (
-                        f'<div class="overview-subtitle" style="margin:10px 8px 2px 8px;color:#64748b;">'
-                        f'去重叠净比价试验：原始比价 {raw_value:.4f}，净比价 {net_value:.4f}，重叠率约 {overlap_pct:.1f}%'
-                        f'</div>'
-                    )
+    # 生成指标卡片HTML
+    cards_html = generate_cards_html(conclusions, df)
 
-            kpi_bar_html = generate_compact_kpi_bar_html(conclusions, target)
-            ratio_chart_blocks[target] = f'<div class="ratio-chart-wrapper">{chart_html}{kpi_bar_html}{note_html}</div>'
-
-    core_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in core_codes if code in ratio_chart_blocks])
-    feature_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in feature_codes if code in ratio_chart_blocks])
-    external_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in external_codes if code in ratio_chart_blocks])
-
-    # 分组指标卡与分析
-    core_analysis_html = generate_analysis_html(conclusions, codes=core_codes)
-    feature_analysis_html = generate_analysis_html(conclusions, codes=feature_codes)
-    external_analysis_html = generate_analysis_html(conclusions, codes=external_codes)
-    hsi_erp_history_html = generate_hsi_erp_history_html(build_hsi_erp_history(df))
-    external_framework_html = generate_external_market_framework_html()
+    # 生成分析结论HTML
+    analysis_html = generate_analysis_html(conclusions)
 
     # 组装完整HTML - 金融终端风格
     page_label = 'LAB' if is_lab else 'LIVE'
@@ -2247,7 +1591,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
         .ratio-charts-grid {{
             display: grid;
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(3, 1fr);
             gap: 20px;
         }}
 
@@ -2255,88 +1599,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             background: rgba(0, 0, 0, 0.1);
             border-radius: 12px;
             padding: 8px;
-        }}
-
-        .compact-kpi-bar {{
-            display: grid;
-            grid-template-columns: 1.3fr repeat(3, 1fr);
-            gap: 10px;
-            margin-top: 10px;
-        }}
-
-        .compact-kpi-card {{
-            min-width: 0;
-            position: relative;
-            overflow: hidden;
-            background: linear-gradient(135deg, rgba(255,251,240,0.98), rgba(255,241,214,0.94));
-            border: 1px solid rgba(245, 158, 11, .18);
-            border-radius: 10px;
-            padding: 8px 12px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-            box-shadow: 0 10px 20px rgba(180, 83, 9, 0.10);
-            backdrop-filter: blur(8px);
-        }}
-
-        .compact-kpi-primary {{
-            justify-content: flex-start;
-            gap: 12px;
-            background: linear-gradient(135deg, rgba(255,253,245,0.99), rgba(254,243,199,0.96));
-        }}
-
-        .compact-kpi-card::before {{
-            content: '';
-            position: absolute;
-            inset: 0;
-            background: linear-gradient(160deg, rgba(255,255,255,0.52), rgba(255,255,255,0.06) 42%, rgba(251,191,36,0.10) 100%);
-            pointer-events: none;
-        }}
-
-        .compact-kpi-card > * {{
-            position: relative;
-            z-index: 1;
-        }}
-
-        .compact-kpi-label {{
-            font-size: 12px;
-            color: #64748b;
-            white-space: nowrap;
-        }}
-
-        .compact-kpi-note {{
-            font-size: 11px;
-            color: #94a3b8;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }}
-
-        .compact-kpi-value {{
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 16px;
-            font-weight: 700;
-            color: #0f172a;
-            white-space: nowrap;
-        }}
-
-        .compact-kpi-pill {{
-            font-size: 14px;
-            padding: 2px 10px;
-            border-radius: 999px;
-        }}
-
-        .macro-kpi-bar {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 10px;
-        }}
-
-        .macro-kpi-bar .compact-kpi-card {{
-            flex: 1 1 260px;
-            min-width: 220px;
         }}
 
         /* 分析卡片 */
@@ -2450,13 +1712,11 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
 
         @media (max-width: 1400px) {{
             .metrics-grid, .analysis-section {{ grid-template-columns: repeat(2, 1fr); }}
-            .ratio-charts-grid {{ grid-template-columns: 1fr; }}
-            .compact-kpi-bar {{ grid-template-columns: repeat(2, 1fr); }}
+            .ratio-charts-grid {{ grid-template-columns: 1fr 1fr; }}
         }}
 
         @media (max-width: 900px) {{
             .metrics-grid, .analysis-section, .ratio-charts-grid {{ grid-template-columns: 1fr; }}
-            .compact-kpi-bar {{ grid-template-columns: 1fr; }}
             .hero h1 {{ font-size: 36px; }}
             .container {{ padding: 20px; }}
         }}
@@ -2486,10 +1746,8 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <p class="hero-subtitle">{hero_note}</p>
         </div>
 
-        <!-- 第一排：300股权溢价指数 -->
-        <div class="charts-section overview-section"><div class="section-header"><div class="section-title"><div class="section-icon">◎</div><div><h2>300股权溢价指数</h2><div class="overview-subtitle">{macro_reference_summary_html if macro_reference_summary_html else '溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。'}</div></div></div></div><div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">值越大代表投资价值越大；参考线采用截至当日的历史分位估算：机会值(70分位)、中位值(50分位)、危险值(30分位)。</div><div class="chart-wrapper">{macro_reference_html}</div>{macro_reference_kpis_html}</div>
-
-        {hsi_erp_history_html}
+        <!-- 第一排：股权溢价指数 -->
+        <div class="charts-section overview-section"><div class="section-header"><div class="section-title"><div class="section-icon">◎</div><div><h2>股权溢价指数</h2><div class="overview-subtitle">{macro_reference_summary_html if macro_reference_summary_html else '溢价指数值=300指数盈利收益率-10年国债收益率；值越大代表投资价值越大。'}</div></div></div></div><div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">值越大代表投资价值越大；参考线采用截至当日的历史分位估算：机会值(70分位)、中位值(50分位)、危险值(30分位)。</div><div class="chart-wrapper">{macro_reference_html}</div></div>
 
         <!-- 第二排开始：原 Index Report 主体 -->
         <div class="charts-section">
@@ -2505,51 +1763,23 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="chart-wrapper">{price_chart_html}</div>
         </div>
 
-        <!-- 主要三指数对比 -->
+        {cards_html}
+
+        <!-- 比价图并排布局 -->
         <div class="charts-section">
             <div class="section-header">
                 <div class="section-title">
                     <div class="section-icon">⚖️</div>
-                    <h2>主要三指数对比</h2>
+                    <h2>比价走势对比</h2>
                 </div>
             </div>
-            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">中证500 / 中证1000 / 创业板指数，相对沪深300</div>
             <div class="ratio-charts-grid">
-                {core_ratio_html}
+                {''.join([f'<div class="ratio-chart-wrapper">{chart}</div>' for chart in ratio_charts_html])}
             </div>
-            {core_analysis_html}
         </div>
 
-        <!-- 特色指数对比 -->
-        <div class="charts-section">
-            <div class="section-header">
-                <div class="section-title">
-                    <div class="section-icon">✦</div>
-                    <h2>特色指数对比</h2>
-                </div>
-            </div>
-            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">上证50相对创业板指数；上证50相对科创50指数；300价值指数相对300成长指数</div>
-            <div class="ratio-charts-grid">
-                {feature_ratio_html}
-            </div>
-            {feature_analysis_html}
-        </div>
-
-        <!-- \u5916\u56f4\u80a1\u5e02\u6307\u6570 -->
-        <div class="charts-section">
-            <div class="section-header">
-                <div class="section-title">
-                    <div class="section-icon">&#127757;</div>
-                    <h2>\u5916\u56f4\u80a1\u5e02\u6307\u6570</h2>
-                </div>
-            </div>
-            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">HSI ERP · HKTECH/HSI</div>
-            {external_framework_html}
-            <div class="ratio-charts-grid">
-                {external_ratio_html}
-            </div>
-            {external_analysis_html}
-        </div>
+        <!-- 分析区域 -->
+        {analysis_html}
 
         <div class="risk-banner">
             <div class="risk-icon">!</div>
@@ -2582,18 +1812,35 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     return str(report_file)
 
 
-def generate_cards_html(conclusions, df, codes=None):
+def generate_cards_html(conclusions, df):
     """生成指标卡片HTML - 金融终端风格"""
     cards = []
 
-    if codes is None:
-        ordered_codes = list(conclusions.keys())
-    else:
-        ordered_codes = [c for c in codes if c in conclusions]
+    # 沪深300卡片（基准）
+    hs300_latest = df['HS300'].iloc[-1]
+    cards.append(f"""
+        <div class="metric-card benchmark">
+            <div class="metric-header">
+                <div class="metric-name">沪深300</div>
+                <span class="metric-badge badge-benchmark">基准</span>
+            </div>
+            <div class="metric-value">{hs300_latest:,.2f}</div>
+            <div class="metric-label">最新收盘点位</div>
+            <div class="metric-stats">
+                <div class="stat-row">
+                    <span class="stat-label">角色定位</span>
+                    <span class="stat-value neutral">比价基准</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">代表市场</span>
+                    <span class="stat-value">大盘蓝筹</span>
+                </div>
+            </div>
+        </div>
+    """)
 
     # 目标指数卡片
-    for code in ordered_codes:
-        data = conclusions[code]
+    for code, data in conclusions.items():
         percentile = data['percentile']['value']
         deviation = data['deviation']['value']
         trend_changes = data['trend']['changes']
@@ -2628,16 +1875,7 @@ def generate_cards_html(conclusions, df, codes=None):
         else:
             trend_class = 'neutral'
             trend_arrow = '→'
-        if code == "SH50":
-            ratio_label = "相对创业板指数比价"
-        elif code == "KC50":
-            ratio_label = "上证50/科创50比价"
-        elif code == "VAL300":
-            ratio_label = "相对300成长指数比价"
-        elif code == "HKTECH":
-            ratio_label = "相对恒生指数比价"
-        else:
-            ratio_label = "相对沪深300比价"
+
         cards.append(f"""
             <div class="metric-card">
                 <div class="metric-header">
@@ -2645,7 +1883,7 @@ def generate_cards_html(conclusions, df, codes=None):
                     <span class="metric-badge {p_badge}">{data['percentile']['status']}</span>
                 </div>
                 <div class="metric-value">{data['current_ratio']:.4f}</div>
-                <div class="metric-label">{ratio_label}</div>
+                <div class="metric-label">相对沪深300比价</div>
                 <div class="metric-stats">
                     <div class="stat-row">
                         <span class="stat-label">历史分位</span>
@@ -2666,93 +1904,17 @@ def generate_cards_html(conclusions, df, codes=None):
     return f'<div class="metrics-grid">{"".join(cards)}</div>'
 
 
-def generate_compact_kpi_bar_html(conclusions, code):
-    """生成图表下方紧凑指标条。"""
-    if code not in conclusions:
-        return ''
-
-    data = conclusions[code]
-    percentile = data['percentile']['value']
-    deviation = data['deviation']['value']
-    trend_5d = data['trend']['changes']['5d']
-
-    if percentile < 40:
-        p_class = 'positive'
-    elif percentile > 60:
-        p_class = 'negative'
-    else:
-        p_class = 'neutral'
-
-    if deviation < -5:
-        d_class = 'positive'
-    elif deviation > 5:
-        d_class = 'negative'
-    else:
-        d_class = 'neutral'
-
-    if trend_5d > 0:
-        trend_class = 'positive'
-        trend_arrow = '↑'
-    elif trend_5d < 0:
-        trend_class = 'negative'
-        trend_arrow = '↓'
-    else:
-        trend_class = "neutral"
-        trend_arrow = '?'
-
-    if code == "SH50":
-        ratio_label = "相对创业板指数比价"
-    elif code == "KC50":
-        ratio_label = "上证50/科创50比价"
-    elif code == "VAL300":
-        ratio_label = "相对300成长指数比价"
-    elif code == "HKTECH":
-        ratio_label = "相对恒生指数比价"
-    else:
-        ratio_label = "相对沪深300比价"
-    return f"""
-        <div class="compact-kpi-bar">
-            <div class="compact-kpi-card compact-kpi-primary">
-                <span class="compact-kpi-label">{data['name']}</span>
-                <span class="compact-kpi-value">{data['current_ratio']:.4f}</span>
-                <span class="compact-kpi-note">{ratio_label}</span>
-            </div>
-            <div class="compact-kpi-card">
-                <span class="compact-kpi-label">历史分位</span>
-                <span class="compact-kpi-value compact-kpi-pill {p_class}">{percentile:.1f}%</span>
-            </div>
-            <div class="compact-kpi-card">
-                <span class="compact-kpi-label">均线偏离</span>
-                <span class="compact-kpi-value compact-kpi-pill {d_class}">{deviation:+.2f}%</span>
-            </div>
-            <div class="compact-kpi-card">
-                <span class="compact-kpi-label">5日变化</span>
-                <span class="compact-kpi-value compact-kpi-pill {trend_class}">{trend_arrow} {trend_5d:+.2f}%</span>
-            </div>
-        </div>
-    """
-
-
-def generate_analysis_html(conclusions, codes=None):
+def generate_analysis_html(conclusions):
     """生成分析结论HTML - 金融终端风格"""
     blocks = []
 
     icon_map = {
         'ZZ500': ('zz500', '500'),
         'ZZ1000': ('zz1000', '1000'),
-        'ZZA500': ('zza500', '创'),
-        'SH50': ('zz500', '50'),
-        'KC50': ('zza500', 'K'),
-        'VAL300': ('zz1000', '价')
+        'ZZA500': ('zza500', 'A500')
     }
 
-    if codes is None:
-        ordered_codes = list(conclusions.keys())
-    else:
-        ordered_codes = [c for c in codes if c in conclusions]
-
-    for code in ordered_codes:
-        data = conclusions[code]
+    for code, data in conclusions.items():
         rec = data['recommendation']
         icon_class, icon_text = icon_map.get(code, ('', ''))
 
@@ -2791,7 +1953,7 @@ def generate_analysis_html(conclusions, codes=None):
                 <div class="analysis-icon {icon_class}">{icon_text}</div>
                 <div>
                     <div class="analysis-title">{data['name']} 分析</div>
-                    <div class="analysis-subtitle">{"vs 创业板指数 比价" if code == "SH50" else ("vs 科创50指数 比价" if code == "KC50" else ("vs 300成长指数 比价" if code == "VAL300" else ("vs 恒生指数 比价" if code == "HKTECH" else "vs 沪深300 比价")))}</div>
+                    <div class="analysis-subtitle">vs 沪深300 比价</div>
                 </div>
             </div>
             <div class="analysis-body">
@@ -2820,7 +1982,7 @@ def generate_analysis_html(conclusions, codes=None):
                 <div class="analysis-item">
                     <div class="analysis-item-header">
                         <span class="analysis-item-title">均值回归</span>
-                        <span class="analysis-item-value" style="{d_color}">{data['deviation'].get('zscore', 0):+.2f}σ ({data['deviation']['status']})</span>
+                        <span class="analysis-item-value" style="{d_color}">{data['deviation']['value']:+.2f}% ({data['deviation']['status']})</span>
                     </div>
                     <div class="analysis-item-desc">{data['deviation']['description']}</div>
                 </div>

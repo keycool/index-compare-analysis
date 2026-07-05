@@ -71,6 +71,12 @@
     "zz1000": 0.08,
     "cyb": 0.08
   },
+  "forced_exit_percentiles": {
+    "sh50": 95.0,
+    "zz500": 95.0,
+    "zz1000": 95.0,
+    "cyb": 95.0
+  },
   "aggressive_reentry_percentiles": {
     "zz500": 40.0,
     "zz1000": 35.0,

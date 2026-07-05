@@ -22,18 +22,6 @@ def load_config():
         return json.load(f)
 
 
-def load_overlap_snapshot():
-    """加载成分重叠快照（若不存在则返回空字典）。"""
-    snapshot_path = Path(__file__).parent.parent / 'data' / 'overlap_snapshot.json'
-    if not snapshot_path.exists():
-        return {}
-    try:
-        with open(snapshot_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
 def calculate_ratio(df, target_col, base_col):
     """
     计算比价
@@ -77,23 +65,6 @@ def calculate_deviation(current_value, ma_value):
     if ma_value == 0 or pd.isna(ma_value):
         return 0
     return (current_value - ma_value) / ma_value * 100
-
-
-def calculate_zscore(current_value, ma_value, std_value):
-    """
-    计算偏离Z分数（相对波动率）
-
-    Args:
-        current_value: 当前值
-        ma_value: 均线值
-        std_value: 滚动标准差
-
-    Returns:
-        float: Z分数
-    """
-    if pd.isna(current_value) or pd.isna(ma_value) or pd.isna(std_value) or std_value == 0:
-        return 0
-    return (current_value - ma_value) / std_value
 
 
 def calculate_percentile(series, current_value, use_all_history=True):
@@ -183,7 +154,6 @@ def process_data(input_path, output_path):
         output_path: 输出文件路径
     """
     config = load_config()
-    overlap_snapshot = load_overlap_snapshot()
     ma_window = config['analysis']['ma_window']
     trend_windows = config['analysis']['trend_windows']
     use_all_history = config['analysis']['percentile_base'] == 'all_history'
@@ -198,8 +168,11 @@ def process_data(input_path, output_path):
     print(f"  数据行数: {len(df)}")
     print(f"  数据列: {list(df.columns)}")
 
+    # 获取基准指数
+    base_col = 'HS300'  # 沪深300作为基准
+
     # 获取目标指数
-    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'KC50', 'VAL300', 'HKTECH']
+    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500']
 
     # 计算比价和相关指标
     analysis_results = {}
@@ -209,49 +182,22 @@ def process_data(input_path, output_path):
             print(f"  警告: 缺少 {target} 数据，跳过")
             continue
 
-        numerator_col = target
-        ratio_base_col = 'HS300'
-        if target == 'SH50':
-            ratio_base_col = 'ZZA500'
-        elif target == 'KC50':
-            numerator_col = 'SH50'
-            ratio_base_col = 'KC50'
-        elif target == 'VAL300':
-            ratio_base_col = 'GRO300'
-        elif target == 'HKTECH':
-            ratio_base_col = 'HSI'
-        print(f"\n计算 {numerator_col} vs {ratio_base_col}...")
+        print(f"\n计算 {target} vs {base_col}...")
 
         # 计算比价
         ratio_col = f'{target}_ratio'
-        df[ratio_col] = calculate_ratio(df, numerator_col, ratio_base_col)
-
-        # 试验：重叠校正净比价（仅对创业板/上证50优先关注，其他目标也可复用）
-        overlap_ratio = (
-            overlap_snapshot.get('targets', {})
-            .get(target, {})
-            .get('overlap_ratio')
-        )
-        if overlap_ratio is None:
-            overlap_ratio = 0.0
-        independent_ratio = max(0.05, 1.0 - float(overlap_ratio))
-        net_ratio_col = f'{target}_net_ratio'
-        df[net_ratio_col] = (df[ratio_col] - float(overlap_ratio)) / independent_ratio
+        df[ratio_col] = calculate_ratio(df, target, base_col)
 
         # 计算移动平均
         ma_col = f'{target}_MA{ma_window}'
         df[ma_col] = calculate_ma(df[ratio_col], ma_window)
-        std_col = f'{target}_STD{ma_window}'
-        df[std_col] = df[ratio_col].rolling(window=ma_window).std()
 
         # 当前值
         current_ratio = df[ratio_col].iloc[-1]
         current_ma = df[ma_col].iloc[-1]
-        current_std = df[std_col].iloc[-1]
 
         # 计算偏离度
         deviation = calculate_deviation(current_ratio, current_ma)
-        zscore = calculate_zscore(current_ratio, current_ma, current_std)
 
         # 计算历史分位
         percentile = calculate_percentile(df[ratio_col], current_ratio, use_all_history)
@@ -265,7 +211,6 @@ def process_data(input_path, output_path):
             'current_ratio': round(current_ratio, 4),
             'current_ma': round(current_ma, 4),
             'deviation': round(deviation, 2),
-            'zscore': round(zscore, 2),
             'percentile': round(percentile, 1),
             'trend': trend,
             **changes
@@ -274,7 +219,6 @@ def process_data(input_path, output_path):
         print(f"  当前比价: {current_ratio:.4f}")
         print(f"  {ma_window}日均线: {current_ma:.4f}")
         print(f"  偏离度: {deviation:+.2f}%")
-        print(f"  偏离Z分数: {zscore:+.2f}")
         print(f"  历史分位: {percentile:.1f}%")
         print(f"  趋势: {trend}")
 

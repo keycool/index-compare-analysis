@@ -72,6 +72,47 @@ jobs:
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}
 
+      - name: Validate ERP execution artifacts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          plan_path = Path("orchestrator/output/erp_execution_plan.json")
+          summary_path = Path("orchestrator/output/erp_daily_summary.md")
+          if not plan_path.exists():
+              raise SystemExit("Missing ERP execution plan artifact")
+          if not summary_path.exists():
+              raise SystemExit("Missing ERP daily summary artifact")
+
+          plan = json.loads(plan_path.read_text(encoding="utf-8"))
+          positions = plan.get("portfolio", {}).get("positions", [])
+          defensive_value = next((item for item in positions if item.get("bucket") == "sh50"), None)
+          if defensive_value is None:
+              raise SystemExit("Missing defensive value bucket sh50 in ERP execution plan")
+          if defensive_value.get("label") != "防守价值（上证50/红利）":
+              raise SystemExit(f"Unexpected sh50 label: {defensive_value.get('label')}")
+
+          breakdown = defensive_value.get("holding_breakdown", [])
+          lines = [
+              "## ERP execution validation",
+              "",
+              f"- Generated at: `{plan.get('generated_at', '-')}`",
+              f"- Managed amount: `{plan.get('portfolio', {}).get('managed_amount', 0):,.2f}`",
+              f"- Defensive value current amount: `{defensive_value.get('current_amount', 0):,.2f}`",
+              f"- Defensive value target amount: `{defensive_value.get('target_amount', 0):,.2f}`",
+              "",
+              "### Defensive value holdings",
+          ]
+          if breakdown:
+              lines.extend(f"- `{item.get('name', '-')}`: `{item.get('amount', 0):,.2f}`" for item in breakdown)
+          else:
+              lines.append("- No current holdings mapped to this bucket.")
+
+          summary_file = Path(__import__("os").environ["GITHUB_STEP_SUMMARY"])
+          summary_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
       - name: Upload ERP execution artifacts
         if: always()
         uses: actions/upload-artifact@v6

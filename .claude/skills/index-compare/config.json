@@ -30,6 +30,12 @@
       "role": "target",
       "description": "超大盘蓝筹代表指数，用于与创业板指数做风格对比"
     },
+    "KC50": {
+      "code": "000688.SH",
+      "name": "\u79d1\u521b50\u6307\u6570",
+      "role": "target",
+      "description": "\u79d1\u6280\u6210\u957f\u98ce\u683c\u6307\u6570\uff0c\u7528\u4e8e\u4e0e\u4e0a\u8bc150\u6307\u6570\u505a\u98ce\u683c\u5bf9\u6bd4"
+    },
     "VAL300": {
       "code": "000919.CSI",
       "name": "300价值指数",

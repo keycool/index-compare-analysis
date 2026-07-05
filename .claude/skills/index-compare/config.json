@@ -57,8 +57,9 @@
     "HSI": {
       "code": "HSI",
       "name": "恒生指数",
-      "role": "reference",
-      "description": "港股大盘基准指数，用于外围股市风格参考"
+      "role": "benchmark",
+      "domain": "hkshare",
+      "description": "港股锚定基准指数，港股域内以恒生指数为比价分母"
     },
     "HKTECH": {
       "code": "HKTECH",

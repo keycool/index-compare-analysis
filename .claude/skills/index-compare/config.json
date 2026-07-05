@@ -4,7 +4,7 @@
       "code": "000300.SH",
       "name": "沪深300",
       "role": "benchmark",
-      "description": "大盘蓝筹股代表，作为比价基准"
+      "description": "大盘蓝筹股代表，比价系统锚定基准。其自身交易决策依据股权溢价指数(ERP)历史分位"
     },
     "ZZ500": {
       "code": "000905.SH",

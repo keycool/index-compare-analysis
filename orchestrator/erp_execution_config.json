@@ -1,86 +1,88 @@
 {
+  "cross_market": {
+    "hk_pool_cap": 0.20,
+    "hk_min_erp_percentile": 30,
+    "hk_full_erp_percentile": 50
+  },
   "percentile_thresholds": {
     "low": 40.0,
     "high": 60.0
   },
   "aggressive_weights": {
     "low": 0.35,
-    "neutral": 0.5,
+    "neutral": 0.50,
     "high": 0.65
   },
   "alpha_budget_weights": {
-    "low": 0.2,
+    "low": 0.20,
     "neutral": 0.28,
     "high": 0.35
   },
-  "recommendation_multipliers": {
-    "\u5f3a\u70c8\u8d85\u914d": 1.3,
-    "\u8d85\u914d": 1.15,
-    "\u6807\u914d": 1.0,
-    "\u4f4e\u914d": 0.85,
-    "\u5f3a\u70c8\u4f4e\u914d": 0.7
-  },
-  "value_style_tilt": {
-    "\u5f3a\u70c8\u8d85\u914d": 1.3,
-    "\u8d85\u914d": 1.15,
-    "\u6807\u914d": 1.0,
-    "\u4f4e\u914d": 0.9,
-    "\u5f3a\u70c8\u4f4e\u914d": 0.8
-  },
-  "growth_style_tilt": {
-    "\u5f3a\u70c8\u8d85\u914d": {
-      "cyb": 0.85,
-      "zz500": 1.1,
-      "zz1000": 1.1,
-      "sh50_bonus": 1.15
+  "style_pair": {
+    "budget_ratio": 0.30,
+    "split": {
+      "value_cheap_weight": 0.70,
+      "neutral_weight": 0.50,
+      "growth_cheap_weight": 0.70
     },
-    "\u8d85\u914d": {
-      "cyb": 0.92,
-      "zz500": 1.05,
-      "zz1000": 1.05,
-      "sh50_bonus": 1.08
-    },
-    "\u6807\u914d": {
-      "cyb": 1.0,
-      "zz500": 1.0,
-      "zz1000": 1.0,
-      "sh50_bonus": 1.0
-    },
-    "\u4f4e\u914d": {
-      "cyb": 1.08,
-      "zz500": 0.97,
-      "zz1000": 0.97,
-      "sh50_bonus": 0.95
-    },
-    "\u5f3a\u70c8\u4f4e\u914d": {
-      "cyb": 1.15,
-      "zz500": 0.94,
-      "zz1000": 0.94,
-      "sh50_bonus": 0.9
+    "percentile_thresholds": {
+      "low": 30,
+      "high": 70
     }
   },
+  "hk_erp": {
+    "percentile_thresholds": {
+      "low": 40.0,
+      "high": 60.0
+    },
+    "aggressive_weights": {
+      "low": 0.30,
+      "neutral": 0.45,
+      "high": 0.60
+    }
+  },
+  "recommendation_multipliers": {
+    "强烈超配": 1.30,
+    "超配": 1.15,
+    "标配": 1.00,
+    "低配": 0.85,
+    "强烈低配": 0.70
+  },
   "alpha_base_weights": {
-    "sh50": 1.0,
-    "zz500": 0.4,
-    "zz1000": 0.3,
-    "cyb": 0.3
+    "sh50": 1.00,
+    "zz500": 0.40,
+    "zz1000": 0.30,
+    "cyb": 0.30,
+    "kc50": 0.25
   },
   "alpha_bucket_caps": {
     "sh50": 0.18,
+    "val300": 0.10,
+    "gro300": 0.10,
     "zz500": 0.12,
     "zz1000": 0.08,
-    "cyb": 0.08
+    "cyb": 0.08,
+    "kc50": 0.06,
+    "hstech": 0.08
   },
   "forced_exit_percentiles": {
     "sh50": 95.0,
     "zz500": 95.0,
     "zz1000": 95.0,
-    "cyb": 95.0
+    "cyb": 95.0,
+    "kc50": 95.0,
+    "hstech": 95.0,
+    "val300": 95.0,
+    "gro300": 5.0
   },
   "aggressive_reentry_percentiles": {
     "zz500": 40.0,
     "zz1000": 35.0,
-    "cyb": 30.0
+    "cyb": 30.0,
+    "kc50": 25.0,
+    "hstech": 30.0,
+    "val300": 50.0,
+    "gro300": 50.0
   },
   "reentry_min_current_amount": 1000.0,
   "trajectory_overlay": {
@@ -111,28 +113,49 @@
       "multiplier": 0.85
     }
   },
+  "bucket_metadata": {
+    "hs300":  { "label": "沪深300",       "sleeve": "defensive",  "pool": "ashare" },
+    "sh50":   { "label": "防守价值（上证50/红利）", "sleeve": "defensive",  "pool": "ashare" },
+    "val300": { "label": "300价值",       "sleeve": "defensive",  "pool": "ashare" },
+    "gro300": { "label": "300成长",       "sleeve": "defensive",  "pool": "ashare" },
+    "cyb":    { "label": "创业板",        "sleeve": "aggressive", "pool": "ashare" },
+    "zz500":  { "label": "中证500",       "sleeve": "aggressive", "pool": "ashare" },
+    "zz1000": { "label": "中证1000",      "sleeve": "aggressive", "pool": "ashare" },
+    "kc50":   { "label": "科创50",        "sleeve": "aggressive", "pool": "ashare" },
+    "hsi":    { "label": "恒生指数",      "sleeve": "defensive",  "pool": "hkshare" },
+    "hstech": { "label": "恒生科技",      "sleeve": "aggressive", "pool": "hkshare" }
+  },
   "holding_alias_map": {
-    "\u6caa\u6df1300ETF": "hs300",
+    "沪深300ETF": "hs300",
     "300ETF": "hs300",
-    "\u6caa\u6df1300": "hs300",
-    "\u4e0a\u8bc150": "sh50",
+    "沪深300": "hs300",
+    "上证50": "sh50",
     "50ETF": "sh50",
-    "\u4e0a\u8bc150ETF": "sh50",
-    "\u7ea2\u5229ETF": "sh50",
-    "\u521b\u4e1a\u677fETF": "cyb",
-    "\u521b\u4e1a\u677f\u589e\u5f3a": "cyb",
-    "\u521b\u4e1a\u677f\u6307": "cyb",
-    "\u521b\u4e1a\u677f": "cyb",
+    "上证50ETF": "sh50",
+    "红利ETF": "sh50",
+    "创业板ETF": "cyb",
+    "创业板增强": "cyb",
+    "创业板指": "cyb",
+    "创业板": "cyb",
     "500ETF": "zz500",
-    "\u4e2d\u8bc1500": "zz500",
-    "\u4e2d\u8bc1500ETF": "zz500",
+    "中证500": "zz500",
+    "中证500ETF": "zz500",
     "1000ETF": "zz1000",
-    "\u4e2d\u8bc11000": "zz1000",
-    "\u4e2d\u8bc11000ETF": "zz1000"
+    "中证1000": "zz1000",
+    "中证1000ETF": "zz1000",
+    "科创50ETF": "kc50",
+    "科创50": "kc50",
+    "300价值ETF": "val300",
+    "300价值": "val300",
+    "300成长ETF": "gro300",
+    "300成长": "gro300",
+    "恒生ETF": "hsi",
+    "恒生指数ETF": "hsi",
+    "恒生科技ETF": "hstech",
+    "恒生科技": "hstech"
   },
   "ignored_erp_holdings": [
-    "\u79d1\u521b50ETF",
-    "\u6052\u751f\u6d88\u8d39ETF",
-    "\u5341\u5e74\u671f\u56fd\u503aETF"
+    "恒生消费ETF",
+    "十年期国债ETF"
   ]
 }

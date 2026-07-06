@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Render a human-readable ERP daily summary from the latest execution plan.
+Render a human-readable ERP daily summary from the latest execution plan — v3 expanded.
 """
 
 from __future__ import annotations
@@ -17,12 +17,11 @@ PLAN_PATH = ROOT / "output" / "erp_execution_plan.json"
 CONFIG_PATH = ROOT / "erp_execution_config.json"
 OUTPUT_PATH = ROOT / "output" / "erp_daily_summary.md"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
 BUCKET_ORDER = {
-    "hs300": 0,
-    "sh50": 1,
-    "cyb": 2,
-    "zz500": 3,
-    "zz1000": 4,
+    "hs300": 0, "sh50": 1, "val300": 2, "gro300": 3,
+    "cyb": 4, "zz500": 5, "zz1000": 6, "kc50": 7,
+    "hsi": 8, "hstech": 9,
 }
 
 
@@ -51,10 +50,9 @@ def forced_exit_text(item: dict) -> str | None:
         return None
     percentile = item.get("current_percentile")
     threshold = item.get("forced_exit_threshold")
-    signal = item.get("signal") or "标配"
     if percentile is None or threshold is None:
-        return f"{signal}，但已达到强制退出条件，目标仓位归零"
-    return f"{signal}，但当前分位 {percentile:.2f}% 已达强制退出阈值 {threshold:.2f}%，目标仓位归零"
+        return "已达到强制退出条件，目标仓位归零"
+    return f"当前分位 {percentile:.2f}% 已达强制退出阈值 {threshold:.2f}%，目标仓位归零"
 
 
 def reentry_text(item: dict) -> str | None:
@@ -62,24 +60,16 @@ def reentry_text(item: dict) -> str | None:
         return None
     percentile = item.get("current_percentile")
     threshold = item.get("reentry_threshold")
-    signal = item.get("signal") or "标配"
     if percentile is None or threshold is None:
-        return f"{signal}，但重入闸门未开启，暂不回补"
-    return f"{signal}，但当前分位 {percentile:.2f}% 高于重入阈值 {threshold:.2f}%，暂不回补"
+        return "重入闸门未开启，暂不回补"
+    return f"当前分位 {percentile:.2f}% 高于重入阈值 {threshold:.2f}%，暂不回补"
 
 
 def trajectory_text(item: dict) -> str | None:
     multiplier = item.get("trajectory_multiplier")
     reason = item.get("trajectory_reason")
-    if multiplier is None or reason in (
-        None,
-        "",
-        "trajectory neutral",
-        "trajectory metrics unavailable",
-        "trajectory overlay disabled",
-    ):
+    if multiplier is None or reason in (None, "", "trajectory neutral", "trajectory metrics unavailable", "trajectory overlay disabled"):
         return None
-
     deviation = item.get("current_deviation")
     change_5d = item.get("change_5d")
     reason_map = {
@@ -104,58 +94,82 @@ def main() -> None:
     config = load_json(CONFIG_PATH)
 
     erp = plan["signals"]["erp"]
+    hsi = plan["signals"].get("hsi_erp", {})
     relative = plan["signals"]["relative"]
-    val300 = plan["signals"].get("val300_style", {})
     portfolio = plan["portfolio"]
     positions = ordered_positions(portfolio["positions"])
 
     lines: list[str] = []
-    lines.append("# ERP 日报摘要")
+    lines.append("# ERP 日报摘要 v3")
     lines.append("")
     lines.append(f"生成时间: {datetime.now(SHANGHAI_TZ).isoformat(timespec='seconds')}")
     lines.append("")
-    lines.append("## 今日结论")
+
+    # ── 今日信号 ──
+    lines.append("## 今日信号")
     lines.append("")
-    lines.append(
-        f"- ERP 最新日期 `{erp['date']}`，股权溢价 `{erp['equity_premium']:.2f}`，历史分位 `{erp['percentile']:.2f}%`。"
-    )
-    lines.append(
-        f"- 当前总体倾向 `进攻 {pct(erp['aggressive_weight'])} / 防守 {pct(erp['defensive_weight'])}`。"
-    )
-    lines.append(
-        f"- Relative 最新日期 `{relative['date']}`，`500={relative['recommendations']['zz500'] or '标配'}`，"
-        f"`1000={relative['recommendations']['zz1000'] or '标配'}`，"
-        f"`创业板={relative['recommendations']['cyb'] or '标配'}`，"
-        f"`50={relative['recommendations']['sh50'] or '标配'}`。"
-    )
-    if val300.get("available"):
-        lines.append(
-            f"- `300价值/成长` 最新日期 `{val300['date']}`，比价 `{val300['ratio']:.4f}`，"
-            f"分位 `{val300['percentile']:.2f}%`，建议 `{val300['recommendation']}`。"
-        )
+    lines.append(f"- **A股 ERP** (`{erp['date']}`)：股权溢价 `{erp['equity_premium']:.2f}`，历史分位 `{erp['percentile']:.2f}%`。")
+    lines.append(f"  → 进攻 `{pct(erp['aggressive_weight'])}` / 防守 `{pct(erp['defensive_weight'])}`。")
+
+    if hsi.get("available"):
+        lines.append(f"- **港股 ERP** (`{hsi['date']}`)：股权溢价 `{hsi['equity_premium']:.2f}`，历史分位 `{hsi['percentile']:.2f}%`。")
+        lines.append(f"  → 进攻 `{pct(hsi['aggressive_weight'])}` / 防守 `{pct(hsi['defensive_weight'])}`。")
+    else:
+        lines.append(f"- **港股 ERP**：数据不可用（{hsi.get('message', 'fallback neutral')}），使用中性配置。")
+
+    pool_ashare = portfolio.get("ashare_pool", 0)
+    pool_hk = portfolio.get("hkshare_pool", 0)
+    lines.append(f"- **资金分配**：A股 `{pct(pool_ashare)}` / 港股 `{pct(pool_hk)}`。")
     lines.append("")
+
+    # ── 比价建议 ──
+    lines.append("## 比价建议")
+    lines.append("")
+    recs = relative["recommendations"]
+    lines.append(f"- `{relative['date']}`")
+    lines.append(f"  - 中证500：`{recs.get('zz500','标配')}` | 中证1000：`{recs.get('zz1000','标配')}`")
+    lines.append(f"  - 创业板：`{recs.get('cyb','标配')}` | 上证50：`{recs.get('sh50','标配')}` | 科创50：`{recs.get('kc50','标配')}`")
+    lines.append(f"  - 300价值：`{recs.get('val300','标配')}` | 300成长：`{recs.get('gro300','标配')}`")
+    lines.append(f"  - 恒生科技：`{recs.get('hstech','标配')}`")
+    lines.append("")
+
+    # ── 调仓建议 ──
     lines.append("## 调仓建议")
     lines.append("")
-    for item in positions:
-        line = (
-            f"- `{item['label']}`：当前 `{num(item['current_amount'])}`，目标 `{num(item['target_amount'])}`，"
-            f"建议 `{action_text(item['action'], item['delta_amount'])}`。"
-        )
-        forced_exit = forced_exit_text(item)
-        reentry = reentry_text(item)
-        trajectory = trajectory_text(item)
-        if forced_exit:
-            line += f" `{forced_exit}`。"
-        if reentry:
-            line += f" `{reentry}`。"
-        if trajectory:
-            line += f" `{trajectory}`。"
-        lines.append(line)
-        if item.get("holding_breakdown"):
-            details = " / ".join(f"{detail['name']} {num(detail['amount'])}" for detail in item["holding_breakdown"])
-            lines.append(f"  - 持仓明细：{details}")
 
-    lines.append("")
+    # Group by pool
+    for pool_name, pool_label in [("ashare", "A股"), ("hkshare", "港股")]:
+        pool_positions = [p for p in positions if p.get("pool") == pool_name]
+        if not pool_positions:
+            continue
+        lines.append(f"### {pool_label}")
+        lines.append("")
+        for item in pool_positions:
+            sleeve_tag = "🛡" if item.get("sleeve") == "defensive" else "⚔"
+            line = (
+                f"- {sleeve_tag} `{item['label']}`：当前 `{num(item['current_amount'])}`，"
+                f"目标 `{num(item['target_amount'])}`，"
+                f"建议 `{action_text(item['action'], item['delta_amount'])}`。"
+            )
+            fe = forced_exit_text(item)
+            re = reentry_text(item)
+            tr = trajectory_text(item)
+            tags = []
+            if fe:
+                tags.append(f"⚠ {fe}")
+            if re:
+                tags.append(f"🚫 {re}")
+            if tr:
+                tags.append(f"📊 {tr}")
+            if tags:
+                line += " " + " | ".join(tags)
+            lines.append(line)
+            if item.get("holding_breakdown"):
+                details = " / ".join(f"{d['name']} {num(d['amount'])}" for d in item["holding_breakdown"])
+                lines.append(f"  - 持仓明细：{details}")
+        lines.append("")
+
+    # ── 组合结构 ──
     lines.append("## 组合结构")
     lines.append("")
     lines.append(f"- 可管理 ERP 资金：`{num(portfolio['managed_amount'])}`")
@@ -174,31 +188,19 @@ def main() -> None:
     forced_exit_thresholds = config.get("forced_exit_percentiles", {})
     reentry_thresholds = config.get("aggressive_reentry_percentiles", {})
     lines.append(f"- ERP 分位阈值：`low={thresholds['low']}` / `high={thresholds['high']}`")
-    lines.append(
-        f"- 进攻权重锚点：`low={pct(aggressive_weights['low'])}` / "
-        f"`neutral={pct(aggressive_weights['neutral'])}` / `high={pct(aggressive_weights['high'])}`"
-    )
+    lines.append(f"- 进攻权重：`low={pct(aggressive_weights['low'])}` / `neutral={pct(aggressive_weights['neutral'])}` / `high={pct(aggressive_weights['high'])}`")
+    lines.append(f"- 港股上限：`{pct(config.get('cross_market', {}).get('hk_pool_cap', 0.20))}`")
     if forced_exit_thresholds:
-        lines.append(
-            f"- 高分位强制退出阈值：`50>={forced_exit_thresholds.get('sh50', '-')}` / "
-            f"`500>={forced_exit_thresholds.get('zz500', '-')}` / "
-            f"`1000>={forced_exit_thresholds.get('zz1000', '-')}` / "
-            f"`创业板>={forced_exit_thresholds.get('cyb', '-')}`"
-        )
+        lines.append(f"- 强制退出阈值：`50>={forced_exit_thresholds.get('sh50','-')}` / `500>={forced_exit_thresholds.get('zz500','-')}` / `1000>={forced_exit_thresholds.get('zz1000','-')}` / `创业板>={forced_exit_thresholds.get('cyb','-')}` / `科创50>={forced_exit_thresholds.get('kc50','-')}`")
     if reentry_thresholds:
-        lines.append(
-            f"- 高分位重入闸门：`500<{reentry_thresholds.get('zz500', '-')}` / "
-            f"`1000<{reentry_thresholds.get('zz1000', '-')}` / "
-            f"`创业板<{reentry_thresholds.get('cyb', '-')}`"
-        )
-    lines.append("- 建议乘数、轨迹修正与风格微调详见配置文件和说明文档。")
+        lines.append(f"- 重入闸门：`500<{reentry_thresholds.get('zz500','-')}` / `1000<{reentry_thresholds.get('zz1000','-')}` / `创业板<{reentry_thresholds.get('cyb','-')}` / `科创50<{reentry_thresholds.get('kc50','-')}`")
 
     lines.append("")
     lines.append("## 参考文件")
     lines.append("")
     lines.append(f"- 执行计划：`{PLAN_PATH}`")
     lines.append(f"- 执行配置：`{CONFIG_PATH}`")
-    lines.append(f"- 配置说明：`{ROOT / 'erp_execution_config.md'}`")
+    lines.append(f"- 扩展方案：`docs/strategy-expansion-v3.md`")
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -45,8 +45,8 @@
     "GRO300": {
       "code": "000918.CSI",
       "name": "300成长指数",
-      "role": "reference",
-      "description": "沪深300成长风格指数，作为300价值比价分母"
+      "role": "target",
+      "description": "沪深300成长风格指数，作为300价值比价分母。与300价值构成防守端风格对"
     },
     "SHCI": {
       "code": "000001.SH",

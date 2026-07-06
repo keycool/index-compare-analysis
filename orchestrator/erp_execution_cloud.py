@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Cloud-friendly ERP execution workflow.
+Cloud-friendly ERP execution workflow — v3 expanded.
 
-Reads the required Feishu Bitable tables directly through OpenAPI instead of the
-local lark-cli login state, then generates the same execution plan artifact used
-by the local ERP execution workflow.
+Adds:
+- Cross-market allocation (A-share + HK pools)
+- KC50, VAL300, GRO300 as tradable buckets in A-share defensive/aggressive
+- HSI (defensive) + HKTECH (aggressive) HK pool
+- KC50 reverse logic (only holds when ratio percentile high)
+- Style pair (VAL300/GRO300) replacing old style overlay
+- HSI ERP via optional Feishu table (falls back to neutral)
 """
 
 from __future__ import annotations
@@ -26,12 +30,15 @@ from zoneinfo import ZoneInfo
 import requests
 
 
+# ── Default Feishu table tokens ──────────────────────────────
 DEFAULT_ERP_APP_TOKEN = "KfaSbpRdiaYFdWsCTRfcWpocnbd"
 DEFAULT_ERP_TABLE_ID = "tblRAs2p4woXE1ig"
 DEFAULT_RELATIVE_APP_TOKEN = "POghbC154ablpxs20USc6veDnlh"
 DEFAULT_RELATIVE_TABLE_ID = "tblnsUexqsEiLZs9"
 DEFAULT_ASSET_APP_TOKEN = "TiVJb2a5GaRiZTsoeXFcO6BCn8e"
 DEFAULT_ASSET_TABLE_ID = "tbl1qLL1iXMykQRd"
+DEFAULT_HSI_ERP_APP_TOKEN = ""
+DEFAULT_HSI_ERP_TABLE_ID = ""
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "output" / "erp_execution_plan.json"
 DEFAULT_EXECUTION_CONFIG_PATH = Path(__file__).resolve().parent / "erp_execution_config.json"
@@ -41,82 +48,21 @@ BASE_URL = "https://open.feishu.cn/open-apis"
 AUTH_URL = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
+# ── Mojibake repair map ──────────────────────────────────────
 MOJIBAKE_MAP = {
-    "鏍囬厤": "标配",
-    "瓒呴厤": "超配",
-    "浣庨厤": "低配",
-    "寮虹儓瓒呴厤": "强烈超配",
-    "寮虹儓浣庨厤": "强烈低配",
-    "娌繁300": "沪深300",
-    "涓婅瘉50": "上证50",
-    "鍒涗笟鏉": "创业板",
-    "涓瘉500": "中证500",
-    "涓瘉1000": "中证1000",
-    "绾㈠埄ETF": "红利ETF",
-    "鍒涗笟鏉垮寮": "创业板增强",
-    "鍒涗笟鏉挎寚": "创业板指",
-    "涓婅瘉50ETF": "上证50ETF",
-    "涓瘉500ETF": "中证500ETF",
-    "涓瘉1000ETF": "中证1000ETF",
-    "鍗佸勾鏈熷浗鍊篍TF": "十年期国债ETF",
-    "鎭掔敓娑堣垂ETF": "恒生消费ETF",
-    "绉戝垱50ETF": "科创50ETF",
-    "鏃ユ湡": "日期",
-    "鑲℃潈婧环鎸囨暟": "股权溢价指数",
-    "500寤鸿": "500建议",
-    "1000寤鸿": "1000建议",
-    "鍒涗笟鏉垮缓璁": "创业板建议",
-    "50寤鸿": "50建议",
-    "500/300姣斾环": "500/300比价",
-    "1000/300姣斾环": "1000/300比价",
-    "鍒涗笟鏉?300姣斾环": "创业板/300比价",
-    "鍒涗笟鏉300姣斾环": "创业板/300比价",
-    "50/鍒涗笟鏉挎瘮浠": "50/创业板比价",
-    "50/300姣斾环": "50/300比价",
-    "300浠峰€?鎴愰暱姣斾环": "300价值/成长比价",
-    "300浠峰€煎垎浣": "300价值分位",
-    "300浠峰€煎缓璁": "300价值建议",
-    "椤圭洰鍚嶇О": "项目名称",
-    "閲戦": "金额",
-    "鏉ユ簮": "来源",
-    "鈪＄骇鍒嗙被": "Ⅱ级分类",
-    "II绾у垎绫": "Ⅱ级分类",
-    "浜岀骇鍒嗙被": "二级分类",
-    "鈪㈢骇鍒嗙被": "Ⅲ级分类",
-    "III绾у垎绫": "Ⅲ级分类",
-    "涓夌骇鍒嗙被": "三级分类",
+    "鏍囬厤": "标配", "瓒呴厤": "超配", "浣庨厤": "低配",
+    "寮虹儓瓒呴厤": "强烈超配", "寮虹儓浣庨厤": "强烈低配",
+    "娌繁300": "沪深300", "涓婅瘉50": "上证50",
+    "鍒涗笟鏉": "创业板", "涓瘉500": "中证500", "涓瘉1000": "中证1000",
+    "绉戝垱50": "科创50", "绾㈠埄ETF": "红利ETF",
+    "鎭掔敓ETF": "恒生ETF", "鎭掔敓绉戞妧": "恒生科技",
+    "鏃ユ湡": "日期", "鑲℃潈婧环鎸囨暟": "股权溢价指数",
+    "500寤鸿": "500建议", "1000寤鸿": "1000建议",
+    "鍒涗笟鏉垮缓璁": "创业板建议", "50寤鸿": "50建议",
+    "绉戝垱50寤鸿": "科创50建议", "鎭掔敓绉戞妧寤鸿": "恒生科技建议",
+    "300浠峰€煎缓璁": "300价值建议", "300鎴愰暱寤鸿": "300成长建议",
+    "椤圭洰鍚嶇О": "项目名称", "閲戦": "金额",
 }
-
-BUCKET_METADATA = {
-    "hs300": {"label": "沪深300", "sleeve": "defensive"},
-    "sh50": {"label": "防守价值（上证50/红利）", "sleeve": "defensive"},
-    "cyb": {"label": "创业板", "sleeve": "aggressive"},
-    "zz500": {"label": "中证500", "sleeve": "aggressive"},
-    "zz1000": {"label": "中证1000", "sleeve": "aggressive"},
-}
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate ERP execution plan via Feishu OpenAPI")
-    parser.add_argument("--erp-app-token", default=os.environ.get("ERP_EXEC_ERP_APP_TOKEN", DEFAULT_ERP_APP_TOKEN))
-    parser.add_argument("--erp-table-id", default=os.environ.get("ERP_EXEC_ERP_TABLE_ID", DEFAULT_ERP_TABLE_ID))
-    parser.add_argument(
-        "--relative-app-token",
-        default=os.environ.get("ERP_EXEC_RELATIVE_APP_TOKEN", DEFAULT_RELATIVE_APP_TOKEN),
-    )
-    parser.add_argument(
-        "--relative-table-id",
-        default=os.environ.get("ERP_EXEC_RELATIVE_TABLE_ID", DEFAULT_RELATIVE_TABLE_ID),
-    )
-    parser.add_argument("--asset-app-token", default=os.environ.get("ERP_EXEC_ASSET_APP_TOKEN", DEFAULT_ASSET_APP_TOKEN))
-    parser.add_argument("--asset-table-id", default=os.environ.get("ERP_EXEC_ASSET_TABLE_ID", DEFAULT_ASSET_TABLE_ID))
-    parser.add_argument(
-        "--execution-config-path",
-        default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)),
-    )
-    parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
-    parser.add_argument("--page-size", type=int, default=500)
-    return parser.parse_args()
 
 
 def repair_text(text: str) -> str:
@@ -168,11 +114,9 @@ def parse_date(value: Any) -> datetime | None:
             return datetime.fromtimestamp(number, SHANGHAI_TZ)
         except Exception:
             return None
-
     text = normalize_text(value)
     if not text:
         return None
-
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
         try:
             return datetime.strptime(text, fmt).replace(tzinfo=SHANGHAI_TZ)
@@ -213,7 +157,7 @@ def cell_texts(value: Any) -> list[str]:
         texts: list[str] = []
         for item in value:
             texts.extend(cell_texts(item))
-        return [text for text in texts if text]
+        return [t for t in texts if t]
     if isinstance(value, dict):
         for key in ("text", "name", "value", "display_value", "formatted_value", "title"):
             if key in value:
@@ -222,6 +166,8 @@ def cell_texts(value: Any) -> list[str]:
     text = normalize_text(value)
     return [text] if text else []
 
+
+# ── Feishu OpenAPI reader ────────────────────────────────────
 
 class FeishuBitableReader:
     def __init__(self, app_id: str, app_secret: str):
@@ -244,10 +190,7 @@ class FeishuBitableReader:
     def _headers(self) -> dict[str, str]:
         if not self._tenant_token or time.time() >= self._tenant_expiry:
             self._refresh_token()
-        return {
-            "Authorization": f"Bearer {self._tenant_token}",
-            "Content-Type": "application/json",
-        }
+        return {"Authorization": f"Bearer {self._tenant_token}", "Content-Type": "application/json"}
 
     def list_all_records(self, app_token: str, table_id: str, page_size: int = 500) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -256,28 +199,26 @@ class FeishuBitableReader:
             params = {"page_size": min(page_size, 500)}
             if page_token:
                 params["page_token"] = page_token
-
             url = f"{BASE_URL}/bitable/v1/apps/{app_token}/tables/{table_id}/records"
             response = requests.get(url, params=params, headers=self._headers(), timeout=30)
             response.raise_for_status()
             payload = response.json()
             if payload.get("code") != 0:
                 raise RuntimeError(f"Feishu record list failed: {payload}")
-
             data = payload.get("data", {})
             for item in data.get("items", []):
                 fields = normalize_row(item.get("fields", {}))
                 fields["record_id"] = item.get("record_id")
                 records.append(fields)
-
             if not data.get("has_more"):
                 break
             page_token = data.get("page_token")
             if not page_token:
                 break
-
         return records
 
+
+# ── Math helpers ─────────────────────────────────────────────
 
 def recommendation_multiplier(text: str | None, mapping: dict[str, float]) -> float:
     if not text:
@@ -285,7 +226,8 @@ def recommendation_multiplier(text: str | None, mapping: dict[str, float]) -> fl
     return float(mapping.get(normalize_text(text), 1.0))
 
 
-def piecewise_linear_weight(percentile: float, low_threshold: float, high_threshold: float, low_weight: float, neutral_weight: float, high_weight: float) -> float:
+def piecewise_linear_weight(percentile: float, low_threshold: float, high_threshold: float,
+                            low_weight: float, neutral_weight: float, high_weight: float) -> float:
     midpoint = (low_threshold + high_threshold) / 2.0
     if percentile <= low_threshold:
         return low_weight
@@ -309,14 +251,43 @@ def normalize_to_weights(scores: dict[str, float]) -> dict[str, float]:
     return {key: value / total for key, value in positive.items()}
 
 
+# ── Reverse recommendation map (KC50) ────────────────────────
+_KC50_REVERSE_REC = {
+    "强烈超配": "强烈低配", "超配": "低配", "标配": "标配",
+    "低配": "超配", "强烈低配": "强烈超配",
+}
+
+
+def _kc50_rec_to_bucket_rec(rec: str) -> str:
+    """Convert KC50 ratio recommendation to KC50 bucket recommendation."""
+    return _KC50_REVERSE_REC.get(normalize_text(rec), "标配")
+
+
+# ── Holding resolution ───────────────────────────────────────
+
 def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_lookup: set[str]) -> str | None:
     fixed_name = normalize_text(name)
     if fixed_name in ignored_lookup:
         return "__IGNORE__"
     if fixed_name in alias_lookup:
         return alias_lookup[fixed_name]
-    if "国债" in fixed_name or "科创50" in fixed_name or "恒生消费" in fixed_name:
+    if "国债" in fixed_name:
         return "__IGNORE__"
+    if "恒生消费" in fixed_name:
+        return "__IGNORE__"
+    # v3: 科创50 no longer ignored
+    if "科创50" in fixed_name:
+        return "kc50"
+    if "恒生科技" in fixed_name:
+        return "hstech"
+    if "恒生" in fixed_name and "ETF" in fixed_name:
+        return "hsi"
+    if "恒生指数" in fixed_name:
+        return "hsi"
+    if "300价值" in fixed_name:
+        return "val300"
+    if "300成长" in fixed_name:
+        return "gro300"
     if "红利" in fixed_name:
         return "sh50"
     if "创业板" in fixed_name:
@@ -332,54 +303,51 @@ def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_look
     return None
 
 
-def aggregate_current_holdings(rows: list[dict[str, Any]], alias_map: dict[str, str], ignored_holdings: set[str]) -> tuple[dict[str, float], list[dict[str, Any]]]:
+def aggregate_current_holdings(
+    rows: list[dict[str, Any]], alias_map: dict[str, str], ignored_holdings: set[str],
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
     aggregated: dict[str, float] = {}
     unmapped: list[dict[str, Any]] = []
-
     for row in rows:
         third_level = parse_multiselect(get_first(row, "Ⅲ级分类", "III级分类", "三级分类"))
         if "ERP" not in third_level:
             continue
-
         name = normalize_text(get_first(row, "项目名称", "标的", "名称"))
         amount = safe_float(get_first(row, "金额", "市值", "资产金额")) or 0.0
         bucket = resolve_holding_bucket(name, alias_map, ignored_holdings)
-
         if bucket == "__IGNORE__":
             continue
         if bucket:
             aggregated[bucket] = aggregated.get(bucket, 0.0) + amount
         else:
-            unmapped.append(
-                {
-                    "name": name,
-                    "amount": round(amount, 2),
-                    "source": parse_multiselect(get_first(row, "来源")),
-                    "level_2": parse_multiselect(get_first(row, "Ⅱ级分类", "II级分类", "二级分类")),
-                }
-            )
-
+            unmapped.append({
+                "name": name, "amount": round(amount, 2),
+                "source": parse_multiselect(get_first(row, "来源")),
+                "level_2": parse_multiselect(get_first(row, "Ⅱ级分类", "II级分类", "二级分类")),
+            })
     return aggregated, unmapped
 
 
-def build_holding_breakdown(rows: list[dict[str, Any]], alias_map: dict[str, str], ignored_holdings: set[str]) -> dict[str, list[dict[str, Any]]]:
+def build_holding_breakdown(
+    rows: list[dict[str, Any]], alias_map: dict[str, str], ignored_holdings: set[str],
+) -> dict[str, list[dict[str, Any]]]:
     breakdown: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         third_level = parse_multiselect(get_first(row, "Ⅲ级分类", "III级分类", "三级分类"))
         if "ERP" not in third_level:
             continue
-
         name = normalize_text(get_first(row, "项目名称", "标的", "名称"))
         amount = safe_float(get_first(row, "金额", "市值", "资产金额")) or 0.0
         bucket = resolve_holding_bucket(name, alias_map, ignored_holdings)
         if not bucket or bucket == "__IGNORE__":
             continue
         breakdown.setdefault(bucket, []).append({"name": name, "amount": round(amount, 2)})
-
     for items in breakdown.values():
         items.sort(key=lambda item: item["amount"], reverse=True)
     return breakdown
 
+
+# ── Signal computation ───────────────────────────────────────
 
 def latest_valid_row(rows: list[dict[str, Any]], required_aliases: list[str]) -> dict[str, Any]:
     candidates: list[tuple[datetime, dict[str, Any]]] = []
@@ -390,36 +358,30 @@ def latest_valid_row(rows: list[dict[str, Any]], required_aliases: list[str]) ->
         if not any(get_first(row, alias) not in (None, "", []) for alias in required_aliases):
             continue
         candidates.append((dt, row))
-
     if not candidates:
         raise ValueError("No valid dated rows found")
-
     candidates.sort(key=lambda item: item[0])
     return candidates[-1][1]
 
 
-def compute_erp_snapshot(rows: list[dict[str, Any]], thresholds: dict[str, float], weights: dict[str, float]) -> dict[str, Any]:
+def compute_erp_snapshot(rows: list[dict[str, Any]], thresholds: dict[str, float],
+                         weights: dict[str, float]) -> dict[str, Any]:
     valid: list[tuple[datetime, float]] = []
     for row in rows:
         dt = parse_date(get_first(row, "日期"))
         premium = safe_float(get_first(row, "股权溢价指数"))
         if dt and premium is not None:
             valid.append((dt, premium))
-
     if not valid:
         raise ValueError("ERP table has no valid premium history")
-
     valid.sort(key=lambda item: item[0])
     latest_date, latest_value = valid[-1]
     history = [value for _, value in valid]
-    percentile = round(sum(1 for value in history if value <= latest_value) / len(history) * 100, 2)
+    percentile = round(sum(1 for v in history if v <= latest_value) / len(history) * 100, 2)
     aggressive_weight = piecewise_linear_weight(
         percentile,
-        float(thresholds["low"]),
-        float(thresholds["high"]),
-        float(weights["low"]),
-        float(weights["neutral"]),
-        float(weights["high"]),
+        float(thresholds["low"]), float(thresholds["high"]),
+        float(weights["low"]), float(weights["neutral"]), float(weights["high"]),
     )
     return {
         "date": latest_date.strftime("%Y-%m-%d"),
@@ -432,12 +394,16 @@ def compute_erp_snapshot(rows: list[dict[str, Any]], thresholds: dict[str, float
 
 
 def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    latest = latest_valid_row(rows, ["500建议", "1000建议", "创业板建议", "50建议", "300价值建议"])
+    """Read relative table including v3 expanded fields (KC50, HKTECH, GRO300)."""
+    latest = latest_valid_row(rows, [
+        "500建议", "1000建议", "创业板建议", "50建议",
+        "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
+    ])
     dt = parse_date(get_first(latest, "日期"))
     if not dt:
         raise ValueError("Relative row missing valid date")
 
-    dated_rows = []
+    dated_rows: list[tuple[datetime, dict[str, Any]]] = []
     for row in rows:
         row_dt = parse_date(get_first(row, "日期"))
         if row_dt:
@@ -446,17 +412,17 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     def compute_ratio_change(field_name: str, periods: int = 5) -> float | None:
         history: list[tuple[datetime, float]] = []
-        for row_dt, row in dated_rows:
-            value = safe_float(get_first(row, field_name))
+        for row_dt, r in dated_rows:
+            value = safe_float(get_first(r, field_name))
             if value is not None:
                 history.append((row_dt, value))
         if len(history) <= periods:
             return None
-        latest_value = history[-1][1]
-        base_value = history[-1 - periods][1]
-        if base_value == 0:
+        latest_val = history[-1][1]
+        base_val = history[-1 - periods][1]
+        if base_val == 0:
             return None
-        return round((latest_value / base_value - 1.0) * 100.0, 2)
+        return round((latest_val / base_val - 1.0) * 100.0, 2)
 
     return {
         "date": dt.strftime("%Y-%m-%d"),
@@ -465,62 +431,113 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "zz1000": normalize_text(get_first(latest, "1000建议")),
             "cyb": normalize_text(get_first(latest, "创业板建议")),
             "sh50": normalize_text(get_first(latest, "50建议")),
+            "kc50": normalize_text(get_first(latest, "科创50建议")),
+            "val300": normalize_text(get_first(latest, "300价值建议")),
+            "gro300": normalize_text(get_first(latest, "300成长建议")),
+            "hstech": normalize_text(get_first(latest, "恒生科技建议")),
         },
         "ratios": {
             "zz500_ratio": safe_float(get_first(latest, "500/300比价")),
             "zz1000_ratio": safe_float(get_first(latest, "1000/300比价")),
             "cyb_ratio": safe_float(get_first(latest, "创业板/300比价")),
             "sh50_ratio": safe_float(get_first(latest, "50/创业板比价", "50/300比价")),
+            "kc50_ratio": safe_float(get_first(latest, "科创50/上证50比价")),
             "val300_ratio": safe_float(get_first(latest, "300价值/成长比价")),
+            "hstech_ratio": safe_float(get_first(latest, "恒生科技/恒生比价")),
         },
         "percentiles": {
             "zz500_percentile": safe_float(get_first(latest, "500分位")),
             "zz1000_percentile": safe_float(get_first(latest, "1000分位")),
             "cyb_percentile": safe_float(get_first(latest, "创业板分位")),
             "sh50_percentile": safe_float(get_first(latest, "50分位")),
+            "kc50_percentile": safe_float(get_first(latest, "科创50分位")),
             "val300_percentile": safe_float(get_first(latest, "300价值分位")),
+            "gro300_percentile": safe_float(get_first(latest, "300成长分位")),
+            "hstech_percentile": safe_float(get_first(latest, "恒生科技分位")),
         },
         "deviations": {
             "zz500_deviation": safe_float(get_first(latest, "500偏离(%)")),
             "zz1000_deviation": safe_float(get_first(latest, "1000偏离(%)")),
             "cyb_deviation": safe_float(get_first(latest, "创业板偏离(%)")),
             "sh50_deviation": safe_float(get_first(latest, "50偏离(%)")),
+            "kc50_deviation": safe_float(get_first(latest, "科创50偏离(%)")),
             "val300_deviation": safe_float(get_first(latest, "300价值偏离(%)")),
+            "gro300_deviation": safe_float(get_first(latest, "300成长偏离(%)")),
+            "hstech_deviation": safe_float(get_first(latest, "恒生科技偏离(%)")),
         },
         "changes": {
             "zz500_change_5d": compute_ratio_change("500/300比价", 5),
             "zz1000_change_5d": compute_ratio_change("1000/300比价", 5),
             "cyb_change_5d": compute_ratio_change("创业板/300比价", 5),
             "sh50_change_5d": compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
+            "kc50_change_5d": compute_ratio_change("科创50/上证50比价", 5),
             "val300_change_5d": compute_ratio_change("300价值/成长比价", 5),
-        },
-        "style": {
-            "val300_recommendation": normalize_text(get_first(latest, "300价值建议")),
+            "hstech_change_5d": compute_ratio_change("恒生科技/恒生比价", 5),
         },
     }
 
 
-def compute_val300_style_snapshot(relative_snapshot: dict[str, Any]) -> dict[str, Any]:
-    ratio = relative_snapshot["ratios"].get("val300_ratio")
-    percentile = relative_snapshot["percentiles"].get("val300_percentile")
-    recommendation = relative_snapshot["style"].get("val300_recommendation")
-    if ratio is None or percentile is None:
-        return {"available": False, "message": "Relative base does not contain VAL300/GRO300 fields"}
+# ── HSI ERP (optional, falls back to neutral) ────────────────
+
+def compute_hsi_erp_snapshot(
+    hsi_rows: list[dict[str, Any]] | None,
+    hk_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Compute HSI ERP snapshot from Feishu table. Falls back to neutral if unavailable."""
+    if not hsi_rows:
+        return _hsi_erp_neutral(hk_config)
+
+    valid: list[tuple[datetime, float]] = []
+    for row in hsi_rows:
+        dt = parse_date(get_first(row, "日期"))
+        premium = safe_float(get_first(row, "恒生ERP", "股权溢价指数", "ERP"))
+        if dt and premium is not None:
+            valid.append((dt, premium))
+
+    if not valid:
+        return _hsi_erp_neutral(hk_config)
+
+    valid.sort(key=lambda item: item[0])
+    latest_date, latest_value = valid[-1]
+    history = [value for _, value in valid]
+    percentile = round(sum(1 for v in history if v <= latest_value) / len(history) * 100, 2)
+
+    thresholds = hk_config.get("percentile_thresholds", {"low": 40.0, "high": 60.0})
+    weights = hk_config.get("aggressive_weights", {"low": 0.30, "neutral": 0.45, "high": 0.60})
+    aggressive_weight = piecewise_linear_weight(
+        percentile,
+        float(thresholds["low"]), float(thresholds["high"]),
+        float(weights["low"]), float(weights["neutral"]), float(weights["high"]),
+    )
     return {
+        "date": latest_date.strftime("%Y-%m-%d"),
+        "equity_premium": round(latest_value, 4),
+        "percentile": percentile,
+        "aggressive_weight": round(aggressive_weight, 4),
+        "defensive_weight": round(1.0 - aggressive_weight, 4),
+        "history_points": len(history),
         "available": True,
-        "date": relative_snapshot["date"],
-        "ratio": round(float(ratio), 6),
-        "percentile": round(float(percentile), 2),
-        "recommendation": recommendation or "标配",
-        "influence_mode": "execution",
     }
 
 
-def trajectory_multiplier(
-    deviation: float | None,
-    change_5d: float | None,
-    trajectory_config: dict[str, Any],
-) -> tuple[float, str]:
+def _hsi_erp_neutral(hk_config: dict[str, Any]) -> dict[str, Any]:
+    weights = hk_config.get("aggressive_weights", {"neutral": 0.45})
+    return {
+        "date": None,
+        "equity_premium": None,
+        "percentile": 50.0,
+        "aggressive_weight": float(weights.get("neutral", 0.45)),
+        "defensive_weight": 1.0 - float(weights.get("neutral", 0.45)),
+        "history_points": 0,
+        "available": False,
+        "message": "HSI ERP table unavailable, using neutral allocation",
+    }
+
+
+# ── Trajectory overlay ───────────────────────────────────────
+
+def trajectory_multiplier(deviation: float | None, change_5d: float | None,
+                          trajectory_config: dict[str, Any]) -> tuple[float, str]:
     if not trajectory_config.get("enabled", True):
         return 1.0, "trajectory overlay disabled"
     if deviation is None or change_5d is None:
@@ -549,142 +566,336 @@ def trajectory_multiplier(
     return 1.0, "trajectory neutral"
 
 
-def build_target_weights(
-    erp_snapshot: dict[str, Any],
+# ── Cross-market allocation ──────────────────────────────────
+
+def compute_cross_market_allocation(
+    hsi_erp: dict[str, Any],
+    cross_config: dict[str, Any],
+) -> tuple[float, float]:
+    """Returns (ashare_pool_pct, hkshare_pool_pct)."""
+    hk_cap = float(cross_config.get("hk_pool_cap", 0.20))
+    hk_min = float(cross_config.get("hk_min_erp_percentile", 30))
+    hk_full = float(cross_config.get("hk_full_erp_percentile", 50))
+    hsi_pct = float(hsi_erp.get("percentile", 50.0))
+
+    if hsi_pct <= hk_min:
+        hk_pool = 0.0
+    elif hsi_pct >= hk_full:
+        hk_pool = hk_cap
+    else:
+        ratio = (hsi_pct - hk_min) / max(1e-9, hk_full - hk_min)
+        hk_pool = hk_cap * ratio
+
+    hk_pool = max(0.0, min(hk_pool, hk_cap))
+    ashare_pool = 1.0 - hk_pool
+    return ashare_pool, hk_pool
+
+
+# ═══════════════════════════════════════════════════════════════
+#  TARGET WEIGHT BUILDER (v3 — dual-pool)
+# ═══════════════════════════════════════════════════════════════
+
+def _build_pool_aggressive_buckets(
+    bucket_keys: list[str],
     relative_snapshot: dict[str, Any],
-    val300_style_snapshot: dict[str, Any],
     execution_config: dict[str, Any],
     current_holdings: dict[str, float],
+    aggressive_alpha_total: float,
+    bucket_metadata: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    aggressive_total = float(erp_snapshot["aggressive_weight"])
+    """Build aggressive bucket targets for a pool."""
     recs = relative_snapshot["recommendations"]
-    value_style_rec = normalize_text(val300_style_snapshot.get("recommendation") or "标配")
-
-    recommendation_multipliers = execution_config["recommendation_multipliers"]
-    value_style_tilt = execution_config["value_style_tilt"]
-    growth_style_tilt = execution_config["growth_style_tilt"]
-    alpha_budget_weights = execution_config["alpha_budget_weights"]
-    alpha_base_weights = execution_config["alpha_base_weights"]
-    alpha_bucket_caps = execution_config["alpha_bucket_caps"]
+    base_weights = execution_config["alpha_base_weights"]
+    caps = execution_config["alpha_bucket_caps"]
+    multipliers = execution_config["recommendation_multipliers"]
     forced_exit_thresholds = execution_config.get("forced_exit_percentiles", {})
     reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
-    reentry_min_current_amount = float(execution_config.get("reentry_min_current_amount", 1000.0))
+    reentry_min = float(execution_config.get("reentry_min_current_amount", 1000.0))
     trajectory_config = execution_config.get("trajectory_overlay", {})
-    thresholds = execution_config["percentile_thresholds"]
 
-    value_tilt = float(value_style_tilt.get(value_style_rec, 1.0))
-    growth_tilt = growth_style_tilt.get(value_style_rec, growth_style_tilt.get("标配", {}))
-    alpha_budget = piecewise_linear_weight(
-        float(erp_snapshot["percentile"]),
-        float(thresholds["low"]),
-        float(thresholds["high"]),
-        float(alpha_budget_weights["low"]),
-        float(alpha_budget_weights["neutral"]),
-        float(alpha_budget_weights["high"]),
-    )
-    alpha_budget = max(0.0, min(alpha_budget, 0.45))
+    scores: dict[str, float] = {}
+    for bucket in bucket_keys:
+        base = float(base_weights.get(bucket, 0.3))
+        rec = recs.get(bucket, "标配")
+        # KC50 reverse logic
+        if bucket == "kc50":
+            rec = _kc50_rec_to_bucket_rec(rec)
+        scores[bucket] = base * recommendation_multiplier(rec, multipliers)
 
-    sh50_percentile = relative_snapshot["percentiles"].get("sh50_percentile")
-    sh50_forced_exit_threshold = forced_exit_thresholds.get("sh50")
-    sh50_forced_exit = (
-        sh50_forced_exit_threshold is not None
-        and sh50_percentile is not None
-        and float(sh50_percentile) >= float(sh50_forced_exit_threshold)
-    )
-
-    sh50_target = alpha_budget * (1.0 - aggressive_total)
-    sh50_target *= recommendation_multiplier(recs.get("sh50"), recommendation_multipliers)
-    sh50_target *= value_tilt
-    sh50_target *= float(growth_tilt.get("sh50_bonus", 1.0))
-    sh50_target = min(sh50_target, float(alpha_bucket_caps.get("sh50", 0.18)))
-    if sh50_forced_exit:
-        sh50_target = 0.0
-
-    aggressive_scores = {
-        "cyb": float(alpha_base_weights.get("cyb", 0.3)) * recommendation_multiplier(recs.get("cyb"), recommendation_multipliers) * float(growth_tilt.get("cyb", 1.0)),
-        "zz500": float(alpha_base_weights.get("zz500", 0.4)) * recommendation_multiplier(recs.get("zz500"), recommendation_multipliers) * float(growth_tilt.get("zz500", 1.0)),
-        "zz1000": float(alpha_base_weights.get("zz1000", 0.3)) * recommendation_multiplier(recs.get("zz1000"), recommendation_multipliers) * float(growth_tilt.get("zz1000", 1.0)),
-    }
-
-    aggressive_alpha_total = alpha_budget * aggressive_total
-    aggressive_weights = normalize_to_weights(aggressive_scores)
+    local_weights = normalize_to_weights(scores)
 
     targets: dict[str, dict[str, Any]] = {}
-    for bucket, local_weight in aggressive_weights.items():
-        bucket_percentile = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
-        bucket_deviation = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
-        bucket_change_5d = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
-        current_amount = float(current_holdings.get(bucket, 0.0))
-        forced_exit_threshold = forced_exit_thresholds.get(bucket)
+    for bucket, local_w in local_weights.items():
+        percentile = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
+        deviation = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
+        change_5d = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
+        cur_amount = float(current_holdings.get(bucket, 0.0))
+
+        force_threshold = forced_exit_thresholds.get(bucket)
         forced_exit = (
-            forced_exit_threshold is not None
-            and bucket_percentile is not None
-            and float(bucket_percentile) >= float(forced_exit_threshold)
+            force_threshold is not None and percentile is not None
+            and float(percentile) >= float(force_threshold)
         )
         reentry_threshold = reentry_thresholds.get(bucket)
         reentry_blocked = (
-            reentry_threshold is not None
-            and bucket_percentile is not None
-            and current_amount <= reentry_min_current_amount
-            and float(bucket_percentile) > float(reentry_threshold)
+            reentry_threshold is not None and percentile is not None
+            and cur_amount <= reentry_min
+            and float(percentile) > float(reentry_threshold)
         )
-        traj_multiplier, traj_reason = trajectory_multiplier(
-            bucket_deviation,
-            bucket_change_5d,
-            trajectory_config,
-        )
+        traj_mult, traj_reason = trajectory_multiplier(deviation, change_5d, trajectory_config)
 
-        target_weight = aggressive_alpha_total * local_weight
-        target_weight = min(target_weight, float(alpha_bucket_caps.get(bucket, 1.0)))
+        tw = aggressive_alpha_total * local_w
+        tw = min(tw, float(caps.get(bucket, 1.0)))
         if forced_exit:
-            target_weight = 0.0
+            tw = 0.0
         elif reentry_blocked:
-            target_weight = 0.0
+            tw = 0.0
         else:
-            target_weight *= traj_multiplier
+            tw *= traj_mult
+
+        meta = bucket_metadata.get(bucket, {})
         targets[bucket] = {
             "bucket": bucket,
-            "label": BUCKET_METADATA[bucket]["label"],
-            "sleeve": "aggressive",
-            "signal": recs.get(bucket) or "标配",
-            "style_overlay": value_style_rec,
-            "current_percentile": round(float(bucket_percentile), 2) if bucket_percentile is not None else None,
-            "current_deviation": round(float(bucket_deviation), 2) if bucket_deviation is not None else None,
-            "change_5d": round(float(bucket_change_5d), 2) if bucket_change_5d is not None else None,
-            "forced_exit_threshold": float(forced_exit_threshold) if forced_exit_threshold is not None else None,
+            "label": meta.get("label", bucket),
+            "sleeve": meta.get("sleeve", "aggressive"),
+            "pool": meta.get("pool", "ashare"),
+            "signal": _rec_for_bucket(bucket, recs),
+            "current_percentile": round(float(percentile), 2) if percentile is not None else None,
+            "current_deviation": round(float(deviation), 2) if deviation is not None else None,
+            "change_5d": round(float(change_5d), 2) if change_5d is not None else None,
+            "forced_exit_threshold": float(force_threshold) if force_threshold is not None else None,
             "forced_exit": forced_exit,
             "reentry_threshold": float(reentry_threshold) if reentry_threshold is not None else None,
             "reentry_blocked": reentry_blocked,
-            "trajectory_multiplier": round(float(traj_multiplier), 2),
+            "trajectory_multiplier": round(float(traj_mult), 2),
             "trajectory_reason": traj_reason,
-            "target_weight": round(target_weight, 4),
+            "target_weight": round(tw, 4),
         }
-
-    targets["sh50"] = {
-        "bucket": "sh50",
-        "label": BUCKET_METADATA["sh50"]["label"],
-        "sleeve": "defensive",
-        "signal": recs.get("sh50") or "标配",
-        "style_overlay": value_style_rec,
-        "current_percentile": round(float(sh50_percentile), 2) if sh50_percentile is not None else None,
-        "forced_exit_threshold": float(sh50_forced_exit_threshold) if sh50_forced_exit_threshold is not None else None,
-        "forced_exit": sh50_forced_exit,
-        "target_weight": round(sh50_target, 4),
-    }
-
-    used_alpha_weight = sh50_target + sum(float(item["target_weight"]) for item in targets.values() if item["bucket"] != "sh50")
-    hs300_target = max(0.0, 1.0 - used_alpha_weight)
-    targets["hs300"] = {
-        "bucket": "hs300",
-        "label": BUCKET_METADATA["hs300"]["label"],
-        "sleeve": "defensive",
-        "signal": "core",
-        "style_overlay": value_style_rec,
-        "target_weight": round(hs300_target, 4),
-    }
     return targets
 
-def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: list[dict[str, Any]], targets: dict[str, dict[str, Any]], holding_breakdown: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+
+def _rec_for_bucket(bucket: str, recs: dict[str, str]) -> str:
+    if bucket == "kc50":
+        return _kc50_rec_to_bucket_rec(recs.get(bucket, "标配"))
+    return recs.get(bucket, "标配")
+
+
+def _style_pair_budget_ratio(val300_pct: float | None, style_config: dict[str, Any]) -> float:
+    """Returns fraction of style pair budget allocated to VAL300 (rest goes to GRO300)."""
+    thresholds = style_config.get("percentile_thresholds", {"low": 30, "high": 70})
+    split = style_config.get("split", {})
+    if val300_pct is None:
+        return float(split.get("neutral_weight", 0.50))
+    low = float(thresholds.get("low", 30))
+    high = float(thresholds.get("high", 70))
+    val_w = float(split.get("value_cheap_weight", 0.70))
+    neu_w = float(split.get("neutral_weight", 0.50))
+    gro_w = float(split.get("growth_cheap_weight", 0.70))
+
+    if val300_pct <= low:
+        return val_w  # value cheap → most to VAL300
+    if val300_pct >= high:
+        return 1.0 - gro_w  # growth cheap → most to GRO300
+    # linear interpolation
+    ratio = (val300_pct - low) / max(1e-9, high - low)
+    return val_w + ((1.0 - gro_w) - val_w) * ratio
+
+
+def build_target_weights(
+    erp_snapshot: dict[str, Any],
+    hsi_erp_snapshot: dict[str, Any],
+    relative_snapshot: dict[str, Any],
+    execution_config: dict[str, Any],
+    current_holdings: dict[str, float],
+) -> dict[str, dict[str, Any]]:
+    """Build all target weights for both pools (v3 expanded)."""
+    thresholds = execution_config["percentile_thresholds"]
+    recs = relative_snapshot["recommendations"]
+    caps = execution_config["alpha_bucket_caps"]
+    multipliers = execution_config["recommendation_multipliers"]
+    base_weights = execution_config["alpha_base_weights"]
+    alpha_budget_w = execution_config["alpha_budget_weights"]
+    style_config = execution_config.get("style_pair", {})
+    forced_exit_thresholds = execution_config.get("forced_exit_percentiles", {})
+    reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
+    reentry_min = float(execution_config.get("reentry_min_current_amount", 1000.0))
+    trajectory_config = execution_config.get("trajectory_overlay", {})
+    bucket_meta = execution_config.get("bucket_metadata", {})
+
+    # ── Cross-market ──
+    cross_config = execution_config.get("cross_market", {})
+    ashare_pool, hk_pool = compute_cross_market_allocation(hsi_erp_snapshot, cross_config)
+
+    # ── A-share: ERP-driven sleeve split ──
+    ashare_aggressive = float(erp_snapshot["aggressive_weight"])
+    ashare_defensive = 1.0 - ashare_aggressive
+
+    ashare_alpha_budget = piecewise_linear_weight(
+        float(erp_snapshot["percentile"]),
+        float(thresholds["low"]), float(thresholds["high"]),
+        float(alpha_budget_w["low"]), float(alpha_budget_w["neutral"]), float(alpha_budget_w["high"]),
+    )
+    ashare_alpha_budget = max(0.0, min(ashare_alpha_budget, 0.45))
+
+    # ── HK: ERP-driven sleeve split ──
+    hk_config = execution_config.get("hk_erp", {})
+    hk_thresholds = hk_config.get("percentile_thresholds", {"low": 40.0, "high": 60.0})
+    hk_weights = hk_config.get("aggressive_weights", {"low": 0.30, "neutral": 0.45, "high": 0.60})
+    hk_aggressive = float(hsi_erp_snapshot["aggressive_weight"])
+
+    targets: dict[str, dict[str, Any]] = {}
+
+    # ═══ A-share defensive ═══
+    ashare_def_total = ashare_pool * ashare_defensive
+    def_alpha_total = ashare_def_total * ashare_alpha_budget
+
+    # -- Style pair (VAL300 / GRO300) --
+    style_budget_ratio = float(style_config.get("budget_ratio", 0.30))
+    style_pair_budget = def_alpha_total * style_budget_ratio
+    val300_pct = relative_snapshot["percentiles"].get("val300_percentile")
+    val300_frac = _style_pair_budget_ratio(val300_pct, style_config)
+
+    def _style_bucket(bucket: str, tw: float, rec_key: str) -> dict[str, Any]:
+        pct = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
+        dev = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
+        chg = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
+        cur_amt = float(current_holdings.get(bucket, 0.0))
+        ft = forced_exit_thresholds.get(bucket)
+        fe = ft is not None and pct is not None and float(pct) >= float(ft)
+        rt = reentry_thresholds.get(bucket)
+        rb = rt is not None and pct is not None and cur_amt <= reentry_min and float(pct) > float(rt)
+        tm, tr = trajectory_multiplier(dev, chg, trajectory_config)
+        tw = min(tw, float(caps.get(bucket, 1.0)))
+        if fe:
+            tw = 0.0
+        elif rb:
+            tw = 0.0
+        else:
+            tw *= tm
+        meta = bucket_meta.get(bucket, {})
+        return {
+            "bucket": bucket, "label": meta.get("label", bucket),
+            "sleeve": meta.get("sleeve", "defensive"), "pool": meta.get("pool", "ashare"),
+            "signal": recs.get(rec_key, "标配"),
+            "current_percentile": round(float(pct), 2) if pct is not None else None,
+            "current_deviation": round(float(dev), 2) if dev is not None else None,
+            "change_5d": round(float(chg), 2) if chg is not None else None,
+            "forced_exit_threshold": float(ft) if ft is not None else None,
+            "forced_exit": fe,
+            "reentry_threshold": float(rt) if rt is not None else None,
+            "reentry_blocked": rb,
+            "trajectory_multiplier": round(float(tm), 2),
+            "trajectory_reason": tr,
+            "target_weight": round(tw, 4),
+        }
+
+    val300_tw = style_pair_budget * val300_frac
+    gro300_tw = style_pair_budget * (1.0 - val300_frac)
+    targets["val300"] = _style_bucket("val300", val300_tw, "val300")
+    targets["gro300"] = _style_bucket("gro300", gro300_tw, "gro300")
+
+    # -- SH50 (defensive alpha) --
+    sh50_percentile = relative_snapshot["percentiles"].get("sh50_percentile")
+    sh50_ft = forced_exit_thresholds.get("sh50")
+    sh50_fe = sh50_ft is not None and sh50_percentile is not None and float(sh50_percentile) >= float(sh50_ft)
+
+    sh50_tw = def_alpha_total * (1.0 - style_budget_ratio)
+    sh50_tw *= recommendation_multiplier(recs.get("sh50"), multipliers)
+    sh50_tw = min(sh50_tw, float(caps.get("sh50", 0.18)))
+    if sh50_fe:
+        sh50_tw = 0.0
+
+    meta_sh50 = bucket_meta.get("sh50", {})
+    targets["sh50"] = {
+        "bucket": "sh50", "label": meta_sh50.get("label", "防守价值"),
+        "sleeve": "defensive", "pool": "ashare",
+        "signal": recs.get("sh50", "标配"),
+        "current_percentile": round(float(sh50_percentile), 2) if sh50_percentile is not None else None,
+        "forced_exit_threshold": float(sh50_ft) if sh50_ft is not None else None,
+        "forced_exit": sh50_fe,
+        "target_weight": round(sh50_tw, 4),
+    }
+
+    # -- HS300 core (residual) --
+    used_def = sh50_tw + val300_tw + gro300_tw
+    hs300_tw = max(0.0, ashare_def_total - used_def)
+    meta_hs = bucket_meta.get("hs300", {})
+    targets["hs300"] = {
+        "bucket": "hs300", "label": meta_hs.get("label", "沪深300"),
+        "sleeve": "defensive", "pool": "ashare",
+        "signal": "core",
+        "target_weight": round(hs300_tw, 4),
+    }
+
+    # ═══ A-share aggressive ═══
+    ashare_agg_total = ashare_pool * ashare_aggressive
+    agg_alpha_total = ashare_agg_total * ashare_alpha_budget
+    agg_buckets = _build_pool_aggressive_buckets(
+        ["cyb", "zz500", "zz1000", "kc50"],
+        relative_snapshot, execution_config, current_holdings,
+        agg_alpha_total, bucket_meta,
+    )
+    targets.update(agg_buckets)
+
+    # ═══ HK pool ═══
+    hk_def_total = hk_pool * (1.0 - hk_aggressive)
+    meta_hsi = bucket_meta.get("hsi", {})
+    targets["hsi"] = {
+        "bucket": "hsi", "label": meta_hsi.get("label", "恒生指数"),
+        "sleeve": "defensive", "pool": "hkshare",
+        "signal": "core",
+        "target_weight": round(hk_def_total, 4),
+    }
+
+    hk_agg_total = hk_pool * hk_aggressive
+    # HKTECH: with forced exit / reentry / trajectory
+    hstech_pct = relative_snapshot["percentiles"].get("hstech_percentile")
+    hstech_dev = relative_snapshot.get("deviations", {}).get("hstech_deviation")
+    hstech_chg = relative_snapshot.get("changes", {}).get("hstech_change_5d")
+    hstech_cur = float(current_holdings.get("hstech", 0.0))
+    hstech_ft = forced_exit_thresholds.get("hstech")
+    hstech_fe = hstech_ft is not None and hstech_pct is not None and float(hstech_pct) >= float(hstech_ft)
+    hstech_rt = reentry_thresholds.get("hstech")
+    hstech_rb = hstech_rt is not None and hstech_pct is not None and hstech_cur <= reentry_min and float(hstech_pct) > float(hstech_rt)
+    hstech_tm, hstech_tr = trajectory_multiplier(hstech_dev, hstech_chg, trajectory_config)
+
+    hstech_tw = hk_agg_total
+    hstech_tw = min(hstech_tw, float(caps.get("hstech", 0.08)))
+    if hstech_fe:
+        hstech_tw = 0.0
+    elif hstech_rb:
+        hstech_tw = 0.0
+    else:
+        hstech_tw *= hstech_tm
+
+    meta_ht = bucket_meta.get("hstech", {})
+    targets["hstech"] = {
+        "bucket": "hstech", "label": meta_ht.get("label", "恒生科技"),
+        "sleeve": "aggressive", "pool": "hkshare",
+        "signal": recs.get("hstech", "标配"),
+        "current_percentile": round(float(hstech_pct), 2) if hstech_pct is not None else None,
+        "current_deviation": round(float(hstech_dev), 2) if hstech_dev is not None else None,
+        "change_5d": round(float(hstech_chg), 2) if hstech_chg is not None else None,
+        "forced_exit_threshold": float(hstech_ft) if hstech_ft is not None else None,
+        "forced_exit": hstech_fe,
+        "reentry_threshold": float(hstech_rt) if hstech_rt is not None else None,
+        "reentry_blocked": hstech_rb,
+        "trajectory_multiplier": round(float(hstech_tm), 2),
+        "trajectory_reason": hstech_tr,
+        "target_weight": round(hstech_tw, 4),
+    }
+
+    return targets
+
+
+# ── Rebalance plan ───────────────────────────────────────────
+
+def build_rebalance_plan(
+    current_holdings: dict[str, float],
+    unmapped_holdings: list[dict[str, Any]],
+    targets: dict[str, dict[str, Any]],
+    holding_breakdown: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     managed_total = round(sum(current_holdings.values()), 2)
     unmapped_total = round(sum(item["amount"] for item in unmapped_holdings), 2)
     total_erp_amount = round(managed_total + unmapped_total, 2)
@@ -695,15 +906,27 @@ def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: 
         current_weight = round(current_amount / managed_total, 4) if managed_total > 0 else 0.0
         target_amount = round(managed_total * float(target["target_weight"]), 2)
         delta_amount = round(target_amount - current_amount, 2)
-        action = "hold"
         if delta_amount > 0:
             action = "buy"
         elif delta_amount < 0:
             action = "sell"
+        else:
+            action = "hold"
+        positions.append({
+            **target,
+            "current_amount": current_amount,
+            "current_weight": current_weight,
+            "target_amount": target_amount,
+            "delta_amount": delta_amount,
+            "action": action,
+            "holding_breakdown": (holding_breakdown or {}).get(bucket, []),
+        })
 
-        positions.append({**target, "current_amount": current_amount, "current_weight": current_weight, "target_amount": target_amount, "delta_amount": delta_amount, "action": action, "holding_breakdown": (holding_breakdown or {}).get(bucket, [])})
-
-    positions.sort(key=lambda item: (item["sleeve"], item["bucket"]))
+    positions.sort(key=lambda item: (
+        {"ashare": 0, "hkshare": 1}.get(item.get("pool", ""), 2),
+        {"defensive": 0, "aggressive": 1}.get(item.get("sleeve", ""), 2),
+        item.get("bucket", ""),
+    ))
 
     return {
         "total_erp_amount": total_erp_amount,
@@ -711,10 +934,20 @@ def build_rebalance_plan(current_holdings: dict[str, float], unmapped_holdings: 
         "unmapped_amount": unmapped_total,
         "managed_position_count": len(current_holdings),
         "unmapped_position_count": len(unmapped_holdings),
+        "ashare_pool": round(targets.get("hs300", {}).get("target_weight", 0) + sum(
+            float(t.get("target_weight", 0)) for k, t in targets.items()
+            if t.get("pool") == "ashare" and k != "hs300"
+        ), 4),
+        "hkshare_pool": round(sum(
+            float(t.get("target_weight", 0)) for k, t in targets.items()
+            if t.get("pool") == "hkshare"
+        ), 4),
         "positions": positions,
         "unmapped_holdings": unmapped_holdings,
     }
 
+
+# ── Output ───────────────────────────────────────────────────
 
 def save_output(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -724,7 +957,11 @@ def save_output(path: Path, payload: dict[str, Any]) -> None:
 def render_daily_summary() -> Path | None:
     if not DEFAULT_RENDER_SCRIPT.exists():
         return None
-    completed = subprocess.run([sys.executable, str(DEFAULT_RENDER_SCRIPT)], cwd=DEFAULT_RENDER_SCRIPT.parent.parent, text=True, capture_output=True, encoding="utf-8", errors="replace", check=False)
+    completed = subprocess.run(
+        [sys.executable, str(DEFAULT_RENDER_SCRIPT)],
+        cwd=DEFAULT_RENDER_SCRIPT.parent.parent,
+        text=True, capture_output=True, encoding="utf-8", errors="replace", check=False,
+    )
     if completed.returncode != 0:
         raise RuntimeError(f"Failed to render daily summary: {completed.stderr.strip() or completed.stdout.strip()}")
     output_text = (completed.stdout or "").strip()
@@ -735,26 +972,63 @@ def render_daily_summary() -> Path | None:
 
 def print_summary(payload: dict[str, Any]) -> None:
     erp = payload["signals"]["erp"]
+    hsi = payload["signals"].get("hsi_erp", {})
     relative = payload["signals"]["relative"]
-    style = payload["signals"]["val300_style"]
     portfolio = payload["portfolio"]
 
     print("=" * 60)
-    print("ERP Execution Cloud Plan")
+    print("ERP Execution Cloud Plan v3")
     print("=" * 60)
-    print(f"ERP latest date: {erp['date']}")
-    print(f"ERP premium / percentile: {erp['equity_premium']:.2f} / {erp['percentile']:.2f}%")
-    print(f"Aggressive / defensive: {erp['aggressive_weight']:.2%} / {erp['defensive_weight']:.2%}")
-    print(f"Relative latest date: {relative['date']}")
-    print("Recommendations:")
-    for key, value in relative["recommendations"].items():
-        print(f"  - {key}: {value or '标配'}")
-    if style.get("available"):
-        print(f"VAL300/GRO300: {style['ratio']:.4f} / {style['percentile']:.2f}% / {style['recommendation']}")
-    print(f"Managed ERP capital: {portfolio['managed_amount']:.2f}")
-    for item in portfolio["positions"]:
-        print(f"  - {item['label']}: current {item['current_amount']:.2f} -> target {item['target_amount']:.2f} ({item['action']} {item['delta_amount']:+.2f})")
+    print(f"A-share ERP: {erp['date']}  premium={erp['equity_premium']:.2f}  pct={erp['percentile']:.2f}%  agg={erp['aggressive_weight']:.2%}")
+    if hsi.get("available"):
+        print(f"HK     ERP: {hsi['date']}  premium={hsi['equity_premium']:.2f}  pct={hsi['percentile']:.2f}%  agg={hsi['aggressive_weight']:.2%}")
+    else:
+        print(f"HK     ERP: {hsi.get('message', 'unavailable')} (neutral fallback)")
 
+    pool_ashare = portfolio.get("ashare_pool", 0)
+    pool_hk = portfolio.get("hkshare_pool", 0)
+    print(f"Pool split: A-share={pool_ashare:.2%}  HK={pool_hk:.2%}")
+    print(f"Managed ERP capital: {portfolio['managed_amount']:,.2f}")
+    print()
+
+    for item in portfolio["positions"]:
+        pool_tag = f"[{item.get('pool', '?')}]"
+        sleeve_tag = item.get("sleeve", "")
+        extra = []
+        if item.get("forced_exit"):
+            extra.append(f"FORCED EXIT (pct={item.get('current_percentile')})")
+        if item.get("reentry_blocked"):
+            extra.append(f"REENTRY BLOCKED (pct={item.get('current_percentile')}>{item.get('reentry_threshold')})")
+        if item.get("trajectory_reason", "").startswith("trajectory") and item["trajectory_reason"] != "trajectory neutral":
+            extra.append(f"traj={item['trajectory_reason']} ×{item['trajectory_multiplier']}")
+        extras = " | ".join(extra) if extra else ""
+        print(
+            f"  {pool_tag} {sleeve:10s} {item['label']:16s} "
+            f"cur={item['current_amount']:>10,.2f}  →  tgt={item['target_amount']:>10,.2f}  "
+            f"({item['action']:4s} {item['delta_amount']:>+10,.2f})"
+            + (f"  [{extras}]" if extras else "")
+        )
+
+
+# ── Argument parsing ─────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate ERP execution plan via Feishu OpenAPI (v3)")
+    parser.add_argument("--erp-app-token", default=os.environ.get("ERP_EXEC_ERP_APP_TOKEN", DEFAULT_ERP_APP_TOKEN))
+    parser.add_argument("--erp-table-id", default=os.environ.get("ERP_EXEC_ERP_TABLE_ID", DEFAULT_ERP_TABLE_ID))
+    parser.add_argument("--relative-app-token", default=os.environ.get("ERP_EXEC_RELATIVE_APP_TOKEN", DEFAULT_RELATIVE_APP_TOKEN))
+    parser.add_argument("--relative-table-id", default=os.environ.get("ERP_EXEC_RELATIVE_TABLE_ID", DEFAULT_RELATIVE_TABLE_ID))
+    parser.add_argument("--asset-app-token", default=os.environ.get("ERP_EXEC_ASSET_APP_TOKEN", DEFAULT_ASSET_APP_TOKEN))
+    parser.add_argument("--asset-table-id", default=os.environ.get("ERP_EXEC_ASSET_TABLE_ID", DEFAULT_ASSET_TABLE_ID))
+    parser.add_argument("--hsi-erp-app-token", default=os.environ.get("ERP_EXEC_HSI_ERP_APP_TOKEN", DEFAULT_HSI_ERP_APP_TOKEN))
+    parser.add_argument("--hsi-erp-table-id", default=os.environ.get("ERP_EXEC_HSI_ERP_TABLE_ID", DEFAULT_HSI_ERP_TABLE_ID))
+    parser.add_argument("--execution-config-path", default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)))
+    parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
+    parser.add_argument("--page-size", type=int, default=500)
+    return parser.parse_args()
+
+
+# ── Main ─────────────────────────────────────────────────────
 
 def main() -> None:
     args = parse_args()
@@ -769,20 +1043,28 @@ def main() -> None:
     relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
     asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
 
-    erp_snapshot = compute_erp_snapshot(erp_rows, execution_config["percentile_thresholds"], execution_config["aggressive_weights"])
-    relative_snapshot = compute_relative_snapshot(relative_rows)
-    val300_style_snapshot = compute_val300_style_snapshot(relative_snapshot)
+    # HSI ERP (optional)
+    hsi_rows: list[dict[str, Any]] | None = None
+    if args.hsi_erp_app_token and args.hsi_erp_table_id:
+        try:
+            hsi_rows = reader.list_all_records(args.hsi_erp_app_token, args.hsi_erp_table_id, args.page_size)
+        except Exception:
+            hsi_rows = None
 
-    alias_map = {normalize_text(key): normalize_text(value) for key, value in execution_config.get("holding_alias_map", {}).items()}
+    erp_snapshot = compute_erp_snapshot(erp_rows, execution_config["percentile_thresholds"], execution_config["aggressive_weights"])
+    hsi_erp_snapshot = compute_hsi_erp_snapshot(hsi_rows, execution_config.get("hk_erp", {}))
+    relative_snapshot = compute_relative_snapshot(relative_rows)
+
+    alias_map = {normalize_text(k): normalize_text(v) for k, v in execution_config.get("holding_alias_map", {}).items()}
     ignored_holdings = {normalize_text(item) for item in execution_config.get("ignored_erp_holdings", [])}
     current_holdings, unmapped_holdings = aggregate_current_holdings(asset_rows, alias_map, ignored_holdings)
     holding_breakdown = build_holding_breakdown(asset_rows, alias_map, ignored_holdings)
 
-    targets = build_target_weights(erp_snapshot, relative_snapshot, val300_style_snapshot, execution_config, current_holdings)
+    targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
     portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
 
     payload = {
-        "version": "1.0",
+        "version": "3.0",
         "signal_type": "erp_execution_plan",
         "generated_at": datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds"),
         "inputs": {
@@ -790,10 +1072,15 @@ def main() -> None:
             "erp_table": {"app_token": args.erp_app_token, "table_id": args.erp_table_id},
             "relative_table": {"app_token": args.relative_app_token, "table_id": args.relative_table_id},
             "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id},
+            "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },
-        "signals": {"erp": erp_snapshot, "relative": relative_snapshot, "val300_style": val300_style_snapshot},
+        "signals": {
+            "erp": erp_snapshot,
+            "hsi_erp": hsi_erp_snapshot,
+            "relative": relative_snapshot,
+        },
         "portfolio": portfolio,
     }
 

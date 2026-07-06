@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Push the latest ERP daily summary to Feishu webhook.
+Push the latest ERP daily summary to Feishu webhook — v4 (10-bucket).
+Produces a compact execution card: current → target amounts, buy/sell deltas,
+plus forced-exit / reentry / trajectory warnings.
 """
 
 from __future__ import annotations
@@ -20,12 +22,15 @@ import requests
 ROOT = Path(__file__).resolve().parent
 PLAN_PATH = ROOT / "output" / "erp_execution_plan.json"
 SUMMARY_PATH = ROOT / "output" / "erp_daily_summary.md"
+
+# v4: 10-bucket display order, grouped by pool
 BUCKET_ORDER = {
-    "hs300": 0,
-    "sh50": 1,
-    "cyb": 2,
-    "zz500": 3,
-    "zz1000": 4,
+    # A-share defensive
+    "hs300": 0, "sh50": 1, "val300": 2, "gro300": 3,
+    # A-share aggressive
+    "cyb": 4, "zz500": 5, "zz1000": 6, "kc50": 7,
+    # HK
+    "hsi": 8, "hstech": 9,
 }
 
 
@@ -55,65 +60,127 @@ def ordered_positions(plan: dict) -> list[dict]:
     )
 
 
+def forced_exit_text(item: dict) -> str:
+    if not item.get("forced_exit"):
+        return ""
+    pct = item.get("current_percentile")
+    threshold = item.get("forced_exit_threshold")
+    if pct is None or threshold is None:
+        return " | ⚠ 强制退出"
+    return f" | ⚠ 强制退出（分位 {pct:.1f}% ≥ {threshold:.1f}%）"
+
+
 def reentry_text(item: dict) -> str:
     if not item.get("reentry_blocked"):
         return ""
-    percentile = item.get("current_percentile")
+    pct = item.get("current_percentile")
     threshold = item.get("reentry_threshold")
-    if percentile is None or threshold is None:
-        return " | 暂不回补"
-    return f" | 暂不回补（分位 {percentile:.1f}% > 阈值 {threshold:.1f}%）"
+    if pct is None or threshold is None:
+        return " | 🚫 暂不回补"
+    return f" | 🚫 暂不回补（分位 {pct:.1f}% > {threshold:.1f}%）"
 
 
 def trajectory_text(item: dict) -> str:
     multiplier = item.get("trajectory_multiplier")
     reason = item.get("trajectory_reason")
-    if multiplier is None or reason in (None, "", "trajectory neutral", "trajectory metrics unavailable", "trajectory overlay disabled"):
+    if multiplier is None or reason in (
+        None, "", "trajectory neutral",
+        "trajectory metrics unavailable", "trajectory overlay disabled",
+    ):
         return ""
     deviation = item.get("current_deviation")
     change_5d = item.get("change_5d")
     reason_map = {
-        "trajectory hot": "轨迹过热",
-        "trajectory warm": "轨迹偏热",
-        "trajectory repair strong": "低位强修复",
-        "trajectory repair light": "低位轻修复",
-        "trajectory falling": "仍在下滑途中",
+        "trajectory hot": "🔥 轨迹过热",
+        "trajectory warm": "🌤 轨迹偏热",
+        "trajectory repair strong": "🩹 低位强修复",
+        "trajectory repair light": "🩹 低位轻修复",
+        "trajectory falling": "📉 仍在下滑",
     }
     label = reason_map.get(reason, reason)
     if deviation is None or change_5d is None:
-        return f" | {label}（乘数 {multiplier:.2f}）"
-    return f" | {label}（30日偏离 {deviation:+.2f}%，5日变化 {change_5d:+.2f}%，乘数 {multiplier:.2f}）"
+        return f" | {label}（乘数 ×{multiplier:.2f}）"
+    return (
+        f" | {label}（30日偏离 {deviation:+.2f}%，"
+        f"5日变化 {change_5d:+.2f}%，乘数 ×{multiplier:.2f}）"
+    )
 
 
 def build_payload(plan: dict, summary_text: str) -> dict:
     relative = plan["signals"]["relative"]
+    erp = plan["signals"]["erp"]
+    hsi = plan["signals"].get("hsi_erp", {})
+    portfolio = plan["portfolio"]
     positions = ordered_positions(plan)
 
     content: list[list[dict[str, str]]] = []
-    content.append([{"tag": "text", "text": "ERP执行日报"}])
-    content.append([{"tag": "text", "text": f"调仓建议（{relative['date']}）"}])
+
+    # ── Header ──
+    content.append([{"tag": "text", "text": f"📊 ERP执行日报 ({relative['date']})"}])
+
+    # ── Signal summary (compact) ──
+    erp_line = (
+        f"A股 ERP {erp['percentile']:.0f}% → 进攻 {erp['aggressive_weight']:.0%}"
+    )
+    hk_line = ""
+    if hsi.get("available"):
+        hk_line = (
+            f" | 港股 ERP {hsi['percentile']:.0f}% → 进攻 {hsi['aggressive_weight']:.0%}"
+        )
+    elif hsi.get("message"):
+        hk_line = f" | 港股 {hsi['message'][:20]}"
+    pool_line = (
+        f" | A股 {portfolio.get('ashare_pool', 0):.0%}"
+        f" / 港股 {portfolio.get('hkshare_pool', 0):.0%}"
+    )
+    content.append([{"tag": "text", "text": erp_line + hk_line + pool_line}])
+    content.append([{"tag": "text", "text": f"ERP管理资金: {portfolio['managed_amount']:,.0f}"}])
+
+    # ── Divider before positions ──
+    content.append([{"tag": "text", "text": "━━━━ 调仓建议 ━━━━"}])
+
+    # ── Positions ──
+    current_pool = None
     for item in positions:
+        pool = item.get("pool", "")
+        sleeve = item.get("sleeve", "")
+        bucket = item["bucket"]
+
+        # Pool header
+        if pool != current_pool:
+            current_pool = pool
+            pool_label = "🇭🇰 港股" if pool == "hkshare" else "🇨🇳 A股"
+            content.append([{"tag": "text", "text": f"【{pool_label}】"}])
+
         if item["delta_amount"] > 0:
             direction = "加仓"
         elif item["delta_amount"] < 0:
             direction = "减仓"
         else:
-            direction = "保持"
-        content.append(
-            [
-                {
-                    "tag": "text",
-                    "text": (
-                        f"{item['label']} | 当前 {item['current_amount']:,.0f} | "
-                        f"目标 {item['target_amount']:,.0f} | {direction} {abs(item['delta_amount']):,.0f}"
-                        f"{reentry_text(item)}{trajectory_text(item)}"
-                    ),
-                }
-            ]
+            direction = "—"
+
+        sleeve_icon = "🛡" if sleeve == "defensive" else "⚔"
+
+        # Build the line piece by piece
+        text = (
+            f"{sleeve_icon} {item['label']}"
+            f" | 当前 {item['current_amount']:,.0f}"
+            f" | 目标 {item['target_amount']:,.0f}"
+            f" | {direction} {abs(item['delta_amount']):,.0f}"
         )
+        # Append warning tags in priority order
+        text += forced_exit_text(item)
+        text += reentry_text(item)
+        text += trajectory_text(item)
+
+        content.append([{"tag": "text", "text": text}])
+
+    # ── Footer ──
+    content.append([{"tag": "text", "text": "━━━━━━━━━━━━━━━━━━"}])
+    content.append([{"tag": "text", "text": "⚠ 本内容为量化分析参考，不构成投资建议"}])
 
     if summary_text.strip():
-        content.append([{"tag": "text", "text": "完整 Markdown 日报已生成。"}])
+        content.append([{"tag": "text", "text": "📄 完整 Markdown 日报已生成"}])
 
     return {
         "msg_type": "post",
@@ -129,12 +196,16 @@ def build_payload(plan: dict, summary_text: str) -> dict:
 
 
 def build_fallback_text_payload(plan: dict) -> dict:
+    """Plain-text fallback when Feishu bot keyword filter blocks post payload."""
     relative = plan["signals"]["relative"]
+    erp = plan["signals"]["erp"]
+    portfolio = plan["portfolio"]
     positions = ordered_positions(plan)
 
     lines = [
-        "ERP执行日报",
-        f"日期: {relative['date']}",
+        f"ERP执行日报 ({relative['date']})",
+        f"A股 ERP {erp['percentile']:.0f}% 进攻{erp['aggressive_weight']:.0%}",
+        f"资金: {portfolio['managed_amount']:,.0f}",
         "调仓建议:",
     ]
     for item in positions:
@@ -148,9 +219,17 @@ def build_fallback_text_payload(plan: dict) -> dict:
             f"{item['label']}: 当前 {item['current_amount']:,.0f}, "
             f"目标 {item['target_amount']:,.0f}, {direction} {abs(item['delta_amount']):,.0f}"
         )
-        line += reentry_text(item).replace(" | ", ", ")
-        line += trajectory_text(item).replace(" | ", ", ")
+        fe = forced_exit_text(item).replace(" | ", ", ")
+        re = reentry_text(item).replace(" | ", ", ")
+        tr = trajectory_text(item).replace(" | ", ", ")
+        if fe:
+            line += fe
+        if re:
+            line += re
+        if tr:
+            line += tr
         lines.append(line)
+
     return {
         "msg_type": "text",
         "content": {"text": "\n".join(lines)},
@@ -175,9 +254,7 @@ def attach_signature(payload: dict, secret: str) -> dict:
 def main() -> None:
     webhook_url = resolve_webhook_url()
     if not webhook_url:
-        raise RuntimeError(
-            "Missing Feishu webhook URL. Set ERP_DAILY_FEISHU_WEBHOOK_URL."
-        )
+        raise RuntimeError("Missing Feishu webhook URL. Set ERP_DAILY_FEISHU_WEBHOOK_URL.")
 
     if not PLAN_PATH.exists():
         raise FileNotFoundError(f"Missing execution plan: {PLAN_PATH}")

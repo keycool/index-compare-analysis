@@ -344,15 +344,29 @@ class FeishuBitableClient:
         fields[self.sh50_ratio_field] = FeishuBitableClient._safe_float(record.get("50/创业板比价"), 0.0)
 
         optional_fields = {
+            "沪深300": FeishuBitableClient._safe_float(record.get("沪深300"), 0.0),
             "300价值指数": FeishuBitableClient._safe_float(record.get("300价值指数"), 0.0),
             "300成长指数": FeishuBitableClient._safe_float(record.get("300成长指数"), 0.0),
+            "科创50指数": FeishuBitableClient._safe_float(record.get("科创50指数"), 0.0),
+            "恒生科技指数": FeishuBitableClient._safe_float(record.get("恒生科技指数"), 0.0),
             "300价值/成长比价": FeishuBitableClient._safe_float(record.get("300价值/成长比价"), 0.0),
+            "科创50/上证50比价": FeishuBitableClient._safe_float(record.get("科创50/上证50比价"), 0.0),
+            "恒生科技/恒生比价": FeishuBitableClient._safe_float(record.get("恒生科技/恒生比价"), 0.0),
             "300价值分位": FeishuBitableClient._safe_float(record.get("300价值分位"), 0.0),
+            "300成长分位": FeishuBitableClient._safe_float(record.get("300成长分位"), 0.0),
+            "科创50分位": FeishuBitableClient._safe_float(record.get("科创50分位"), 0.0),
+            "恒生科技分位": FeishuBitableClient._safe_float(record.get("恒生科技分位"), 0.0),
             "300价值偏离(%)": FeishuBitableClient._safe_float(record.get("300价值偏离(%)"), 0.0),
+            "300成长偏离(%)": FeishuBitableClient._safe_float(record.get("300成长偏离(%)"), 0.0),
+            "科创50偏离(%)": FeishuBitableClient._safe_float(record.get("科创50偏离(%)"), 0.0),
+            "恒生科技偏离(%)": FeishuBitableClient._safe_float(record.get("恒生科技偏离(%)"), 0.0),
             "300价值建议": FeishuBitableClient._safe_text(record.get("300价值建议")),
+            "300成长建议": FeishuBitableClient._safe_text(record.get("300成长建议")),
+            "科创50建议": FeishuBitableClient._safe_text(record.get("科创50建议")),
+            "恒生科技建议": FeishuBitableClient._safe_text(record.get("恒生科技建议")),
         }
         for field_name, field_value in optional_fields.items():
-            if self._table_has_field(field_name):
+            if self._table_has_field(field_name) and field_value is not None:
                 fields[field_name] = field_value
         return fields
 

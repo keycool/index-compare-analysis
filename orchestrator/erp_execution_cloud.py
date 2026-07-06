@@ -816,9 +816,10 @@ def build_target_weights(
         "target_weight": round(sh50_tw, 4),
     }
 
-    # -- HS300 core (residual) --
+    # -- HS300 core (defensive residual + aggressive passive) --
     used_def = sh50_tw + val300_tw + gro300_tw
-    hs300_tw = max(0.0, ashare_def_total - used_def)
+    agg_used = sum(float(item["target_weight"]) for item in targets.values() if item.get("pool") == "ashare" and item.get("sleeve") == "aggressive")
+    hs300_tw = max(0.0, ashare_def_total - used_def + max(0.0, ashare_pool * ashare_aggressive - agg_used))
     meta_hs = bucket_meta.get("hs300", {})
     targets["hs300"] = {
         "bucket": "hs300", "label": meta_hs.get("label", "沪深300"),

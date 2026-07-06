@@ -103,9 +103,19 @@ def calc_deviation_series(ratio_series: Optional[pd.Series], ma_series: Optional
     deviation = (ratio - ma) / ma * 100
     return deviation.where(ma.notna())
 
+# ── VAL300 → GRO300 建议反向映射 ──────────────────────────────
+_VAL300_TO_GRO300_REC = {
+    "强烈超配": "强烈低配",
+    "超配": "低配",
+    "标配": "标配",
+    "低配": "超配",
+    "强烈低配": "强烈超配",
+}
+
 def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, Any]) -> pd.DataFrame:
     """
     将处理后数据转换为统一导出结构（用于 Excel + 飞书多维表格）。
+    v3 扩展：新增 KC50 / HKTECH / GRO300 分位、偏离、建议。
     """
     if processed_df.empty:
         return pd.DataFrame()
@@ -117,89 +127,141 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         df = df.reset_index().rename(columns={df.index.name or "index": "trade_date"})
         df["trade_date"] = pd.to_datetime(df["trade_date"])
 
+    # ── 分位 ──
     p500_series = calc_expanding_percentile(df.get("ZZ500_ratio"), df.index).round(1)
     p1000_series = calc_expanding_percentile(df.get("ZZ1000_ratio"), df.index).round(1)
-    pa500_series = calc_expanding_percentile(df.get("ZZA500_ratio"), df.index).round(1)
+    pcyb_series = calc_expanding_percentile(df.get("ZZA500_ratio"), df.index).round(1)
+    p50_series = calc_expanding_percentile(df.get("SH50_ratio"), df.index).round(1)
+    pval300_series = calc_expanding_percentile(df.get("VAL300_ratio"), df.index).round(1)
+    pkc50_series = calc_expanding_percentile(df.get("KC50_ratio"), df.index).round(1)
+    phtech_series = calc_expanding_percentile(df.get("HKTECH_ratio"), df.index).round(1)
+    # GRO300: 1 / VAL300_ratio
+    _gro300_ratio = 1.0 / df.get("VAL300_ratio").replace(0, pd.NA)
+    pgro300_series = calc_expanding_percentile(_gro300_ratio, df.index).round(1)
 
+    # ── 偏离 ──
     d500_series = calc_deviation_series(df.get("ZZ500_ratio"), df.get("ZZ500_MA30"), df.index).round(2)
     d1000_series = calc_deviation_series(df.get("ZZ1000_ratio"), df.get("ZZ1000_MA30"), df.index).round(2)
-    da500_series = calc_deviation_series(df.get("ZZA500_ratio"), df.get("ZZA500_MA30"), df.index).round(2)
+    dcyb_series = calc_deviation_series(df.get("ZZA500_ratio"), df.get("ZZA500_MA30"), df.index).round(2)
+    d50_series = calc_deviation_series(df.get("SH50_ratio"), df.get("SH50_MA30"), df.index).round(2)
+    dval300_series = calc_deviation_series(df.get("VAL300_ratio"), df.get("VAL300_MA30"), df.index).round(2)
+    dkc50_series = calc_deviation_series(df.get("KC50_ratio"), df.get("KC50_MA30"), df.index).round(2)
+    dhtech_series = calc_deviation_series(df.get("HKTECH_ratio"), df.get("HKTECH_MA30"), df.index).round(2)
+    dgro300_series = (-dval300_series).round(2)
+
     export_df = pd.DataFrame(
         {
             "日期": df["trade_date"].dt.strftime("%Y-%m-%d"),
             "沪深300": df.get("HS300"),
             "中证500": df.get("ZZ500"),
             "中证1000": df.get("ZZ1000"),
-            "中证A500": df.get("ZZA500"),
+            "创业板指数": df.get("ZZA500"),
+            "上证50指数": df.get("SH50"),
+            "科创50指数": df.get("KC50"),
+            "300价值指数": df.get("VAL300"),
+            "300成长指数": df.get("GRO300"),
             "上证综指": df.get("SHCI"),
+            "恒生科技指数": df.get("HKTECH"),
             "500/300比价": df.get("ZZ500_ratio"),
             "1000/300比价": df.get("ZZ1000_ratio"),
-            "A500/300比价": df.get("ZZA500_ratio"),
+            "创业板/300比价": df.get("ZZA500_ratio"),
+            "50/创业板比价": df.get("SH50_ratio"),
+            "科创50/上证50比价": df.get("KC50_ratio"),
+            "300价值/成长比价": df.get("VAL300_ratio"),
+            "恒生科技/恒生比价": df.get("HKTECH_ratio"),
             "500分位": p500_series,
             "1000分位": p1000_series,
-            "A500分位": pa500_series,
+            "创业板分位": pcyb_series,
+            "50分位": p50_series,
+            "科创50分位": pkc50_series,
+            "300价值分位": pval300_series,
+            "300成长分位": pgro300_series,
+            "恒生科技分位": phtech_series,
             "500偏离(%)": d500_series,
             "1000偏离(%)": d1000_series,
-            "A500偏离(%)": da500_series,
+            "创业板偏离(%)": dcyb_series,
+            "50偏离(%)": d50_series,
+            "科创50偏离(%)": dkc50_series,
+            "300价值偏离(%)": dval300_series,
+            "300成长偏离(%)": dgro300_series,
+            "恒生科技偏离(%)": dhtech_series,
         }
     )
 
-    export_df["500建议"] = ""
-    export_df["1000建议"] = ""
-    export_df["A500建议"] = ""
+    for col in [
+        "500建议", "1000建议", "创业板建议", "50建议",
+        "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
+    ]:
+        export_df[col] = ""
 
     if not export_df.empty:
         latest_idx = export_df.index[-1]
         export_df.loc[latest_idx, "500建议"] = conclusions.get("ZZ500", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "1000建议"] = conclusions.get("ZZ1000", {}).get("recommendation", {}).get("action", "")
-        export_df.loc[latest_idx, "A500建议"] = conclusions.get("ZZA500", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "创业板建议"] = conclusions.get("ZZA500", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "50建议"] = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "科创50建议"] = conclusions.get("KC50", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "300价值建议"] = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "恒生科技建议"] = conclusions.get("HKTECH", {}).get("recommendation", {}).get("action", "")
+        _val_rec = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "300成长建议"] = _VAL300_TO_GRO300_REC.get(_val_rec, "标配")
 
     export_df["数据源"] = "tushare"
 
     number_cols = [
-        "沪深300",
-        "中证500",
-        "中证1000",
-        "中证A500",
-        "上证综指",
-        "500/300比价",
-        "1000/300比价",
-        "A500/300比价",
-        "500分位",
-        "1000分位",
-        "A500分位",
-        "500偏离(%)",
-        "1000偏离(%)",
-        "A500偏离(%)",
+        "沪深300", "中证500", "中证1000", "创业板指数", "上证50指数",
+        "科创50指数", "300价值指数", "300成长指数", "上证综指", "恒生科技指数",
+        "500/300比价", "1000/300比价", "创业板/300比价", "50/创业板比价",
+        "科创50/上证50比价", "300价值/成长比价", "恒生科技/恒生比价",
+        "500分位", "1000分位", "创业板分位", "50分位", "科创50分位",
+        "300价值分位", "300成长分位", "恒生科技分位",
+        "500偏离(%)", "1000偏离(%)", "创业板偏离(%)", "50偏离(%)",
+        "科创50偏离(%)", "300价值偏离(%)", "300成长偏离(%)", "恒生科技偏离(%)",
     ]
     for col in number_cols:
         if col in export_df.columns:
             export_df[col] = pd.to_numeric(export_df[col], errors="coerce")
 
+    export_df = align_cyb_columns_with_hs300(export_df)
     export_df = export_df.sort_values("日期").drop_duplicates(subset=["日期"], keep="last")
 
     ordered_cols = [
         "日期",
-        "沪深300",
-        "中证500",
-        "中证1000",
-        "中证A500",
-        "上证综指",
-        "500/300比价",
-        "1000/300比价",
-        "A500/300比价",
-        "500分位",
-        "1000分位",
-        "A500分位",
-        "500偏离(%)",
-        "1000偏离(%)",
-        "A500偏离(%)",
-        "500建议",
-        "1000建议",
-        "A500建议",
+        "沪深300", "中证500", "中证1000", "创业板指数", "上证50指数",
+        "科创50指数", "300价值指数", "300成长指数", "上证综指", "恒生科技指数",
+        "500/300比价", "1000/300比价", "创业板/300比价", "50/创业板比价",
+        "科创50/上证50比价", "300价值/成长比价", "恒生科技/恒生比价",
+        "500分位", "1000分位", "创业板分位", "50分位", "科创50分位",
+        "300价值分位", "300成长分位", "恒生科技分位",
+        "500偏离(%)", "1000偏离(%)", "创业板偏离(%)", "50偏离(%)",
+        "科创50偏离(%)", "300价值偏离(%)", "300成长偏离(%)", "恒生科技偏离(%)",
+        "500建议", "1000建议", "创业板建议", "50建议",
+        "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
         "数据源",
     ]
     return export_df[ordered_cols]
+
+
+def align_cyb_columns_with_hs300(export_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    创业板相关字段仅在"沪深300与创业板指数同日均有效"时保留。
+    这样可避免创业板成立前被误填，也便于飞书表格按日期对齐回填。
+    """
+    required_cols = {"沪深300", "创业板指数"}
+    if not required_cols.issubset(export_df.columns):
+        return export_df
+
+    aligned = export_df.copy()
+    valid_mask = aligned["沪深300"].notna() & aligned["创业板指数"].notna()
+    cyb_cols = ["创业板指数", "创业板/300比价", "创业板分位", "创业板偏离(%)"]
+    existing_cyb_cols = [col for col in cyb_cols if col in aligned.columns]
+    if existing_cyb_cols:
+        aligned.loc[~valid_mask, existing_cyb_cols] = pd.NA
+
+    if "创业板建议" in aligned.columns and not aligned.empty and not bool(valid_mask.iloc[-1]):
+        aligned.loc[aligned.index[-1], "创业板建议"] = ""
+
+    return aligned
 
 
 def _safe_float(value: Any, digits: int | None = None) -> Optional[float]:
@@ -221,6 +283,7 @@ def _safe_float(value: Any, digits: int | None = None) -> Optional[float]:
 def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
     """
     导出 Relative 标准共享接口，避免其他项目依赖内部文件结构。
+    v3 扩展：新增 KC50 / HKTECH / GRO300 字段。
     """
     if export_df.empty:
         logger.warning("共享接口导出跳过：导出数据为空")
@@ -239,23 +302,42 @@ def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
                     "hs300": _safe_float(row.get("沪深300"), 4),
                     "zz500": _safe_float(row.get("中证500"), 4),
                     "zz1000": _safe_float(row.get("中证1000"), 4),
-                    "zza500": _safe_float(row.get("中证A500"), 4),
+                    "zza500": _safe_float(row.get("创业板指数"), 4),
+                    "sh50": _safe_float(row.get("上证50指数"), 4),
+                    "kc50": _safe_float(row.get("科创50指数"), 4),
+                    "val300": _safe_float(row.get("300价值指数"), 4),
+                    "gro300": _safe_float(row.get("300成长指数"), 4),
                     "shci": _safe_float(row.get("上证综指"), 4),
+                    "hstech": _safe_float(row.get("恒生科技指数"), 4),
                     "zz500_ratio": _safe_float(row.get("500/300比价"), 6),
                     "zz1000_ratio": _safe_float(row.get("1000/300比价"), 6),
-                    "zza500_ratio": _safe_float(row.get("A500/300比价"), 6),
+                    "zza500_ratio": _safe_float(row.get("创业板/300比价"), 6),
+                    "sh50_ratio": _safe_float(row.get("50/创业板比价"), 6),
+                    "kc50_ratio": _safe_float(row.get("科创50/上证50比价"), 6),
+                    "val300_ratio": _safe_float(row.get("300价值/成长比价"), 6),
+                    "hstech_ratio": _safe_float(row.get("恒生科技/恒生比价"), 6),
                     "zz500_percentile": _safe_float(row.get("500分位"), 1),
                     "zz1000_percentile": _safe_float(row.get("1000分位"), 1),
-                    "zza500_percentile": _safe_float(row.get("A500分位"), 1),
+                    "zza500_percentile": _safe_float(row.get("创业板分位"), 1),
+                    "sh50_percentile": _safe_float(row.get("50分位"), 1),
+                    "kc50_percentile": _safe_float(row.get("科创50分位"), 1),
+                    "val300_percentile": _safe_float(row.get("300价值分位"), 1),
+                    "gro300_percentile": _safe_float(row.get("300成长分位"), 1),
+                    "hstech_percentile": _safe_float(row.get("恒生科技分位"), 1),
                     "zz500_deviation": _safe_float(row.get("500偏离(%)"), 2),
                     "zz1000_deviation": _safe_float(row.get("1000偏离(%)"), 2),
-                    "zza500_deviation": _safe_float(row.get("A500偏离(%)"), 2),
+                    "zza500_deviation": _safe_float(row.get("创业板偏离(%)"), 2),
+                    "sh50_deviation": _safe_float(row.get("50偏离(%)"), 2),
+                    "kc50_deviation": _safe_float(row.get("科创50偏离(%)"), 2),
+                    "val300_deviation": _safe_float(row.get("300价值偏离(%)"), 2),
+                    "gro300_deviation": _safe_float(row.get("300成长偏离(%)"), 2),
+                    "hstech_deviation": _safe_float(row.get("恒生科技偏离(%)"), 2),
                 }
             )
 
         latest_row = normalized_df.iloc[-1]
         payload = {
-            "version": "1.0",
+            "version": "1.1",
             "signal_type": "csi300_relative_index",
             "source": "CSI300 Relative Index",
             "generated_at": get_generated_at(),
@@ -266,7 +348,12 @@ def export_shared_signal(export_df: pd.DataFrame, output_path: Path) -> bool:
                 "date": str(latest_row["日期"]),
                 "zz500_recommendation": str(latest_row.get("500建议", "")),
                 "zz1000_recommendation": str(latest_row.get("1000建议", "")),
-                "zza500_recommendation": str(latest_row.get("A500建议", "")),
+                "zza500_recommendation": str(latest_row.get("创业板建议", "")),
+                "sh50_recommendation": str(latest_row.get("50建议", "")),
+                "kc50_recommendation": str(latest_row.get("科创50建议", "")),
+                "val300_recommendation": str(latest_row.get("300价值建议", "")),
+                "gro300_recommendation": str(latest_row.get("300成长建议", "")),
+                "hstech_recommendation": str(latest_row.get("恒生科技建议", "")),
             },
         }
 
@@ -338,40 +425,35 @@ def sync_to_feishu_bitable(df_sync: pd.DataFrame) -> Dict[str, Any]:
         return {
             "success": False,
             "message": message,
-            "synced": 0,
-            "failed": 0,
-            "total": 0,
-            "created": 0,
-            "updated": 0,
-            "errors": [],
+            "synced": 0, "failed": 0, "total": 0,
+            "created": 0, "updated": 0, "errors": [],
         }
 
     if df_sync.empty:
         return {
             "success": True,
             "message": "无可同步数据",
-            "synced": 0,
-            "failed": 0,
-            "total": 0,
-            "created": 0,
-            "updated": 0,
-            "errors": [],
+            "synced": 0, "failed": 0, "total": 0,
+            "created": 0, "updated": 0, "errors": [],
         }
 
     try:
+        normalized_df = df_sync.copy()
+        if "日期" in normalized_df.columns:
+            normalized_df["日期"] = normalize_date_str(normalized_df["日期"])
+            normalized_df = normalized_df.dropna(subset=["日期"]).sort_values("日期")
+            normalized_df = normalized_df.drop_duplicates(subset=["日期"], keep="last")
+
         client = FeishuBitableClient()
-        payloads = [row.to_dict() for _, row in df_sync.iterrows()]
+        payloads = [row.to_dict() for _, row in normalized_df.iterrows()]
         return client.upsert_index_compare_records(payloads)
     except Exception as exc:
         logger.error(f"飞书多维表格同步异常: {exc}")
         return {
             "success": False,
             "message": str(exc),
-            "synced": 0,
-            "failed": 0,
-            "total": len(df_sync),
-            "created": 0,
-            "updated": 0,
+            "synced": 0, "failed": 0, "total": len(df_sync),
+            "created": 0, "updated": 0,
             "errors": [{"error": str(exc)}],
         }
 
@@ -384,28 +466,42 @@ def print_terminal_summary(latest_row: Dict[str, Any], conclusions: Dict[str, An
 
     latest_date = latest_row.get("日期", "未知")
     print(f"\n[DATA] 最新数据 ({latest_date}):")
-    print("+-------------+----------+----------+----------+")
-    print("| 指标        | 中证500  | 中证1000 | 中证A500 |")
-    print("+-------------+----------+----------+----------+")
+    def _v(key: str, digits: int = 4) -> float:
+        return float(latest_row.get(key, 0) or 0)
+
+    print("+-------------+----------+----------+----------+----------+----------+")
+    print("| 指标        | 中证500  | 中证1000 | 创业板   | 上证50   | 科创50   |")
+    print("+-------------+----------+----------+----------+----------+----------+")
     print(
-        f"| 当前比价    | {float(latest_row.get('500/300比价', 0)):>8.4f} | "
-        f"{float(latest_row.get('1000/300比价', 0)):>8.4f} | "
-        f"{float(latest_row.get('A500/300比价', 0)):>8.4f} |"
+        f"| 当前比价    | {_v('500/300比价'):>8.4f} | "
+        f"{_v('1000/300比价'):>8.4f} | "
+        f"{_v('创业板/300比价'):>8.4f} | "
+        f"{_v('50/创业板比价'):>8.4f} | "
+        f"{_v('科创50/上证50比价'):>8.4f} |"
     )
     print(
-        f"| 历史分位    | {float(latest_row.get('500分位', 0)):>7.1f}% | "
-        f"{float(latest_row.get('1000分位', 0)):>7.1f}% | "
-        f"{float(latest_row.get('A500分位', 0)):>7.1f}% |"
+        f"| 历史分位    | {_v('500分位', 1):>7.1f}% | "
+        f"{_v('1000分位', 1):>7.1f}% | "
+        f"{_v('创业板分位', 1):>7.1f}% | "
+        f"{conclusions.get('SH50', {}).get('percentile', {}).get('value', 0):>7.1f}% | "
+        f"{conclusions.get('KC50', {}).get('percentile', {}).get('value', 0):>7.1f}% |"
     )
     print(
-        f"| 30日偏离    | {float(latest_row.get('500偏离(%)', 0)):>+7.1f}% | "
-        f"{float(latest_row.get('1000偏离(%)', 0)):>+7.1f}% | "
-        f"{float(latest_row.get('A500偏离(%)', 0)):>+7.1f}% |"
+        f"| 30日偏离    | {_v('500偏离(%)', 2):>+7.1f}% | "
+        f"{_v('1000偏离(%)', 2):>+7.1f}% | "
+        f"{_v('创业板偏离(%)', 2):>+7.1f}% | "
+        f"{conclusions.get('SH50', {}).get('deviation', {}).get('value', 0):>+7.1f}% | "
+        f"{conclusions.get('KC50', {}).get('deviation', {}).get('value', 0):>+7.1f}% |"
     )
-    print("+-------------+----------+----------+----------+")
+    print("+-------------+----------+----------+----------+----------+----------+")
 
     print("\n[RECOMMEND] 配置建议:")
-    for code, name in [("ZZ500", "中证500"), ("ZZ1000", "中证1000"), ("ZZA500", "中证A500")]:
+    for code, name in [
+        ("ZZ500", "中证500"), ("ZZ1000", "中证1000"),
+        ("ZZA500", "创业板指数"), ("SH50", "上证50指数"),
+        ("KC50", "科创50"), ("VAL300", "300价值"),
+        ("HKTECH", "恒生科技"),
+    ]:
         recommendation = conclusions.get(code, {}).get("recommendation", {})
         action = recommendation.get("action", "-")
         icon = recommendation.get("icon", "")
@@ -437,7 +533,7 @@ def quick_query(index_code: Optional[str] = None) -> None:
     df = pd.read_csv(processed_file, parse_dates=["trade_date"])
     latest_date = df.iloc[-1]["trade_date"].strftime("%Y-%m-%d")
 
-    valid_codes = ["ZZ500", "ZZ1000", "ZZA500"]
+    valid_codes = ["ZZ500", "ZZ1000", "ZZA500", "SH50", "KC50", "VAL300", "HKTECH"]
     if index_code and index_code not in valid_codes:
         print(f"[错误] 指数代码 {index_code} 不存在")
         print(f"\n支持的代码: {', '.join(valid_codes)}")
@@ -453,34 +549,42 @@ def quick_query(index_code: Optional[str] = None) -> None:
 
     if len(display_codes) > 1:
         print("最新数据:")
-        print("┌─────────────┬──────────┬──────────┬──────────┐")
-        print("│ 指标        │ 中证500  │ 中证1000 │ 中证A500 │")
-        print("├─────────────┼──────────┼──────────┼──────────┤")
+        print("┌─────────────┬──────────┬──────────┬──────────┬──────────┬──────────┐")
+        print("│ 指标        │ 中证500  │ 中证1000 │ 创业板   │ 上证50   │ 科创50   │")
+        print("├─────────────┼──────────┼──────────┼──────────┼──────────┼──────────┤")
 
         zz500 = conclusions.get("ZZ500", {})
         zz1000 = conclusions.get("ZZ1000", {})
         zza500 = conclusions.get("ZZA500", {})
+        sh50 = conclusions.get("SH50", {})
+        kc50 = conclusions.get("KC50", {})
 
         print(
-            f"│ 当前比价    │ {zz500.get('current_ratio', 0):>8.4f} │ "
-            f"{zz1000.get('current_ratio', 0):>8.4f} │ {zza500.get('current_ratio', 0):>8.4f} │"
+            f"│ 当前比价    │ {zz500.get('current_ratio', 0):>8.4f} | "
+            f"{zz1000.get('current_ratio', 0):>8.4f} | "
+            f"{zza500.get('current_ratio', 0):>8.4f} | "
+            f"{sh50.get('current_ratio', 0):>8.4f} | "
+            f"{kc50.get('current_ratio', 0):>8.4f} │"
         )
         print(
-            f"│ 历史分位    │ {zz500.get('percentile', {}).get('value', 0):>7.1f}% │ "
-            f"{zz1000.get('percentile', {}).get('value', 0):>7.1f}% │ "
-            f"{zza500.get('percentile', {}).get('value', 0):>7.1f}% │"
+            f"│ 历史分位    │ {zz500.get('percentile', {}).get('value', 0):>7.1f}% | "
+            f"{zz1000.get('percentile', {}).get('value', 0):>7.1f}% | "
+            f"{zza500.get('percentile', {}).get('value', 0):>7.1f}% | "
+            f"{sh50.get('percentile', {}).get('value', 0):>7.1f}% | "
+            f"{kc50.get('percentile', {}).get('value', 0):>7.1f}% │"
         )
         print(
-            f"│ 30日偏离    │ {zz500.get('deviation', {}).get('value', 0):>+7.1f}% │ "
-            f"{zz1000.get('deviation', {}).get('value', 0):>+7.1f}% │ "
-            f"{zza500.get('deviation', {}).get('value', 0):>+7.1f}% │"
+            f"│ 30日偏离    | {zz500.get('deviation', {}).get('value', 0):>+7.1f}% | "
+            f"{zz1000.get('deviation', {}).get('value', 0):>+7.1f}% | "
+            f"{zza500.get('deviation', {}).get('value', 0):>+7.1f}% | "
+            f"{sh50.get('deviation', {}).get('value', 0):>+7.1f}% | "
+            f"{kc50.get('deviation', {}).get('value', 0):>+7.1f}% │"
         )
 
-        zz500_text = f"{zz500.get('recommendation', {}).get('icon', '')} {zz500.get('recommendation', {}).get('action', '')}"
-        zz1000_text = f"{zz1000.get('recommendation', {}).get('icon', '')} {zz1000.get('recommendation', {}).get('action', '')}"
-        zza500_text = f"{zza500.get('recommendation', {}).get('icon', '')} {zza500.get('recommendation', {}).get('action', '')}"
-        print(f"│ 配置建议    │ {zz500_text:^8} │ {zz1000_text:^8} │ {zza500_text:^8} │")
-        print("└─────────────┴──────────┴──────────┴──────────┘")
+        def _rec_text(c: dict) -> str:
+            return f"{c.get('recommendation', {}).get('icon', '')} {c.get('recommendation', {}).get('action', '')}"
+        print(f"│ 配置建议    | {_rec_text(zz500):^8} | {_rec_text(zz1000):^8} | {_rec_text(zza500):^8} | {_rec_text(sh50):^8} | {_rec_text(kc50):^8} │")
+        print("└─────────────┴──────────┴──────────┴──────────┴──────────┴──────────┘")
         print()
 
     for code in display_codes:
@@ -588,18 +692,13 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         feishu_sent = feishu.send(latest_row, conclusions, title="指数比价分析")
 
     bitable_result = {
-        "success": False,
-        "message": "未执行",
-        "synced": 0,
-        "failed": 0,
-        "total": 0,
-        "created": 0,
-        "updated": 0,
-        "errors": [],
+        "success": False, "message": "未执行",
+        "synced": 0, "failed": 0, "total": 0,
+        "created": 0, "updated": 0, "errors": [],
     }
 
     if excel_saved:
-        bitable_result = sync_to_feishu_bitable(new_rows_df)
+        bitable_result = sync_to_feishu_bitable(export_df)
 
     print_terminal_summary(latest_row, conclusions, report_file)
 
@@ -629,11 +728,7 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
     }
 
     require_bitable_sync = str(os.environ.get("REQUIRE_BITABLE_SYNC", "false")).lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-        "on",
+        "1", "true", "yes", "y", "on",
     }
 
     if require_bitable_sync:
@@ -668,7 +763,7 @@ def main() -> None:
         "--query",
         nargs="?",
         const="all",
-        help="快速查询模式：查看已有数据（可选指定 ZZ500/ZZ1000/ZZA500）",
+        help="快速查询模式：查看已有数据（可选指定指数代码）",
     )
     parser.add_argument(
         "--force",

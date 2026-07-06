@@ -1004,7 +1004,7 @@ def print_summary(payload: dict[str, Any]) -> None:
             extra.append(f"traj={item['trajectory_reason']} ×{item['trajectory_multiplier']}")
         extras = " | ".join(extra) if extra else ""
         print(
-            f"  {pool_tag} {sleeve:10s} {item['label']:16s} "
+            f"  {pool_tag} {item['sleeve']:10s} {item['label']:16s} "
             f"cur={item['current_amount']:>10,.2f}  →  tgt={item['target_amount']:>10,.2f}  "
             f"({item['action']:4s} {item['delta_amount']:>+10,.2f})"
             + (f"  [{extras}]" if extras else "")

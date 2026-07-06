@@ -2858,7 +2858,32 @@ def generate_report(data_path, conclusions_path, output_dir, mode='production'):
 
     print(f"\n[OK] 报告已生成: {report_file}")
 
+    # ── Export HSI ERP summary to shared signal ──
+    _export_hsi_erp_signal(df)
+
     return report_file
+
+
+def _export_hsi_erp_signal(index_df: pd.DataFrame) -> None:
+    """Export HSI ERP summary to shared/hsi_erp_signal.json for execution layer consumption."""
+    try:
+        hsi_result = build_hsi_erp_history(index_df)
+        if not hsi_result:
+            return
+        _, summary = hsi_result
+        shared_dir = Path(__file__).resolve().parents[5] / "shared"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        signal_path = shared_dir / "hsi_erp_signal.json"
+        payload = {
+            "version": "1.0",
+            "signal_type": "hsi_erp",
+            "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            **summary,
+        }
+        signal_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[HSI ERP] 信号已导出: {signal_path}")
+    except Exception as exc:
+        print(f"[HSI ERP] 导出失败: {exc}")
 
 
 def resolve_output_dir(output_dir: str, mode: str) -> Path:

@@ -89,7 +89,7 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def validate_signal(payload: dict[str, Any], expected_type: str, path: Path) -> None:
-    if payload.get("version") != "1.0":
+    if payload.get("version") not in ("1.0", "1.1"):
         raise ValueError(f"{path} version 非 1.0")
     if payload.get("signal_type") != expected_type:
         raise ValueError(f"{path} signal_type 非 {expected_type}")

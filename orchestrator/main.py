@@ -201,8 +201,8 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
         env["EQUITY_PREMIUM_OUTPUT_PATH"] = str(ERP_ROOT / "equity_premium_enhanced.xlsx")
         env["FEISHU_WEBHOOK_URL"] = env.get("ERP_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
         env["FEISHU_WEBHOOK_SECRET"] = env.get("ERP_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
-        env["FEISHU_APP_TOKEN"] = env.get("ERP_FEISHU_APP_TOKEN") or env.get("FEISHU_APP_TOKEN", "")
-        env["FEISHU_TABLE_ID"] = env.get("ERP_FEISHU_TABLE_ID") or env.get("FEISHU_TABLE_ID", "")
+        env["FEISHU_APP_TOKEN"] = "VnkcbzcsdabuDwslZhCc6WurnMd"
+        env["FEISHU_TABLE_ID"] = "tblEo1BqoTp5z2UV"
     elif target == "relative":
         env["INDEX_COMPARE_SHARED_SIGNAL_PATH"] = str(RELATIVE_SIGNAL)
         env["INDEX_COMPARE_ERP_SIGNAL_PATH"] = str(ERP_SIGNAL)

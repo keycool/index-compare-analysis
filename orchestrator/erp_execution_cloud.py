@@ -31,8 +31,8 @@ import requests
 
 
 # ── Default Feishu table tokens ──────────────────────────────
-DEFAULT_ERP_APP_TOKEN = "KfaSbpRdiaYFdWsCTRfcWpocnbd"
-DEFAULT_ERP_TABLE_ID = "tblRAs2p4woXE1ig"
+DEFAULT_ERP_APP_TOKEN = "VnkcbzcsdabuDwslZhCc6WurnMd"
+DEFAULT_ERP_TABLE_ID = "tblEo1BqoTp5z2UV"
 DEFAULT_RELATIVE_APP_TOKEN = "POghbC154ablpxs20USc6veDnlh"
 DEFAULT_RELATIVE_TABLE_ID = "tblnsUexqsEiLZs9"
 DEFAULT_ASSET_APP_TOKEN = "TiVJb2a5GaRiZTsoeXFcO6BCn8e"

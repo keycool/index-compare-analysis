@@ -218,6 +218,81 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
     return env
 
 
+def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
+    """将 ERP 数据直接写入新建的 API-writable 表，绕过 ERP 项目的 FeishuBitableClient。"""
+    import requests
+
+    app_id = os.environ.get("FEISHU_APP_ID", "")
+    app_secret = os.environ.get("FEISHU_APP_SECRET", "")
+    if not app_id or not app_secret:
+        return {"success": False, "message": "缺少 FEISHU_APP_ID/FEISHU_APP_SECRET"}
+
+    try:
+        r = requests.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret}, timeout=15,
+        )
+        r.raise_for_status()
+        token = r.json().get("tenant_access_token", "")
+    except Exception as exc:
+        return {"success": False, "message": f"获取 token 失败: {exc}"}
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    app_token = "VnkcbzcsdabuDwslZhCc6WurnMd"
+    table_id = "tblEo1BqoTp5z2UV"
+    records = erp_payload.get("records", [])
+    if not records:
+        return {"success": True, "message": "无数据", "synced": 0}
+
+    # 分批写入
+    synced = 0
+    failed = 0
+    batch_size = 100
+    for i in range(0, len(records), batch_size):
+        batch = records[i : i + batch_size]
+        batch_records = []
+        for rec in batch:
+            dt = rec.get("date", "")
+            if isinstance(dt, str) and len(dt) == 10:
+                # YYYY-MM-DD → ms timestamp
+                from datetime import datetime as dt_cls
+                try:
+                    d = dt_cls.strptime(dt, "%Y-%m-%d")
+                    ts = int(d.timestamp() * 1000)
+                except Exception:
+                    ts = dt
+            else:
+                ts = dt
+            batch_records.append({
+                "fields": {
+                    "日期": ts,
+                    "沪深300点位": rec.get("csi300_close", 0),
+                    "PE_TTM": rec.get("pe_ttm", 0),
+                    "10年国债收益率": rec.get("bond_yield", 0),
+                    "盈利收益率": rec.get("earnings_yield", 0),
+                    "股权溢价指数": rec.get("equity_premium", 0),
+                    "数据源": "tushare+akshare",
+                }
+            })
+        try:
+            r2 = requests.post(
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create",
+                json={"records": batch_records}, headers=headers, timeout=60,
+            )
+            if r2.json().get("code") == 0:
+                synced += len(batch)
+            else:
+                failed += len(batch)
+                print(f"  ERP 批次写入失败: {r2.json().get('msg', '')[:100]}")
+        except Exception as exc:
+            failed += len(batch)
+            print(f"  ERP 批次写入异常: {exc}")
+
+    result = {"success": failed == 0, "synced": synced, "failed": failed, "total": len(records)}
+    print(f"[ERP 表同步] 成功 {synced}, 失败 {failed}, 总计 {len(records)}")
+    return result
+
+
 def main() -> None:
     args = parse_args()
     env = os.environ.copy()
@@ -260,6 +335,9 @@ def main() -> None:
     merged_payload = build_merged_signal(erp_payload, relative_payload)
     save_json(MERGED_SIGNAL, merged_payload)
 
+    # ── 独立同步 ERP 数据到新表（绕过 ERP 项目的 sync_to_feishu_bitable）──
+    erp_sync_result = sync_erp_to_new_table(erp_payload)
+
     result = {
         "success": True,
         "generated_at": merged_payload["generated_at"],
@@ -275,6 +353,7 @@ def main() -> None:
             "run_result": relative_result,
         },
         "merged_signal_path": str(MERGED_SIGNAL),
+        "erp_bitable_sync": erp_sync_result,
     }
 
     print(f"\n[OK] merged signal 已生成: {MERGED_SIGNAL}")

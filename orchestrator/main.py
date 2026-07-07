@@ -221,6 +221,7 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
 def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
     """将 ERP 数据直接写入新建的 API-writable 表，绕过 ERP 项目的 FeishuBitableClient。"""
     import requests
+    from datetime import datetime as dt_cls, timezone, timedelta
 
     app_id = os.environ.get("FEISHU_APP_ID", "")
     app_secret = os.environ.get("FEISHU_APP_SECRET", "")
@@ -240,55 +241,49 @@ def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     app_token = "VnkcbzcsdabuDwslZhCc6WurnMd"
     table_id = "tblEo1BqoTp5z2UV"
+    sh_tz = timezone(timedelta(hours=8))
     records = erp_payload.get("records", [])
     if not records:
         return {"success": True, "message": "无数据", "synced": 0}
 
-    # 分批写入
     synced = 0
     failed = 0
-    batch_size = 100
-    for i in range(0, len(records), batch_size):
-        batch = records[i : i + batch_size]
-        batch_records = []
-        for rec in batch:
-            dt = rec.get("date", "")
-            if isinstance(dt, str) and len(dt) == 10:
-                # YYYY-MM-DD → ms timestamp
-                from datetime import datetime as dt_cls
-                try:
-                    d = dt_cls.strptime(dt, "%Y-%m-%d")
-                    ts = int(d.timestamp() * 1000)
-                except Exception:
-                    ts = dt
-            else:
-                ts = dt
-            batch_records.append({
-                "fields": {
-                    "日期": ts,
-                    "沪深300点位": rec.get("csi300_close", 0),
-                    "PE_TTM": rec.get("pe_ttm", 0),
-                    "10年国债收益率": rec.get("bond_yield", 0),
-                    "盈利收益率": rec.get("earnings_yield", 0),
-                    "股权溢价指数": rec.get("equity_premium", 0),
-                    "数据源": "tushare+akshare",
-                }
-            })
+    errors = []
+    for rec in records:
+        dt = rec.get("date", "")
+        try:
+            d = dt_cls.strptime(str(dt)[:10], "%Y-%m-%d").replace(tzinfo=sh_tz)
+            ts = int(d.timestamp() * 1000)
+        except Exception:
+            ts = dt
+        fields = {
+            "日期": ts,
+            "沪深300点位": rec.get("csi300_close", 0),
+            "PE_TTM": rec.get("pe_ttm", 0),
+            "10年国债收益率": rec.get("bond_yield", 0),
+            "盈利收益率": rec.get("earnings_yield", 0),
+            "股权溢价指数": rec.get("equity_premium", 0),
+            "数据源": "tushare+akshare",
+        }
         try:
             r2 = requests.post(
-                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_create",
-                json={"records": batch_records}, headers=headers, timeout=60,
+                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                json={"fields": fields}, headers=headers, timeout=15,
             )
-            if r2.json().get("code") == 0:
-                synced += len(batch)
+            if r2.status_code == 200 and r2.json().get("code") == 0:
+                synced += 1
             else:
-                failed += len(batch)
-                print(f"  ERP 批次写入失败: {r2.json().get('msg', '')[:100]}")
+                failed += 1
+                if len(errors) < 5:
+                    errors.append(f"{dt}: {r2.status_code} {r2.json().get('msg','')[:80]}")
         except Exception as exc:
-            failed += len(batch)
-            print(f"  ERP 批次写入异常: {exc}")
+            failed += 1
+            if len(errors) < 5:
+                errors.append(f"{dt}: {exc}")
 
     result = {"success": failed == 0, "synced": synced, "failed": failed, "total": len(records)}
+    if errors:
+        result["errors"] = errors
     print(f"[ERP 表同步] 成功 {synced}, 失败 {failed}, 总计 {len(records)}")
     return result
 

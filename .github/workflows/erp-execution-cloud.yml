@@ -90,7 +90,7 @@ jobs:
           defensive_value = next((item for item in positions if item.get("bucket") == "sh50"), None)
           if defensive_value is None:
               raise SystemExit("Missing defensive value bucket sh50 in ERP execution plan")
-          if defensive_value.get("label") != "防守价值（上证50/红利）":
+          if defensive_value.get("label") not in ("防守价值（上证50/红利）", "防守价值(上证50/红利)"):
               raise SystemExit(f"Unexpected sh50 label: {defensive_value.get('label')}")
 
           breakdown = defensive_value.get("holding_breakdown", [])

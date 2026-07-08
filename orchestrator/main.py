@@ -201,8 +201,8 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
         env["EQUITY_PREMIUM_OUTPUT_PATH"] = str(ERP_ROOT / "equity_premium_enhanced.xlsx")
         env["FEISHU_WEBHOOK_URL"] = env.get("ERP_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
         env["FEISHU_WEBHOOK_SECRET"] = env.get("ERP_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
-        env["FEISHU_APP_TOKEN"] = "VnkcbzcsdabuDwslZhCc6WurnMd"
-        env["FEISHU_TABLE_ID"] = "tblEo1BqoTp5z2UV"
+        env["FEISHU_APP_TOKEN"] = env.get("ERP_FEISHU_APP_TOKEN") or env.get("FEISHU_APP_TOKEN", "")
+        env["FEISHU_TABLE_ID"] = env.get("ERP_FEISHU_TABLE_ID") or env.get("FEISHU_TABLE_ID", "")
     elif target == "relative":
         env["INDEX_COMPARE_SHARED_SIGNAL_PATH"] = str(RELATIVE_SIGNAL)
         env["INDEX_COMPARE_ERP_SIGNAL_PATH"] = str(ERP_SIGNAL)
@@ -219,7 +219,7 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
 
 
 def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
-    """将 ERP 数据直接写入新建的 API-writable 表，绕过 ERP 项目的 FeishuBitableClient。"""
+    """将 ERP 数据直接写入 workflow 指定的表，绕过 ERP 项目的 FeishuBitableClient。"""
     import requests
     from datetime import datetime as dt_cls, timezone, timedelta
 
@@ -239,23 +239,54 @@ def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "message": f"获取 token 失败: {exc}"}
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    app_token = "VnkcbzcsdabuDwslZhCc6WurnMd"
-    table_id = "tblEo1BqoTp5z2UV"
+    app_token = os.environ.get("ERP_FEISHU_APP_TOKEN") or os.environ.get("FEISHU_APP_TOKEN", "")
+    table_id = os.environ.get("ERP_FEISHU_TABLE_ID") or os.environ.get("FEISHU_TABLE_ID", "")
+    if not app_token or not table_id:
+        return {"success": False, "message": "缺少 ERP_FEISHU_APP_TOKEN/ERP_FEISHU_TABLE_ID"}
+
+    records_url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
     sh_tz = timezone(timedelta(hours=8))
     records = erp_payload.get("records", [])
     if not records:
         return {"success": True, "message": "无数据", "synced": 0}
 
-    synced = 0
+    def to_feishu_date(value: Any) -> Any:
+        try:
+            d = dt_cls.strptime(str(value)[:10], "%Y-%m-%d").replace(tzinfo=sh_tz)
+            return int(d.timestamp() * 1000)
+        except Exception:
+            return value
+
+    existing_records: dict[Any, str] = {}
+    page_token = None
+    while True:
+        params = {"page_size": 500}
+        if page_token:
+            params["page_token"] = page_token
+        try:
+            r_idx = requests.get(records_url, params=params, headers=headers, timeout=30)
+            r_idx.raise_for_status()
+            data = r_idx.json().get("data", {})
+        except Exception as exc:
+            return {"success": False, "message": f"读取现有记录失败: {exc}"}
+        for item in data.get("items", []):
+            fields = item.get("fields", {})
+            date_value = fields.get("日期")
+            record_id = item.get("record_id")
+            if date_value and record_id:
+                existing_records[date_value] = record_id
+                existing_records[to_feishu_date(date_value)] = record_id
+        if not data.get("has_more"):
+            break
+        page_token = data.get("page_token")
+
+    created = 0
+    updated = 0
     failed = 0
     errors = []
     for rec in records:
         dt = rec.get("date", "")
-        try:
-            d = dt_cls.strptime(str(dt)[:10], "%Y-%m-%d").replace(tzinfo=sh_tz)
-            ts = int(d.timestamp() * 1000)
-        except Exception:
-            ts = dt
+        ts = to_feishu_date(dt)
         fields = {
             "日期": ts,
             "沪深300点位": rec.get("csi300_close", 0),
@@ -266,25 +297,41 @@ def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
             "数据源": "tushare+akshare",
         }
         try:
-            r2 = requests.post(
-                f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
-                json={"fields": fields}, headers=headers, timeout=15,
-            )
+            record_id = existing_records.get(ts)
+            if record_id:
+                r2 = requests.put(
+                    f"{records_url}/{record_id}",
+                    json={"fields": fields}, headers=headers, timeout=15,
+                )
+                action = "UPDATE"
+            else:
+                r2 = requests.post(records_url, json={"fields": fields}, headers=headers, timeout=15)
+                action = "CREATE"
             if r2.status_code == 200 and r2.json().get("code") == 0:
-                synced += 1
+                if action == "UPDATE":
+                    updated += 1
+                else:
+                    created += 1
             else:
                 failed += 1
                 if len(errors) < 5:
-                    errors.append(f"{dt}: {r2.status_code} {r2.json().get('msg','')[:80]}")
+                    errors.append(f"{action} {dt}: {r2.status_code} {r2.json().get('msg','')[:80]}")
         except Exception as exc:
             failed += 1
             if len(errors) < 5:
                 errors.append(f"{dt}: {exc}")
 
-    result = {"success": failed == 0, "synced": synced, "failed": failed, "total": len(records)}
+    result = {
+        "success": failed == 0,
+        "synced": created + updated,
+        "created": created,
+        "updated": updated,
+        "failed": failed,
+        "total": len(records),
+    }
     if errors:
         result["errors"] = errors
-    print(f"[ERP 表同步] 成功 {synced}, 失败 {failed}, 总计 {len(records)}")
+    print(f"[ERP 表同步] 新增 {created}, 更新 {updated}, 失败 {failed}, 总计 {len(records)}")
     return result
 
 
@@ -330,7 +377,7 @@ def main() -> None:
     merged_payload = build_merged_signal(erp_payload, relative_payload)
     save_json(MERGED_SIGNAL, merged_payload)
 
-    # ── 独立同步 ERP 数据到新表（绕过 ERP 项目的 sync_to_feishu_bitable）──
+    # ── 独立同步 ERP 数据到 workflow 指定表（绕过 ERP 项目的 sync_to_feishu_bitable）──
     erp_sync_result = sync_erp_to_new_table(erp_payload)
 
     result = {

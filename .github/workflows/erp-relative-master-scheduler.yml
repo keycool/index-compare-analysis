@@ -38,7 +38,7 @@ env:
 
 concurrency:
   group: erp-relative-master-scheduler
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run-master-orchestrator:

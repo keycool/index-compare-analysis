@@ -218,8 +218,8 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
         env["EQUITY_PREMIUM_OUTPUT_PATH"] = str(ERP_ROOT / "equity_premium_enhanced.xlsx")
         env["FEISHU_WEBHOOK_URL"] = env.get("ERP_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
         env["FEISHU_WEBHOOK_SECRET"] = env.get("ERP_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
-        env["FEISHU_APP_TOKEN"] = env.get("ERP_FEISHU_APP_TOKEN") or env.get("FEISHU_APP_TOKEN", "")
-        env["FEISHU_TABLE_ID"] = env.get("ERP_FEISHU_TABLE_ID") or env.get("FEISHU_TABLE_ID", "")
+        env["FEISHU_APP_TOKEN"] = ""
+        env["FEISHU_TABLE_ID"] = ""
     elif target == "relative":
         env["INDEX_COMPARE_SHARED_SIGNAL_PATH"] = str(RELATIVE_SIGNAL)
         env["INDEX_COMPARE_ERP_SIGNAL_PATH"] = str(ERP_SIGNAL)
@@ -395,10 +395,7 @@ def main() -> None:
     merged_payload = build_merged_signal(erp_payload, relative_payload)
     save_json(MERGED_SIGNAL, merged_payload)
 
-    # ── 独立同步 ERP 数据到 workflow 指定表（绕过 ERP 项目的 sync_to_feishu_bitable）──
-    erp_sync_result = sync_erp_to_new_table(erp_payload)
-    if not erp_sync_result.get("success"):
-        raise RuntimeError(f"ERP 飞书表同步失败: {erp_sync_result}")
+    erp_sync_result = {"success": True, "message": "handled_by_workflow_sync_step"}
 
     result = {
         "success": True,

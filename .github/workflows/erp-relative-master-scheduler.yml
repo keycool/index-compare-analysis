@@ -127,6 +127,8 @@ jobs:
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          ERP_FEISHU_APP_TOKEN: ${{ secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_BASE_ID }}
+          ERP_FEISHU_TABLE_ID: ${{ secrets.ERP_FEISHU_TABLE_ID }}
         run: |
           python - << 'PY'
           import json, os, requests
@@ -144,6 +146,9 @@ jobs:
 
           app_id = os.environ["FEISHU_APP_ID"]
           app_secret = os.environ["FEISHU_APP_SECRET"]
+          app_token = os.environ["ERP_FEISHU_APP_TOKEN"]
+          table_id = os.environ["ERP_FEISHU_TABLE_ID"]
+          records_url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
           r = requests.post(
               "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
               json={"app_id": app_id, "app_secret": app_secret}, timeout=15,
@@ -153,45 +158,42 @@ jobs:
           h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
           sh_tz = timezone(timedelta(hours=8))
 
-          # Build date index to avoid duplicates
+          def to_feishu_date(value):
+              try:
+                  d = datetime.strptime(str(value)[:10], "%Y-%m-%d").replace(tzinfo=sh_tz)
+                  return int(d.timestamp() * 1000)
+              except Exception:
+                  return value
+
+          # Build date index so repeated runs update existing rows instead of duplicating them.
           print("Building date index...")
-          existing_dates = set()
+          existing_records = {}
           page_token = None
           while True:
               params = {"page_size": 500}
               if page_token:
                   params["page_token"] = page_token
-              r_idx = requests.get(
-                  "https://open.feishu.cn/open-apis/bitable/v1/apps/VnkcbzcsdabuDwslZhCc6WurnMd/tables/tblEo1BqoTp5z2UV/records",
-                  params=params, headers=h, timeout=30,
-              )
+              r_idx = requests.get(records_url, params=params, headers=h, timeout=30)
               r_idx.raise_for_status()
               data = r_idx.json().get("data", {})
               for item in data.get("items", []):
                   f = item.get("fields", {})
                   dt_val = f.get("日期")
-                  if dt_val:
-                      existing_dates.add(dt_val)
+                  record_id = item.get("record_id")
+                  if dt_val and record_id:
+                      existing_records[dt_val] = record_id
+                      existing_records[to_feishu_date(dt_val)] = record_id
               if not data.get("has_more"):
                   break
               page_token = data.get("page_token")
-          print(f"Existing dates: {len(existing_dates)}")
+          print(f"Existing dates: {len(existing_records)}")
 
-          synced = 0
+          created = 0
+          updated = 0
           failed = 0
-          skipped = 0
           for rec in records:
               dt = rec.get("date", "")
-              try:
-                  d = datetime.strptime(str(dt)[:10], "%Y-%m-%d").replace(tzinfo=sh_tz)
-                  ts = int(d.timestamp() * 1000)
-              except Exception:
-                  ts = dt
-
-              # Skip if date already exists
-              if ts in existing_dates:
-                  skipped += 1
-                  continue
+              ts = to_feishu_date(dt)
 
               fields = {
                   "日期": ts,
@@ -203,24 +205,37 @@ jobs:
                   "数据源": "tushare+akshare",
               }
               try:
-                  r2 = requests.post(
-                      "https://open.feishu.cn/open-apis/bitable/v1/apps/VnkcbzcsdabuDwslZhCc6WurnMd/tables/tblEo1BqoTp5z2UV/records",
-                      json={"fields": fields}, headers=h, timeout=15,
-                  )
+                  record_id = existing_records.get(ts)
+                  if record_id:
+                      r2 = requests.put(
+                          f"{records_url}/{record_id}",
+                          json={"fields": fields}, headers=h, timeout=15,
+                      )
+                      action = "UPDATE"
+                  else:
+                      r2 = requests.post(
+                          records_url,
+                          json={"fields": fields}, headers=h, timeout=15,
+                      )
+                      action = "CREATE"
                   if r2.status_code == 200 and r2.json().get("code") == 0:
-                      synced += 1
+                      if action == "UPDATE":
+                          updated += 1
+                      else:
+                          created += 1
                   else:
                       failed += 1
                       if failed <= 3:
-                          print(f"  FAIL {dt}: {r2.status_code} {r2.json().get('msg','')[:100]}")
+                          print(f"  FAIL {action} {dt}: {r2.status_code} {r2.json().get('msg','')[:100]}")
               except Exception as exc:
                   failed += 1
                   if failed <= 3:
                       print(f"  FAIL {dt}: {exc}")
-              if synced % 1000 == 0:
-                  print(f"  Progress: {synced}/{len(records)}")
+              done = created + updated
+              if done and done % 1000 == 0:
+                  print(f"  Progress: {done}/{len(records)}")
 
-          print(f"ERP sync done: {synced} ok, {failed} fail, {skipped} skipped, {len(records)} total")
+          print(f"ERP sync done: {created} created, {updated} updated, {failed} failed, {len(records)} total")
           PY
 
       - name: Generate ERP dashboard artifact

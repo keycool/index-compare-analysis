@@ -153,8 +153,33 @@ jobs:
           h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
           sh_tz = timezone(timedelta(hours=8))
 
+          # Build date index to avoid duplicates
+          print("Building date index...")
+          existing_dates = set()
+          page_token = None
+          while True:
+              params = {"page_size": 500}
+              if page_token:
+                  params["page_token"] = page_token
+              r_idx = requests.get(
+                  "https://open.feishu.cn/open-apis/bitable/v1/apps/VnkcbzcsdabuDwslZhCc6WurnMd/tables/tblEo1BqoTp5z2UV/records",
+                  params=params, headers=h, timeout=30,
+              )
+              r_idx.raise_for_status()
+              data = r_idx.json().get("data", {})
+              for item in data.get("items", []):
+                  f = item.get("fields", {})
+                  dt_val = f.get("日期")
+                  if dt_val:
+                      existing_dates.add(dt_val)
+              if not data.get("has_more"):
+                  break
+              page_token = data.get("page_token")
+          print(f"Existing dates: {len(existing_dates)}")
+
           synced = 0
           failed = 0
+          skipped = 0
           for rec in records:
               dt = rec.get("date", "")
               try:
@@ -162,6 +187,12 @@ jobs:
                   ts = int(d.timestamp() * 1000)
               except Exception:
                   ts = dt
+
+              # Skip if date already exists
+              if ts in existing_dates:
+                  skipped += 1
+                  continue
+
               fields = {
                   "日期": ts,
                   "沪深300点位": rec.get("csi300_close", 0),
@@ -189,7 +220,7 @@ jobs:
               if synced % 1000 == 0:
                   print(f"  Progress: {synced}/{len(records)}")
 
-          print(f"ERP sync done: {synced} ok, {failed} fail, {len(records)} total")
+          print(f"ERP sync done: {synced} ok, {failed} fail, {skipped} skipped, {len(records)} total")
           PY
 
       - name: Generate ERP dashboard artifact

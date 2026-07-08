@@ -199,6 +199,30 @@ jobs:
               page_token = data.get("page_token")
           print(f"Existing dates: {len(existing_records)}")
 
+          original_count = len(records)
+          lookback_days = int(os.environ.get("ERP_SYNC_LOOKBACK_DAYS", "120"))
+          if existing_records and lookback_days > 0:
+              cutoff = datetime.now(sh_tz) - timedelta(days=lookback_days)
+
+              def should_sync(rec):
+                  dt = rec.get("date", "")
+                  ts = to_feishu_date(dt)
+                  if ts not in existing_records:
+                      return True
+                  try:
+                      d = datetime.strptime(str(dt)[:10], "%Y-%m-%d").replace(tzinfo=sh_tz)
+                  except Exception:
+                      return True
+                  return d >= cutoff
+
+              records = [rec for rec in records if should_sync(rec)]
+              print(
+                  f"Records selected for sync: {len(records)} of {original_count}, "
+                  f"lookback_days={lookback_days}"
+              )
+          else:
+              print(f"Records selected for sync: {len(records)} of {original_count}, full sync")
+
           created = 0
           updated = 0
           failed = 0
@@ -247,7 +271,7 @@ jobs:
                   if failed <= 3:
                       print(f"  FAIL {dt}: {exc}")
               done = created + updated
-              if done and done % 1000 == 0:
+              if done and done % 100 == 0:
                   print(f"  Progress: {done}/{len(records)}")
 
           print(f"ERP sync done: {created} created, {updated} updated, {failed} failed, {len(records)} total")

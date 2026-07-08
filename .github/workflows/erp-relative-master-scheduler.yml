@@ -106,6 +106,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [[ -z "${TUSHARE_TOKEN:-}" ]]; then
+            echo "::error::TUSHARE_TOKEN is required for ERP data refresh"
+            exit 1
+          fi
+
           CMD=(python orchestrator/main.py)
 
           if [[ "$FORCE_RELATIVE" == "true" ]]; then
@@ -122,7 +127,7 @@ jobs:
 
           "${CMD[@]}"
 
-      - name: Sync ERP data to new Feishu table
+      - name: Sync ERP data to configured Feishu table
         if: success()
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -143,11 +148,17 @@ jobs:
           payload = json.loads(erp_path.read_text(encoding="utf-8"))
           records = payload.get("records", [])
           print(f"Records to sync: {len(records)}")
+          print(f"ERP source latest_date: {payload.get('latest_date')}")
+          if records:
+              print(f"ERP last record date: {records[-1].get('date')}")
 
           app_id = os.environ["FEISHU_APP_ID"]
           app_secret = os.environ["FEISHU_APP_SECRET"]
           app_token = os.environ["ERP_FEISHU_APP_TOKEN"]
           table_id = os.environ["ERP_FEISHU_TABLE_ID"]
+          if not app_id or not app_secret or not app_token or not table_id:
+              raise SystemExit("Missing Feishu env: FEISHU_APP_ID/FEISHU_APP_SECRET/ERP_FEISHU_APP_TOKEN/ERP_FEISHU_TABLE_ID")
+          print(f"Feishu target table_id: {table_id}")
           records_url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
           r = requests.post(
               "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
@@ -225,8 +236,12 @@ jobs:
                           created += 1
                   else:
                       failed += 1
-                      if failed <= 3:
-                          print(f"  FAIL {action} {dt}: {r2.status_code} {r2.json().get('msg','')[:100]}")
+                      if failed <= 5:
+                          try:
+                              err = r2.json()
+                          except Exception:
+                              err = {"text": r2.text[:200]}
+                          print(f"  FAIL {action} {dt}: {r2.status_code} {str(err)[:300]}")
               except Exception as exc:
                   failed += 1
                   if failed <= 3:
@@ -236,6 +251,10 @@ jobs:
                   print(f"  Progress: {done}/{len(records)}")
 
           print(f"ERP sync done: {created} created, {updated} updated, {failed} failed, {len(records)} total")
+          if failed:
+              raise SystemExit(f"ERP Feishu sync failed: {failed} failed")
+          if records and created + updated == 0:
+              raise SystemExit("ERP Feishu sync wrote zero records")
           PY
 
       - name: Generate ERP dashboard artifact

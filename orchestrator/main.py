@@ -14,7 +14,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +97,23 @@ def validate_signal(payload: dict[str, Any], expected_type: str, path: Path) -> 
         raise ValueError(f"{path} 缺少 latest_date")
     if not isinstance(payload.get("records"), list):
         raise ValueError(f"{path} records 不是列表")
+
+
+def validate_latest_date_fresh(payload: dict[str, Any], label: str) -> None:
+    max_stale_days = int(os.environ.get("ERP_MAX_STALE_DAYS", "10"))
+    if max_stale_days <= 0:
+        return
+
+    latest_date = payload.get("latest_date")
+    if not latest_date:
+        raise ValueError(f"{label} 缺少 latest_date，无法判断数据新鲜度")
+
+    latest = datetime.strptime(str(latest_date)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    stale_days = (now.date() - latest.date()).days
+    print(f"[{label}] latest_date={latest.date()}, stale_days={stale_days}, max_stale_days={max_stale_days}")
+    if stale_days > max_stale_days:
+        raise RuntimeError(f"{label} 数据过旧: latest_date={latest.date()}, stale_days={stale_days}")
 
 
 def build_latest_snapshot(erp_payload: dict[str, Any], relative_payload: dict[str, Any], latest_date: str | None) -> dict[str, Any]:
@@ -373,12 +390,15 @@ def main() -> None:
     relative_payload = load_json(RELATIVE_SIGNAL)
     validate_signal(erp_payload, "equity_risk_premium", ERP_SIGNAL)
     validate_signal(relative_payload, "csi300_relative_index", RELATIVE_SIGNAL)
+    validate_latest_date_fresh(erp_payload, "ERP")
 
     merged_payload = build_merged_signal(erp_payload, relative_payload)
     save_json(MERGED_SIGNAL, merged_payload)
 
     # ── 独立同步 ERP 数据到 workflow 指定表（绕过 ERP 项目的 sync_to_feishu_bitable）──
     erp_sync_result = sync_erp_to_new_table(erp_payload)
+    if not erp_sync_result.get("success"):
+        raise RuntimeError(f"ERP 飞书表同步失败: {erp_sync_result}")
 
     result = {
         "success": True,

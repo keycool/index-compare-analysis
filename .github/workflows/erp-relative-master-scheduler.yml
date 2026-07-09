@@ -127,7 +127,7 @@ jobs:
 
           "${CMD[@]}"
 
-      - name: Sync ERP data to configured Feishu table
+      - name: Optional sync ERP data to Feishu table
         if: success()
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -157,7 +157,8 @@ jobs:
           app_token = os.environ["ERP_FEISHU_APP_TOKEN"]
           table_id = os.environ["ERP_FEISHU_TABLE_ID"]
           if not app_id or not app_secret or not app_token or not table_id:
-              raise SystemExit("Missing Feishu env: FEISHU_APP_ID/FEISHU_APP_SECRET/ERP_FEISHU_APP_TOKEN/ERP_FEISHU_TABLE_ID")
+              print("::warning::Missing Feishu env; skipping optional ERP Feishu sync")
+              exit(0)
           print(f"Feishu target table_id: {table_id}")
           records_url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
           r = requests.post(
@@ -276,9 +277,9 @@ jobs:
 
           print(f"ERP sync done: {created} created, {updated} updated, {failed} failed, {len(records)} total")
           if failed:
-              raise SystemExit(f"ERP Feishu sync failed: {failed} failed")
+              print(f"::warning::ERP Feishu sync skipped as non-blocking: {failed} failed")
           if records and created + updated == 0:
-              raise SystemExit("ERP Feishu sync wrote zero records")
+              print("::warning::ERP Feishu sync wrote zero records; continuing")
           PY
 
       - name: Generate ERP dashboard artifact

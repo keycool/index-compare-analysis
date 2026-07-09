@@ -138,7 +138,7 @@ jobs:
           ERP_EXPECTED_FEISHU_TABLE_ID: tble1VwP4HNtMNm2
         run: |
           python - << 'PY'
-          import json, os, requests
+          import json, math, os, requests
           from datetime import datetime, timezone, timedelta
           from pathlib import Path
 
@@ -188,6 +188,14 @@ jobs:
                   return int(d.timestamp() * 1000)
               except Exception:
                   return value
+
+          def add_number_field(fields, name, value):
+              if value is None:
+                  return False
+              if isinstance(value, (int, float)) and not math.isfinite(value):
+                  return False
+              fields[name] = value
+              return True
 
           # Build date index so repeated runs update existing rows instead of duplicating them.
           print("Building date index...")
@@ -239,19 +247,24 @@ jobs:
           created = 0
           updated = 0
           failed = 0
+          skipped_nonfinite_fields = 0
           for rec in records:
               dt = rec.get("date", "")
               ts = to_feishu_date(dt)
 
               fields = {
                   "日期": ts,
-                  "沪深300点位": rec.get("csi300_close", 0),
-                  "PE_TTM": rec.get("pe_ttm", 0),
-                  "10年国债收益率": rec.get("bond_yield", 0),
-                  "盈利收益率": rec.get("earnings_yield", 0),
-                  "股权溢价指数": rec.get("equity_premium", 0),
                   "数据源": "tushare+akshare",
               }
+              for field_name, rec_key in (
+                  ("沪深300点位", "csi300_close"),
+                  ("PE_TTM", "pe_ttm"),
+                  ("10年国债收益率", "bond_yield"),
+                  ("盈利收益率", "earnings_yield"),
+                  ("股权溢价指数", "equity_premium"),
+              ):
+                  if not add_number_field(fields, field_name, rec.get(rec_key)):
+                      skipped_nonfinite_fields += 1
               try:
                   record_id = existing_records.get(ts)
                   if record_id:
@@ -288,6 +301,8 @@ jobs:
                   print(f"  Progress: {done}/{len(records)}")
 
           print(f"ERP sync done: {created} created, {updated} updated, {failed} failed, {len(records)} total")
+          if skipped_nonfinite_fields:
+              print(f"Skipped non-finite numeric fields: {skipped_nonfinite_fields}")
           if failed:
               print(f"::warning::ERP Feishu sync skipped as non-blocking: {failed} failed")
           if records and created + updated == 0:

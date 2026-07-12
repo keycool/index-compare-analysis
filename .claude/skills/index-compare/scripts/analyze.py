@@ -105,18 +105,18 @@ def get_index_names():
         "ZZ500": "中证500",
         "ZZ1000": "中证1000",
         "ZZA500": "创业板指数",
-        "SH50": "上证50指数",
-        "KC50": "上证50/科创50",
-        "VAL300": "300价值指数",
+        "SH50": "创业板/上证50",
+        "KC50": "科创50/上证50",
+        "VAL300": "300成长/价值",
         "HKTECH": "恒生科技指数",
     }
 
 
 def get_benchmark_name(index_code):
     benchmark_map = {
-        "SH50": "创业板指数",
+        "SH50": "上证50指数",
         "KC50": "科创50指数",
-        "VAL300": "300成长指数",
+        "VAL300": "300价值指数",
         "HKTECH": "恒生指数",
     }
     return benchmark_map.get(index_code, "沪深300")

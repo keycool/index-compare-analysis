@@ -1776,19 +1776,23 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             ratio_base_name = 'HS300'
             ratio_trace_name = None
             if target == 'SH50':
-                benchmark_name = "创业板指数"
-                chart_title = f'{name} vs 创业板指数'
-                ratio_base_name = 'ZZA500'
+                name = "创业板指数"
+                benchmark_name = "上证50指数"
+                chart_title = '创业板指数 vs 上证50指数'
+                ratio_base_name = 'SH50'
+                ratio_trace_name = '创业板/上证50 比价'
             elif target == 'KC50':
-                name = "上证50指数"
-                benchmark_name = "科创50指数"
-                chart_title = '上证50指数 vs 科创50指数'
-                ratio_base_name = 'KC50'
-                ratio_trace_name = '上证50/科创50 比价'
+                name = "科创50指数"
+                benchmark_name = "上证50指数"
+                chart_title = '科创50指数 vs 上证50指数'
+                ratio_base_name = 'SH50'
+                ratio_trace_name = '科创50/上证50 比价'
             elif target == 'VAL300':
-                benchmark_name = "300成长指数"
-                chart_title = f'{name} vs 300成长指数'
-                ratio_base_name = 'GRO300'
+                name = "300成长指数"
+                benchmark_name = "300价值指数"
+                chart_title = '300成长指数 vs 300价值指数'
+                ratio_base_name = 'VAL300'
+                ratio_trace_name = '300成长/价值 比价'
             elif target == 'HKTECH':
                 benchmark_name = "恒生指数"
                 chart_title = f'{name} vs 恒生指数'
@@ -2528,7 +2532,7 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                     <h2>特色指数对比</h2>
                 </div>
             </div>
-            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">上证50相对创业板指数；上证50相对科创50指数；300价值指数相对300成长指数</div>
+            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">创业板指数相对上证50；科创50指数相对上证50；300成长指数相对300价值指数</div>
             <div class="ratio-charts-grid">
                 {feature_ratio_html}
             </div>
@@ -2629,11 +2633,11 @@ def generate_cards_html(conclusions, df, codes=None):
             trend_class = 'neutral'
             trend_arrow = '→'
         if code == "SH50":
-            ratio_label = "相对创业板指数比价"
+            ratio_label = "创业板/上证50比价"
         elif code == "KC50":
-            ratio_label = "上证50/科创50比价"
+            ratio_label = "科创50/上证50比价"
         elif code == "VAL300":
-            ratio_label = "相对300成长指数比价"
+            ratio_label = "300成长/价值比价"
         elif code == "HKTECH":
             ratio_label = "相对恒生指数比价"
         else:
@@ -2701,11 +2705,11 @@ def generate_compact_kpi_bar_html(conclusions, code):
         trend_arrow = '?'
 
     if code == "SH50":
-        ratio_label = "相对创业板指数比价"
+        ratio_label = "创业板/上证50比价"
     elif code == "KC50":
-        ratio_label = "上证50/科创50比价"
+        ratio_label = "科创50/上证50比价"
     elif code == "VAL300":
-        ratio_label = "相对300成长指数比价"
+        ratio_label = "300成长/价值比价"
     elif code == "HKTECH":
         ratio_label = "相对恒生指数比价"
     else:
@@ -2791,7 +2795,7 @@ def generate_analysis_html(conclusions, codes=None):
                 <div class="analysis-icon {icon_class}">{icon_text}</div>
                 <div>
                     <div class="analysis-title">{data['name']} 分析</div>
-                    <div class="analysis-subtitle">{"vs 创业板指数 比价" if code == "SH50" else ("vs 科创50指数 比价" if code == "KC50" else ("vs 300成长指数 比价" if code == "VAL300" else ("vs 恒生指数 比价" if code == "HKTECH" else "vs 沪深300 比价")))}</div>
+                    <div class="analysis-subtitle">{"vs 上证50指数 比价" if code == "SH50" else ("vs 上证50指数 比价" if code == "KC50" else ("vs 300价值指数 比价" if code == "VAL300" else ("vs 恒生指数 比价" if code == "HKTECH" else "vs 沪深300 比价")))}</div>
                 </div>
             </div>
             <div class="analysis-body">

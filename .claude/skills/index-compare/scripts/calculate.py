@@ -212,12 +212,14 @@ def process_data(input_path, output_path):
         numerator_col = target
         ratio_base_col = 'HS300'
         if target == 'SH50':
-            ratio_base_col = 'ZZA500'
+            numerator_col = 'ZZA500'
+            ratio_base_col = 'SH50'
         elif target == 'KC50':
-            numerator_col = 'SH50'
-            ratio_base_col = 'KC50'
+            numerator_col = 'KC50'
+            ratio_base_col = 'SH50'
         elif target == 'VAL300':
-            ratio_base_col = 'GRO300'
+            numerator_col = 'GRO300'
+            ratio_base_col = 'VAL300'
         elif target == 'HKTECH':
             ratio_base_col = 'HSI'
         print(f"\n计算 {numerator_col} vs {ratio_base_col}...")

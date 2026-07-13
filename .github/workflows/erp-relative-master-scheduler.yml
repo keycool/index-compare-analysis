@@ -5,11 +5,9 @@ on:
     branches:
       - master
   schedule:
-    # GitHub cron uses UTC (Mon-Fri):
-    # 00:00 UTC = 08:00 Asia/Shanghai
-    - cron: "0 0 * * 1-5"
-    # 14:00 UTC = 22:00 Asia/Shanghai
-    - cron: "0 14 * * 1-5"
+    # GitHub cron uses UTC:
+    # 12:00 UTC = 20:00 Asia/Shanghai
+    - cron: "0 12 * * *"
   workflow_dispatch:
     inputs:
       force_relative:
@@ -44,41 +42,154 @@ jobs:
   run-master-orchestrator:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      should_run: ${{ steps.preflight.outputs.should_run }}
 
     steps:
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Preflight Tushare freshness check
+        id: preflight
+        env:
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          LATEST_SIGNAL_URL: https://index-compare-analysis.vercel.app/data/merged_signal.json
+        run: |
+          python - << 'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timedelta
+
+          event_name = "${{ github.event_name }}"
+          output_path = os.environ["GITHUB_OUTPUT"]
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+
+          def write_output(key: str, value: str) -> None:
+              with open(output_path, "a", encoding="utf-8") as f:
+                  f.write(f"{key}={value}\n")
+
+          def write_summary(lines: list[str]) -> None:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write("\n".join(lines) + "\n")
+
+          if event_name != "schedule":
+              write_output("should_run", "true")
+              write_output("reason", "non_schedule_event")
+              write_summary([
+                  "## Preflight check",
+                  "",
+                  f"- Event: `{event_name}`",
+                  "- Result: bypass freshness check and continue.",
+              ])
+              raise SystemExit(0)
+
+          token = os.environ.get("TUSHARE_TOKEN", "").strip()
+          if not token:
+              raise SystemExit("TUSHARE_TOKEN is required for schedule freshness check")
+
+          latest_signal_url = os.environ.get("LATEST_SIGNAL_URL", "").strip()
+          start_date = (datetime.utcnow() - timedelta(days=20)).strftime("%Y%m%d")
+          end_date = datetime.utcnow().strftime("%Y%m%d")
+
+          req_body = json.dumps({
+              "api_name": "index_daily",
+              "token": token,
+              "params": {
+                  "ts_code": "000300.SH",
+                  "start_date": start_date,
+                  "end_date": end_date,
+              },
+              "fields": "trade_date",
+          }).encode("utf-8")
+
+          req = urllib.request.Request(
+              "https://api.tushare.pro",
+              data=req_body,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              tushare_payload = json.loads(resp.read().decode("utf-8"))
+
+          items = (((tushare_payload or {}).get("data") or {}).get("items")) or []
+          if not items:
+              raise SystemExit(f"Tushare returned no index_daily items: {tushare_payload}")
+
+          latest_trade_date_raw = str(items[0][0])
+          latest_trade_date = f"{latest_trade_date_raw[:4]}-{latest_trade_date_raw[4:6]}-{latest_trade_date_raw[6:8]}"
+
+          deployed_latest_date = ""
+          fetch_error = ""
+          if latest_signal_url:
+              try:
+                  with urllib.request.urlopen(latest_signal_url, timeout=30) as resp:
+                      merged_payload = json.loads(resp.read().decode("utf-8"))
+                  deployed_latest_date = str((merged_payload or {}).get("latest_date") or "")
+              except urllib.error.URLError as exc:
+                  fetch_error = str(exc)
+              except Exception as exc:
+                  fetch_error = str(exc)
+
+          should_run = True
+          reason = "new_data_detected"
+          if deployed_latest_date and deployed_latest_date >= latest_trade_date:
+              should_run = False
+              reason = "no_new_tushare_data"
+          elif fetch_error:
+              reason = "latest_signal_unavailable_run_anyway"
+
+          write_output("should_run", "true" if should_run else "false")
+          write_output("reason", reason)
+          write_output("latest_trade_date", latest_trade_date)
+          write_output("deployed_latest_date", deployed_latest_date or "unknown")
+
+          lines = [
+              "## Preflight check",
+              "",
+              f"- Event: `{event_name}`",
+              f"- Tushare latest trade date: `{latest_trade_date}`",
+              f"- Deployed merged latest date: `{deployed_latest_date or 'unknown'}`",
+              f"- Decision: `{'run' if should_run else 'skip'}`",
+              f"- Reason: `{reason}`",
+          ]
+          if fetch_error:
+              lines.append(f"- Note: failed to fetch latest deployed signal, so workflow continues. `{fetch_error}`")
+          write_summary(lines)
+          PY
+
       - name: Checkout CSI300 Relative Index
+        if: steps.preflight.outputs.should_run == 'true'
         uses: actions/checkout@v6
         with:
           path: csi300-relative-index
 
       - name: Checkout Equity Risk Premium
+        if: steps.preflight.outputs.should_run == 'true'
         uses: actions/checkout@v6
         with:
           repository: ${{ vars.ERP_REPOSITORY || 'keycool/equity-risk-premium' }}
           token: ${{ secrets.CROSS_REPO_PAT || github.token }}
           path: external/equity-risk-premium
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: |
-            csi300-relative-index/.claude/skills/index-compare/requirements.txt
-            external/equity-risk-premium/skills/equity-risk-premium/requirements.txt
-
       - name: Setup Node
+        if: steps.preflight.outputs.should_run == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Install dependencies
+        if: steps.preflight.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r csi300-relative-index/.claude/skills/index-compare/requirements.txt
           pip install -r external/equity-risk-premium/skills/equity-risk-premium/requirements.txt
 
       - name: Run master orchestrator
+        if: steps.preflight.outputs.should_run == 'true'
         env:
           ERP_REPO_PATH: ${{ github.workspace }}/external/equity-risk-premium
           SHARED_DIR: ${{ github.workspace }}/shared
@@ -128,7 +239,7 @@ jobs:
           "${CMD[@]}"
 
       - name: Optional sync ERP data to Feishu table
-        if: success()
+        if: success() && steps.preflight.outputs.should_run == 'true'
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
@@ -310,12 +421,12 @@ jobs:
           PY
 
       - name: Generate ERP dashboard artifact
-        if: success()
+        if: success() && steps.preflight.outputs.should_run == 'true'
         run: |
           python external/equity-risk-premium/dashboard/generate_dashboard_data.py
 
       - name: Upload master artifacts
-        if: always()
+        if: always() && steps.preflight.outputs.should_run == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: erp-relative-master-${{ github.run_id }}
@@ -335,11 +446,11 @@ jobs:
           retention-days: 7
 
       - name: Setup Pages
-        if: success()
+        if: success() && steps.preflight.outputs.should_run == 'true'
         uses: actions/configure-pages@v5
 
       - name: Build Pages site
-        if: success()
+        if: success() && steps.preflight.outputs.should_run == 'true'
         run: |
           python - << 'PY'
           import json
@@ -397,7 +508,7 @@ jobs:
           PY
 
       - name: Deploy to Vercel
-        if: success()
+        if: success() && steps.preflight.outputs.should_run == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -419,13 +530,13 @@ jobs:
           vercel deploy --prod --yes --token "$VERCEL_TOKEN"
 
       - name: Upload Pages artifact
-        if: success()
+        if: success() && steps.preflight.outputs.should_run == 'true'
         uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
   deploy-pages:
-    if: success()
+    if: success() && needs.run-master-orchestrator.result == 'success' && needs.run-master-orchestrator.outputs.should_run == 'true'
     needs: run-master-orchestrator
     runs-on: ubuntu-latest
     environment:

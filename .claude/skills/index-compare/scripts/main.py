@@ -689,7 +689,7 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
     feishu_sent = False
     if os.environ.get("FEISHU_WEBHOOK_URL") and latest_row:
         feishu = FeishuWebhook()
-        feishu_sent = feishu.send(latest_row, conclusions, title="指数比价分析")
+        feishu_sent = feishu.send(latest_row, conclusions, title="核心比价指标")
 
     bitable_result = {
         "success": False, "message": "未执行",

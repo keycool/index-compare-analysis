@@ -507,6 +507,24 @@ jobs:
           print(f"[PAGES] Site dir: {site_dir}")
           PY
 
+      - name: Inspect built site
+        if: success() && steps.preflight.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+
+          test -f site/index.html
+          test -f site/site_manifest.json
+
+          echo "## Site build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- index.html: \`present\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- site_manifest.json: \`present\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- data dir:" >> "$GITHUB_STEP_SUMMARY"
+          find site/data -maxdepth 1 -type f | sort | sed 's/^/  - /' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "[SITE] Manifest:"
+          cat site/site_manifest.json
+
       - name: Deploy to Vercel
         if: success() && steps.preflight.outputs.should_run == 'true'
         env:
@@ -527,7 +545,12 @@ jobs:
           EOF
 
           cd site
-          vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+          DEPLOY_URL="$(vercel deploy --prod --yes --token "$VERCEL_TOKEN")"
+          echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "## Vercel deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Deploy URL: $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "[VERCEL] Deploy URL: $DEPLOY_URL"
 
       - name: Upload Pages artifact
         if: success() && steps.preflight.outputs.should_run == 'true'

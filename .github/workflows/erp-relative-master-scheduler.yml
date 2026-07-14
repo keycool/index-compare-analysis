@@ -287,6 +287,7 @@ jobs:
 
           latest_date = payload.get("latest_date")
           feishu_sent = bool(payload.get("feishu_sent"))
+          feishu_result = payload.get("feishu_result") or {}
           shared_signal_path = payload.get("shared_signal_path")
           fallback_error = ""
           webhook_url = os.environ.get("CSI_FEISHU_WEBHOOK_URL", "")
@@ -325,6 +326,7 @@ jobs:
               f.write("## Orchestrator result\n\n")
               f.write(f"- Latest date: `{latest_date}`\n")
               f.write(f"- Feishu sent: `{feishu_sent}`\n")
+              f.write(f"- Feishu result: `{json.dumps(feishu_result, ensure_ascii=False)}`\n")
               f.write(f"- Shared signal path: `{shared_signal_path}`\n")
               f.write(f"- Webhook tail: `{webhook_tail or '<missing>'}`\n")
               f.write(f"- Webhook keyword: `{webhook_keyword or '<missing>'}`\n")
@@ -337,7 +339,8 @@ jobs:
                   "Relative index Feishu webhook was not sent successfully; "
                   f"tail={webhook_tail or '<missing>'}; "
                   f"keyword={webhook_keyword or '<missing>'}; "
-                  f"secret_present={bool(webhook_secret)}"
+                  f"secret_present={bool(webhook_secret)}; "
+                  f"result={json.dumps(feishu_result, ensure_ascii=False)}"
               )
               if fallback_error:
                   warning_message += f"; fallback_note={fallback_error}"

@@ -16,6 +16,7 @@ from typing import Any
 import requests
 
 logger = logging.getLogger(__name__)
+RETRYABLE_ERROR_CODES = {11232}
 
 TITLE_INDEX_COMPARE = "\u6307\u6570\u6bd4\u4ef7\u5206\u6790"
 TITLE_CORE_METRICS = "\u6838\u5fc3\u6bd4\u4ef7\u6307\u6807"
@@ -60,6 +61,7 @@ class FeishuWebhook:
         self.webhook_url = (webhook_url or os.environ.get("FEISHU_WEBHOOK_URL") or "").strip()
         self.webhook_secret = (webhook_secret or os.environ.get("FEISHU_WEBHOOK_SECRET") or "").strip()
         self.webhook_keyword = (webhook_keyword or os.environ.get("FEISHU_WEBHOOK_KEYWORD") or "").strip()
+        self.last_result: dict[str, Any] = {}
 
     def send(
         self,
@@ -77,7 +79,8 @@ class FeishuWebhook:
             return False
 
         try:
-            result = self._post_payload(payload)
+            result = self._post_payload_with_retry(payload)
+            self.last_result = result
             if result.get("code") == 0:
                 logger.info("Feishu webhook push succeeded")
                 return True
@@ -85,7 +88,8 @@ class FeishuWebhook:
             if result.get("code") == 19024:
                 logger.warning("Feishu post payload hit keyword validation; retry with plain text")
                 fallback = self._build_text_payload(latest_data, conclusions, title)
-                fallback_result = self._post_payload(fallback)
+                fallback_result = self._post_payload_with_retry(fallback)
+                self.last_result = fallback_result
                 if fallback_result.get("code") == 0:
                     logger.info("Feishu webhook text fallback succeeded")
                     return True
@@ -107,6 +111,23 @@ class FeishuWebhook:
         )
         response.raise_for_status()
         return response.json()
+
+    def _post_payload_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for attempt in range(4):
+            result = self._post_payload(payload)
+            if result.get("code") not in RETRYABLE_ERROR_CODES:
+                return result
+
+            wait_seconds = 15 * (attempt + 1)
+            logger.warning(
+                "Feishu webhook is frequency limited (code=%s); retrying in %ss",
+                result.get("code"),
+                wait_seconds,
+            )
+            time.sleep(wait_seconds)
+
+        return result
 
     def _build_post_payload(
         self,

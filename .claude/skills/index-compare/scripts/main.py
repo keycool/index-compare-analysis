@@ -687,9 +687,11 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
     latest_row: Dict[str, Any] = export_df.iloc[-1].to_dict() if not export_df.empty else {}
 
     feishu_sent = False
+    feishu_result: Dict[str, Any] = {}
     if os.environ.get("FEISHU_WEBHOOK_URL") and latest_row:
         feishu = FeishuWebhook()
         feishu_sent = feishu.send(latest_row, conclusions, title="指数比价分析")
+        feishu_result = getattr(feishu, "last_result", {}) or {}
 
     bitable_result = {
         "success": False, "message": "未执行",
@@ -717,6 +719,7 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "shared_signal_saved": shared_signal_saved,
         "shared_signal_path": str(shared_signal_path) if shared_signal_saved else None,
         "feishu_sent": feishu_sent,
+        "feishu_result": feishu_result,
         "bitable_synced": bitable_result.get("success", False),
         "bitable_count": bitable_result.get("synced", 0),
         "bitable_failed": bitable_result.get("failed", 0),

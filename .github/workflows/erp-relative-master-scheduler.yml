@@ -286,9 +286,13 @@ jobs:
               raise SystemExit("Failed to parse orchestrator JSON result")
 
           latest_date = payload.get("latest_date")
-          feishu_sent = bool(payload.get("feishu_sent"))
-          feishu_result = payload.get("feishu_result") or {}
-          shared_signal_path = payload.get("shared_signal_path")
+          relative_run_result = ((payload.get("relative") or {}).get("run_result")) or {}
+          feishu_sent = bool(relative_run_result.get("feishu_sent"))
+          feishu_result = relative_run_result.get("feishu_result") or {}
+          shared_signal_path = (
+              relative_run_result.get("shared_signal_path")
+              or ((payload.get("relative") or {}).get("shared_signal_path"))
+          )
           fallback_error = ""
           webhook_url = os.environ.get("CSI_FEISHU_WEBHOOK_URL", "")
           webhook_keyword = os.environ.get("CSI_FEISHU_WEBHOOK_KEYWORD", "")

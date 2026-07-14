@@ -227,6 +227,7 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
         env["REQUIRE_BITABLE_SYNC"] = env.get("REQUIRE_BITABLE_SYNC", "true")
         env["FEISHU_WEBHOOK_URL"] = env.get("CSI_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
         env["FEISHU_WEBHOOK_SECRET"] = env.get("CSI_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
+        env["FEISHU_WEBHOOK_KEYWORD"] = env.get("CSI_FEISHU_WEBHOOK_KEYWORD") or env.get("FEISHU_WEBHOOK_KEYWORD", "")
         env["FEISHU_APP_TOKEN"] = env.get("CSI_FEISHU_APP_TOKEN") or env.get("FEISHU_APP_TOKEN", "")
         env["FEISHU_TABLE_ID"] = env.get("CSI_FEISHU_TABLE_ID") or env.get("FEISHU_TABLE_ID", "")
     else:

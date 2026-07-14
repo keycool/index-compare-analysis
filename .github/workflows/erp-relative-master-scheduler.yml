@@ -246,7 +246,7 @@ jobs:
 
       - name: Optional sync ERP data to Feishu table
         id: optional_erp_sync
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: success() && steps.preflight.outputs.should_run == 'true' && vars.ENABLE_OPTIONAL_ERP_SYNC == 'true'
         continue-on-error: true
         timeout-minutes: 8
         env:

@@ -210,8 +210,8 @@ jobs:
           ERP_FEISHU_APP_TOKEN: ${{ secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_BASE_ID || secrets.FEISHU_APP_TOKEN }}
           ERP_FEISHU_TABLE_ID: ${{ secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 
-          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
-          CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.CSI_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET }}
+          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL || secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
+          CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.CSI_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET || secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           CSI_FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
           CSI_FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 
@@ -225,6 +225,11 @@ jobs:
 
           if [[ -z "${TUSHARE_TOKEN:-}" ]]; then
             echo "::error::TUSHARE_TOKEN is required for ERP data refresh"
+            exit 1
+          fi
+
+          if [[ -z "${CSI_FEISHU_WEBHOOK_URL:-}" ]]; then
+            echo "::error::CSI_FEISHU_WEBHOOK_URL is empty after secret fallback resolution"
             exit 1
           fi
 

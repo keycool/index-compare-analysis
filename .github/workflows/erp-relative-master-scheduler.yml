@@ -289,6 +289,10 @@ jobs:
           feishu_sent = bool(payload.get("feishu_sent"))
           shared_signal_path = payload.get("shared_signal_path")
           fallback_error = ""
+          webhook_url = os.environ.get("CSI_FEISHU_WEBHOOK_URL", "")
+          webhook_keyword = os.environ.get("CSI_FEISHU_WEBHOOK_KEYWORD", "")
+          webhook_secret = os.environ.get("CSI_FEISHU_WEBHOOK_SECRET", "")
+          webhook_tail = webhook_url[-8:] if webhook_url else ""
 
           if not feishu_sent:
               try:
@@ -322,13 +326,24 @@ jobs:
               f.write(f"- Latest date: `{latest_date}`\n")
               f.write(f"- Feishu sent: `{feishu_sent}`\n")
               f.write(f"- Shared signal path: `{shared_signal_path}`\n")
+              f.write(f"- Webhook tail: `{webhook_tail or '<missing>'}`\n")
+              f.write(f"- Webhook keyword: `{webhook_keyword or '<missing>'}`\n")
+              f.write(f"- Webhook secret present: `{bool(webhook_secret)}`\n")
               if fallback_error:
                   f.write(f"- Feishu fallback note: `{fallback_error}`\n")
 
           if not feishu_sent:
+              warning_message = (
+                  "Relative index Feishu webhook was not sent successfully; "
+                  f"tail={webhook_tail or '<missing>'}; "
+                  f"keyword={webhook_keyword or '<missing>'}; "
+                  f"secret_present={bool(webhook_secret)}"
+              )
+              if fallback_error:
+                  warning_message += f"; fallback_note={fallback_error}"
               with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
-                  f.write("- Warning: relative index Feishu webhook was not sent successfully; deployment continues.\n")
-              print("::warning::Relative index Feishu webhook was not sent successfully; deployment continues")
+                  f.write(f"- Warning: {warning_message}; deployment continues.\n")
+              print(f"::warning::{warning_message}; deployment continues")
           PY
 
       - name: Optional sync ERP data to Feishu table

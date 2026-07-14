@@ -245,7 +245,10 @@ jobs:
           "${CMD[@]}"
 
       - name: Optional sync ERP data to Feishu table
+        id: optional_erp_sync
         if: success() && steps.preflight.outputs.should_run == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
@@ -427,7 +430,7 @@ jobs:
           PY
 
       - name: Generate ERP dashboard artifact
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         run: |
           python external/equity-risk-premium/dashboard/generate_dashboard_data.py
 
@@ -452,11 +455,11 @@ jobs:
           retention-days: 7
 
       - name: Setup Pages
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         uses: actions/configure-pages@v5
 
       - name: Build Pages site
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         run: |
           python - << 'PY'
           import json
@@ -514,7 +517,7 @@ jobs:
           PY
 
       - name: Inspect built site
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         run: |
           set -euo pipefail
 
@@ -532,7 +535,7 @@ jobs:
           cat site/site_manifest.json
 
       - name: Deploy to Vercel
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -559,7 +562,7 @@ jobs:
           echo "[VERCEL] Deploy URL: $DEPLOY_URL"
 
       - name: Upload Pages artifact
-        if: success() && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         uses: actions/upload-pages-artifact@v4
         with:
           path: site

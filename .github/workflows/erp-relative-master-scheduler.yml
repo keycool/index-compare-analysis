@@ -210,8 +210,8 @@ jobs:
           ERP_FEISHU_APP_TOKEN: ${{ secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_BASE_ID || secrets.FEISHU_APP_TOKEN }}
           ERP_FEISHU_TABLE_ID: ${{ secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 
-          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL || secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
-          CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET || secrets.CSI_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET }}
+          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
+          CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           CSI_FEISHU_WEBHOOK_KEYWORD: ERP执行日报
           CSI_FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
           CSI_FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
@@ -232,6 +232,15 @@ jobs:
           if [[ -z "${CSI_FEISHU_WEBHOOK_URL:-}" ]]; then
             echo "::warning::CSI_FEISHU_WEBHOOK_URL is empty after secret fallback resolution"
           fi
+
+          CSI_WEBHOOK_TAIL="${CSI_FEISHU_WEBHOOK_URL##*/}"
+          CSI_WEBHOOK_TAIL="${CSI_WEBHOOK_TAIL: -8}"
+          {
+            echo "## Relative webhook target"
+            echo ""
+            echo "- webhook tail: \`${CSI_WEBHOOK_TAIL:-<missing>}\`"
+            echo "- keyword: \`${CSI_FEISHU_WEBHOOK_KEYWORD:-<missing>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           CMD=(python orchestrator/main.py)
 

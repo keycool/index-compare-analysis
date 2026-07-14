@@ -210,9 +210,9 @@ jobs:
           ERP_FEISHU_APP_TOKEN: ${{ secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_BASE_ID || secrets.FEISHU_APP_TOKEN }}
           ERP_FEISHU_TABLE_ID: ${{ secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 
-          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL || secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
-          CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET || secrets.CSI_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET }}
-          CSI_FEISHU_WEBHOOK_KEYWORD: ERP执行日报
+          CSI_FEISHU_WEBHOOK_URL: ${{ secrets.CSI_FEISHU_WEBHOOK_URL || secrets.FEISHU_WEBHOOK_URL }}
+          CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.CSI_FEISHU_WEBHOOK_SECRET || secrets.FEISHU_WEBHOOK_SECRET }}
+          CSI_FEISHU_WEBHOOK_KEYWORD: ${{ secrets.CSI_FEISHU_WEBHOOK_KEYWORD || secrets.FEISHU_WEBHOOK_KEYWORD }}
           CSI_FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
           CSI_FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 
@@ -230,8 +230,7 @@ jobs:
           fi
 
           if [[ -z "${CSI_FEISHU_WEBHOOK_URL:-}" ]]; then
-            echo "::error::CSI_FEISHU_WEBHOOK_URL is empty after secret fallback resolution"
-            exit 1
+            echo "::warning::CSI_FEISHU_WEBHOOK_URL is empty after secret fallback resolution"
           fi
 
           CMD=(python orchestrator/main.py)
@@ -287,7 +286,9 @@ jobs:
               f.write(f"- Shared signal path: `{shared_signal_path}`\n")
 
           if not feishu_sent:
-              raise SystemExit("Relative index Feishu webhook was not sent successfully")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+                  f.write("- Warning: relative index Feishu webhook was not sent successfully; deployment continues.\n")
+              print("::warning::Relative index Feishu webhook was not sent successfully; deployment continues")
           PY
 
       - name: Optional sync ERP data to Feishu table

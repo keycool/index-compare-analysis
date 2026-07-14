@@ -242,7 +242,47 @@ jobs:
             CMD+=(--erp-end-date "$ERP_END_DATE")
           fi
 
-          "${CMD[@]}"
+          LOG_PATH="$RUNNER_TEMP/master_orchestrator.log"
+          "${CMD[@]}" | tee "$LOG_PATH"
+
+          python - << 'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          log_path = Path(os.environ["RUNNER_TEMP"]) / "master_orchestrator.log"
+          text = log_path.read_text(encoding="utf-8")
+          lines = text.splitlines()
+
+          payload = None
+          for start in range(len(lines) - 1, -1, -1):
+              candidate = "\n".join(lines[start:]).strip()
+              if not candidate.startswith("{"):
+                  continue
+              try:
+                  obj = json.loads(candidate)
+              except json.JSONDecodeError:
+                  continue
+              if isinstance(obj, dict):
+                  payload = obj
+                  break
+
+          if payload is None:
+              raise SystemExit("Failed to parse orchestrator JSON result")
+
+          latest_date = payload.get("latest_date")
+          feishu_sent = bool(payload.get("feishu_sent"))
+          shared_signal_path = payload.get("shared_signal_path")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("## Orchestrator result\n\n")
+              f.write(f"- Latest date: `{latest_date}`\n")
+              f.write(f"- Feishu sent: `{feishu_sent}`\n")
+              f.write(f"- Shared signal path: `{shared_signal_path}`\n")
+
+          if not feishu_sent:
+              raise SystemExit("Relative index Feishu webhook was not sent successfully")
+          PY
 
       - name: Optional sync ERP data to Feishu table
         id: optional_erp_sync

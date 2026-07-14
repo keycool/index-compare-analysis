@@ -31,7 +31,7 @@ class FeishuWebhook:
         self.webhook_url = webhook_url or os.environ.get("FEISHU_WEBHOOK_URL")
         self.webhook_secret = (webhook_secret or os.environ.get("FEISHU_WEBHOOK_SECRET") or "").strip()
 
-    def send(self, latest_data: Dict[str, Any], conclusions: Dict[str, Any], title: str = "核心比价指标") -> bool:
+    def send(self, latest_data: Dict[str, Any], conclusions: Dict[str, Any], title: str = "指数比价分析") -> bool:
         if not self.webhook_url:
             logger.warning("Feishu webhook URL 未配置，跳过推送")
             return False

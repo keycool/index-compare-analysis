@@ -128,7 +128,13 @@ jobs:
               try:
                   with urllib.request.urlopen(latest_signal_url, timeout=30) as resp:
                       merged_payload = json.loads(resp.read().decode("utf-8"))
-                  deployed_latest_date = str((merged_payload or {}).get("latest_date") or "")
+                  components = (merged_payload or {}).get("components") or {}
+                  relative_component = components.get("relative") if isinstance(components, dict) else {}
+                  deployed_latest_date = str(
+                      (relative_component or {}).get("latest_date")
+                      or (merged_payload or {}).get("latest_date")
+                      or ""
+                  )
               except urllib.error.URLError as exc:
                   fetch_error = str(exc)
               except Exception as exc:
@@ -152,7 +158,7 @@ jobs:
               "",
               f"- Event: `{event_name}`",
               f"- Tushare latest trade date: `{latest_trade_date}`",
-              f"- Deployed merged latest date: `{deployed_latest_date or 'unknown'}`",
+              f"- Deployed relative latest date: `{deployed_latest_date or 'unknown'}`",
               f"- Decision: `{'run' if should_run else 'skip'}`",
               f"- Reason: `{reason}`",
           ]

@@ -70,11 +70,13 @@ class FeishuWebhook:
         title: str = TITLE_INDEX_COMPARE,
     ) -> bool:
         if not self.webhook_url:
+            self.last_result = {"code": "missing_webhook_url", "msg": "Feishu webhook URL is missing"}
             logger.warning("Feishu webhook URL is missing; skip push")
             return False
 
         payload = self._build_post_payload(latest_data, conclusions, title)
         if not payload:
+            self.last_result = {"code": "empty_payload", "msg": "Feishu payload is empty"}
             logger.warning("Feishu payload is empty; skip push")
             return False
 
@@ -99,6 +101,11 @@ class FeishuWebhook:
             logger.error("Feishu webhook push failed: %s", result)
             return False
         except Exception as exc:
+            self.last_result = {
+                "code": "exception",
+                "exception_type": exc.__class__.__name__,
+                "msg": str(exc),
+            }
             logger.error("Feishu webhook push error: %s", exc)
             return False
 
@@ -115,7 +122,20 @@ class FeishuWebhook:
     def _post_payload_with_retry(self, payload: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for attempt in range(4):
-            result = self._post_payload(payload)
+            try:
+                result = self._post_payload(payload)
+            except requests.RequestException as exc:
+                if attempt == 3:
+                    raise
+                wait_seconds = 15 * (attempt + 1)
+                logger.warning(
+                    "Feishu webhook request failed (%s); retrying in %ss",
+                    exc,
+                    wait_seconds,
+                )
+                time.sleep(wait_seconds)
+                continue
+
             if result.get("code") not in RETRYABLE_ERROR_CODES:
                 return result
 

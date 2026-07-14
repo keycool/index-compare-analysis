@@ -262,6 +262,7 @@ jobs:
           python - << 'PY'
           import json
           import os
+          import sys
           from pathlib import Path
 
           log_path = Path(os.environ["RUNNER_TEMP"]) / "master_orchestrator.log"
@@ -287,12 +288,42 @@ jobs:
           latest_date = payload.get("latest_date")
           feishu_sent = bool(payload.get("feishu_sent"))
           shared_signal_path = payload.get("shared_signal_path")
+          fallback_error = ""
+
+          if not feishu_sent:
+              try:
+                  import pandas as pd
+
+                  repo_root = Path.cwd()
+                  data_dir = repo_root / ".claude" / "skills" / "index-compare" / "data"
+                  scripts_dir = repo_root / ".claude" / "skills" / "index-compare" / "scripts"
+                  processed_path = data_dir / "processed_data.csv"
+                  conclusions_path = data_dir / "conclusions.json"
+
+                  if processed_path.exists() and conclusions_path.exists():
+                      sys.path.insert(0, str(scripts_dir))
+                      from feishu import FeishuWebhook  # type: ignore
+
+                      processed_df = pd.read_csv(processed_path)
+                      latest_row = processed_df.iloc[-1].to_dict() if not processed_df.empty else {}
+                      conclusions = json.loads(conclusions_path.read_text(encoding="utf-8"))
+                      if latest_row:
+                          feishu_sent = FeishuWebhook().send(latest_row, conclusions, title="指数比价分析")
+                  else:
+                      fallback_error = (
+                          f"missing fallback inputs: processed={processed_path.exists()} "
+                          f"conclusions={conclusions_path.exists()}"
+                      )
+              except Exception as exc:
+                  fallback_error = str(exc)
 
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
               f.write("## Orchestrator result\n\n")
               f.write(f"- Latest date: `{latest_date}`\n")
               f.write(f"- Feishu sent: `{feishu_sent}`\n")
               f.write(f"- Shared signal path: `{shared_signal_path}`\n")
+              if fallback_error:
+                  f.write(f"- Feishu fallback note: `{fallback_error}`\n")
 
           if not feishu_sent:
               with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:

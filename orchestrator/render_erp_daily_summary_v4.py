@@ -50,9 +50,10 @@ def forced_exit_text(item: dict) -> str | None:
         return None
     percentile = item.get("current_percentile")
     threshold = item.get("forced_exit_threshold")
+    operator = item.get("forced_exit_operator", ">=")
     if percentile is None or threshold is None:
         return "已达到强制退出条件，目标仓位归零"
-    return f"当前分位 {percentile:.2f}% 已达强制退出阈值 {threshold:.2f}%，目标仓位归零"
+    return f"当前分位 {percentile:.2f}% {operator} 强制退出阈值 {threshold:.2f}%，目标仓位归零"
 
 
 def reentry_text(item: dict) -> str | None:
@@ -191,7 +192,8 @@ def main() -> None:
     lines.append(f"- 进攻权重：`low={pct(aggressive_weights['low'])}` / `neutral={pct(aggressive_weights['neutral'])}` / `high={pct(aggressive_weights['high'])}`")
     lines.append(f"- 港股上限：`{pct(config.get('cross_market', {}).get('hk_pool_cap', 0.20))}`")
     if forced_exit_thresholds:
-        lines.append(f"- 强制退出阈值：`50>={forced_exit_thresholds.get('sh50','-')}` / `500>={forced_exit_thresholds.get('zz500','-')}` / `1000>={forced_exit_thresholds.get('zz1000','-')}` / `创业板>={forced_exit_thresholds.get('cyb','-')}` / `科创50>={forced_exit_thresholds.get('kc50','-')}`")
+        sh50_exit = 100 - float(forced_exit_thresholds["sh50"]) if "sh50" in forced_exit_thresholds else "-"
+        lines.append(f"- 强制退出阈值：`50<={sh50_exit}` / `500>={forced_exit_thresholds.get('zz500','-')}` / `1000>={forced_exit_thresholds.get('zz1000','-')}` / `创业板>={forced_exit_thresholds.get('cyb','-')}` / `科创50>={forced_exit_thresholds.get('kc50','-')}`")
     if reentry_thresholds:
         lines.append(f"- 重入闸门：`500<{reentry_thresholds.get('zz500','-')}` / `1000<{reentry_thresholds.get('zz1000','-')}` / `创业板<{reentry_thresholds.get('cyb','-')}` / `科创50<{reentry_thresholds.get('kc50','-')}`")
 

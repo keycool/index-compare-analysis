@@ -115,7 +115,7 @@
   },
   "bucket_metadata": {
     "hs300":  { "label": "沪深300",       "sleeve": "defensive",  "pool": "ashare" },
-    "sh50":   { "label": "防守价值（上证50/红利）", "sleeve": "defensive",  "pool": "ashare" },
+    "sh50":   { "label": "防守价值（上证50）", "sleeve": "defensive",  "pool": "ashare" },
     "val300": { "label": "300价值",       "sleeve": "defensive",  "pool": "ashare" },
     "gro300": { "label": "300成长",       "sleeve": "defensive",  "pool": "ashare" },
     "cyb":    { "label": "创业板",        "sleeve": "aggressive", "pool": "ashare" },
@@ -132,7 +132,6 @@
     "上证50": "sh50",
     "50ETF": "sh50",
     "上证50ETF": "sh50",
-    "红利ETF": "sh50",
     "创业板ETF": "cyb",
     "创业板增强": "cyb",
     "创业板指": "cyb",
@@ -156,6 +155,7 @@
   },
   "ignored_erp_holdings": [
     "恒生消费ETF",
+    "红利ETF",
     "十年期国债ETF"
   ]
 }

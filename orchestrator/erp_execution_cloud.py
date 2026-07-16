@@ -251,8 +251,8 @@ def normalize_to_weights(scores: dict[str, float]) -> dict[str, float]:
     return {key: value / total for key, value in positive.items()}
 
 
-# ── Reverse recommendation map (KC50) ────────────────────────
-_KC50_REVERSE_REC = {
+# ── Reverse recommendation map ───────────────────────────────
+_REVERSE_REC = {
     "强烈超配": "强烈低配", "超配": "低配", "标配": "标配",
     "低配": "超配", "强烈低配": "强烈超配",
 }
@@ -260,7 +260,12 @@ _KC50_REVERSE_REC = {
 
 def _kc50_rec_to_bucket_rec(rec: str) -> str:
     """Convert KC50 ratio recommendation to KC50 bucket recommendation."""
-    return _KC50_REVERSE_REC.get(normalize_text(rec), "标配")
+    return _REVERSE_REC.get(normalize_text(rec), "标配")
+
+
+def _sh50_rec_to_bucket_rec(rec: str) -> str:
+    """Convert CYB/SH50 ratio recommendation to SH50 bucket recommendation."""
+    return _REVERSE_REC.get(normalize_text(rec), "标配")
 
 
 # ── Holding resolution ───────────────────────────────────────
@@ -289,7 +294,7 @@ def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_look
     if "300成长" in fixed_name:
         return "gro300"
     if "红利" in fixed_name:
-        return "sh50"
+        return "__IGNORE__"
     if "创业板" in fixed_name:
         return "cyb"
     if "1000" in fixed_name:
@@ -797,10 +802,15 @@ def build_target_weights(
     # -- SH50 (defensive alpha) --
     sh50_percentile = relative_snapshot["percentiles"].get("sh50_percentile")
     sh50_ft = forced_exit_thresholds.get("sh50")
-    sh50_fe = sh50_ft is not None and sh50_percentile is not None and float(sh50_percentile) >= float(sh50_ft)
+    sh50_exit_threshold = 100.0 - float(sh50_ft) if sh50_ft is not None else None
+    sh50_fe = (
+        sh50_exit_threshold is not None and sh50_percentile is not None
+        and float(sh50_percentile) <= sh50_exit_threshold
+    )
 
     sh50_tw = def_alpha_total * (1.0 - style_budget_ratio)
-    sh50_tw *= recommendation_multiplier(recs.get("sh50"), multipliers)
+    sh50_signal = _sh50_rec_to_bucket_rec(recs.get("sh50"))
+    sh50_tw *= recommendation_multiplier(sh50_signal, multipliers)
     sh50_tw = min(sh50_tw, float(caps.get("sh50", 0.18)))
     if sh50_fe:
         sh50_tw = 0.0
@@ -809,9 +819,10 @@ def build_target_weights(
     targets["sh50"] = {
         "bucket": "sh50", "label": meta_sh50.get("label", "防守价值"),
         "sleeve": "defensive", "pool": "ashare",
-        "signal": recs.get("sh50", "标配"),
+        "signal": sh50_signal,
         "current_percentile": round(float(sh50_percentile), 2) if sh50_percentile is not None else None,
-        "forced_exit_threshold": float(sh50_ft) if sh50_ft is not None else None,
+        "forced_exit_threshold": sh50_exit_threshold,
+        "forced_exit_operator": "<=",
         "forced_exit": sh50_fe,
         "target_weight": round(sh50_tw, 4),
     }

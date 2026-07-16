@@ -65,9 +65,10 @@ def forced_exit_text(item: dict) -> str:
         return ""
     pct = item.get("current_percentile")
     threshold = item.get("forced_exit_threshold")
+    operator = item.get("forced_exit_operator", ">=")
     if pct is None or threshold is None:
         return " | ⚠ 强制退出"
-    return f" | ⚠ 强制退出（分位 {pct:.1f}% ≥ {threshold:.1f}%）"
+    return f" | ⚠ 强制退出（分位 {pct:.1f}% {operator} {threshold:.1f}%）"
 
 
 def reentry_text(item: dict) -> str:

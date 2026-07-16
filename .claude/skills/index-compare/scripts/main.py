@@ -103,8 +103,8 @@ def calc_deviation_series(ratio_series: Optional[pd.Series], ma_series: Optional
     deviation = (ratio - ma) / ma * 100
     return deviation.where(ma.notna())
 
-# ── VAL300 → GRO300 建议反向映射 ──────────────────────────────
-_VAL300_TO_GRO300_REC = {
+# ── 比价分母建议反向映射 ─────────────────────────────────────
+_REVERSE_REC = {
     "强烈超配": "强烈低配",
     "超配": "低配",
     "标配": "标配",
@@ -199,12 +199,13 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         export_df.loc[latest_idx, "500建议"] = conclusions.get("ZZ500", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "1000建议"] = conclusions.get("ZZ1000", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "创业板建议"] = conclusions.get("ZZA500", {}).get("recommendation", {}).get("action", "")
-        export_df.loc[latest_idx, "50建议"] = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
+        _sh50_rec = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "50建议"] = _REVERSE_REC.get(_sh50_rec, "标配")
         export_df.loc[latest_idx, "科创50建议"] = conclusions.get("KC50", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "300价值建议"] = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "恒生科技建议"] = conclusions.get("HKTECH", {}).get("recommendation", {}).get("action", "")
         _val_rec = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
-        export_df.loc[latest_idx, "300成长建议"] = _VAL300_TO_GRO300_REC.get(_val_rec, "标配")
+        export_df.loc[latest_idx, "300成长建议"] = _REVERSE_REC.get(_val_rec, "标配")
 
     export_df["数据源"] = "tushare"
 
@@ -506,6 +507,13 @@ def print_terminal_summary(latest_row: Dict[str, Any], conclusions: Dict[str, An
         action = recommendation.get("action", "-")
         icon = recommendation.get("icon", "")
         reasons = recommendation.get("reasons", [])
+        if code == "SH50":
+            action = latest_row.get("50建议", _REVERSE_REC.get(action, "标配"))
+            icon = {
+                "强烈超配": "[++]", "超配": "[+]", "标配": "[=]",
+                "低配": "[-]", "强烈低配": "[--]",
+            }.get(action, "")
+            reasons = [f"由创业板/上证50的{recommendation.get('action', '-')}信号反向得到", *reasons]
         print(f"\n【{name}】{icon} {action}")
         for reason in reasons:
             print(f"  - {reason}")

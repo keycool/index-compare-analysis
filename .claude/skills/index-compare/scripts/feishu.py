@@ -40,7 +40,7 @@ LABEL_HKTECH = "\u6052\u751f\u79d1\u6280\u6307\u6570"
 LABEL_ZZ500 = "\u4e2d\u8bc1500"
 LABEL_ZZ1000 = "\u4e2d\u8bc11000"
 
-_VAL300_TO_GRO300_REC = {
+_REVERSE_REC = {
     "\u5f3a\u70c8\u8d85\u914d": "\u5f3a\u70c8\u4f4e\u914d",
     "\u8d85\u914d": "\u4f4e\u914d",
     "\u6807\u914d": "\u6807\u914d",
@@ -176,7 +176,7 @@ class FeishuWebhook:
                 [
                     {"tag": "text", "text": "\u521b\u4e1a\u677f/300: "},
                     {"tag": "text", "text": self._fmt_num(latest_data.get(KEY_RATIO_CYB)), "color": "blue"},
-                    {"tag": "text", "text": " | 50/\u521b\u4e1a\u677f: "},
+                    {"tag": "text", "text": " | \u521b\u4e1a\u677f/\u4e0a\u8bc150: "},
                     {"tag": "text", "text": self._fmt_num(latest_data.get(KEY_RATIO_SH50)), "color": "blue"},
                 ],
                 [
@@ -228,7 +228,7 @@ class FeishuWebhook:
             [
                 f"{title} ({date_str})",
                 f"500/300={self._fmt_num(latest_data.get(KEY_RATIO_500))} | 1000/300={self._fmt_num(latest_data.get(KEY_RATIO_1000))}",
-                f"\u521b\u4e1a\u677f/300={self._fmt_num(latest_data.get(KEY_RATIO_CYB))} | 50/\u521b\u4e1a\u677f={self._fmt_num(latest_data.get(KEY_RATIO_SH50))}",
+                f"\u521b\u4e1a\u677f/300={self._fmt_num(latest_data.get(KEY_RATIO_CYB))} | \u521b\u4e1a\u677f/\u4e0a\u8bc150={self._fmt_num(latest_data.get(KEY_RATIO_SH50))}",
                 f"\u79d1\u521b50/\u4e0a\u8bc150={self._fmt_num(latest_data.get(KEY_RATIO_KC50))} | 300\u4ef7\u503c/300\u6210\u957f={self._fmt_num(latest_data.get(KEY_RATIO_VALGRO))}",
                 f"\u6052\u751f\u79d1\u6280/\u6052\u751f={self._fmt_num(latest_data.get(KEY_RATIO_HKTECH))}",
                 f"{LABEL_ZZ500}={self._pick_recommendation(conclusions, 'ZZ500')}",
@@ -247,16 +247,20 @@ class FeishuWebhook:
         }
 
     def _pick_recommendation(self, conclusions: dict[str, Any], code: str) -> str:
-        if code == "GRO300":
-            val300_rec = conclusions.get("VAL300", {}).get("recommendation", {})
-            action = _VAL300_TO_GRO300_REC.get(str(val300_rec.get("action", "")).strip(), DEFAULT_REC)
-            score = -int(val300_rec.get("score", 0) or 0)
-            return f"{action} (score={score})"
+        reverse_source = {
+            "GRO300": "VAL300",
+            "SH50": "SH50",
+        }.get(code)
+        if reverse_source:
+            source_rec = conclusions.get(reverse_source, {}).get("recommendation", {})
+            action = _REVERSE_REC.get(str(source_rec.get("action", "")).strip(), DEFAULT_REC)
+            score = -float(source_rec.get("score", 0) or 0)
+            return f"{action} (score={score:.2f})"
 
         rec = conclusions.get(code, {}).get("recommendation", {})
         action = str(rec.get("action", "-")).strip() or "-"
-        score = int(rec.get("score", 0) or 0)
-        return f"{action} (score={score})"
+        score = float(rec.get("score", 0) or 0)
+        return f"{action} (score={score:.2f})"
 
     @staticmethod
     def _fmt_num(value: Any) -> str:

@@ -263,11 +263,6 @@ def _kc50_rec_to_bucket_rec(rec: str) -> str:
     return _REVERSE_REC.get(normalize_text(rec), "标配")
 
 
-def _sh50_rec_to_bucket_rec(rec: str) -> str:
-    """Convert CYB/SH50 ratio recommendation to SH50 bucket recommendation."""
-    return _REVERSE_REC.get(normalize_text(rec), "标配")
-
-
 # ── Holding resolution ───────────────────────────────────────
 
 def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_lookup: set[str]) -> str | None:
@@ -809,7 +804,7 @@ def build_target_weights(
     )
 
     sh50_tw = def_alpha_total * (1.0 - style_budget_ratio)
-    sh50_signal = _sh50_rec_to_bucket_rec(recs.get("sh50"))
+    sh50_signal = recs.get("sh50") or "标配"
     sh50_tw *= recommendation_multiplier(sh50_signal, multipliers)
     sh50_tw = min(sh50_tw, float(caps.get("sh50", 0.18)))
     if sh50_fe:

@@ -198,30 +198,27 @@ def process_data(input_path, output_path):
     print(f"  数据行数: {len(df)}")
     print(f"  数据列: {list(df.columns)}")
 
-    # 获取目标指数
-    target_indices = ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'KC50', 'VAL300', 'HKTECH']
+    # 每个内部信号代码对应一组独立的分子/分母，避免复用 SH50 风格信号。
+    ratio_specs = [
+        ('ZZ500', 'ZZ500', 'HS300'),
+        ('ZZ1000', 'ZZ1000', 'HS300'),
+        ('ZZA500', 'ZZA500', 'HS300'),
+        ('SH50_300', 'SH50', 'HS300'),
+        ('KC50_300', 'KC50', 'HS300'),
+        ('SH50', 'ZZA500', 'SH50'),
+        ('KC50', 'KC50', 'SH50'),
+        ('VAL300', 'GRO300', 'VAL300'),
+        ('HKTECH', 'HKTECH', 'HSI'),
+    ]
 
     # 计算比价和相关指标
     analysis_results = {}
 
-    for target in target_indices:
-        if target not in df.columns:
-            print(f"  警告: 缺少 {target} 数据，跳过")
+    for target, numerator_col, ratio_base_col in ratio_specs:
+        if numerator_col not in df.columns or ratio_base_col not in df.columns:
+            print(f"  警告: 缺少 {numerator_col} 或 {ratio_base_col} 数据，跳过 {target}")
             continue
 
-        numerator_col = target
-        ratio_base_col = 'HS300'
-        if target == 'SH50':
-            numerator_col = 'ZZA500'
-            ratio_base_col = 'SH50'
-        elif target == 'KC50':
-            numerator_col = 'KC50'
-            ratio_base_col = 'SH50'
-        elif target == 'VAL300':
-            numerator_col = 'GRO300'
-            ratio_base_col = 'VAL300'
-        elif target == 'HKTECH':
-            ratio_base_col = 'HSI'
         print(f"\n计算 {numerator_col} vs {ratio_base_col}...")
 
         # 计算比价

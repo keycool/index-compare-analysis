@@ -541,7 +541,7 @@ def quick_query(index_code: Optional[str] = None) -> None:
     df = pd.read_csv(processed_file, parse_dates=["trade_date"])
     latest_date = df.iloc[-1]["trade_date"].strftime("%Y-%m-%d")
 
-    valid_codes = ["ZZ500", "ZZ1000", "ZZA500", "SH50", "KC50", "VAL300", "HKTECH"]
+    valid_codes = ["ZZ500", "ZZ1000", "ZZA500", "SH50_300", "KC50_300", "SH50", "KC50", "VAL300", "HKTECH"]
     if index_code and index_code not in valid_codes:
         print(f"[错误] 指数代码 {index_code} 不存在")
         print(f"\n支持的代码: {', '.join(valid_codes)}")

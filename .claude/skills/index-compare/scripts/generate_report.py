@@ -1760,16 +1760,20 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     else:
         macro_reference_html = '<div style="padding: 24px; color: #94a3b8;">未检测到可用于生成参考版图表的数据。</div>'
 
-    # 分组定义：主要三指数 vs 特色指数
-    core_codes = ['ZZ500', 'ZZ1000', 'ZZA500']
+    # 分组定义：主要指数 vs 特色指数
+    core_codes = ['SH50_300', 'ZZ500', 'ZZ1000', 'ZZA500', 'KC50_300']
     feature_codes = ['SH50', 'KC50', 'VAL300']
     external_codes = ['HKTECH']
 
     # 创建比价走势图（全历史 + 单列满宽布局）
     ratio_chart_blocks = {}
-    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50', 'KC50', 'VAL300', 'HKTECH']:
+    for target in ['ZZ500', 'ZZ1000', 'ZZA500', 'SH50_300', 'KC50_300', 'SH50', 'KC50', 'VAL300', 'HKTECH']:
         if f'{target}_ratio' in df.columns:
-            name = indices_config[target]['name']
+            source_code = {
+                'SH50_300': 'SH50',
+                'KC50_300': 'KC50',
+            }.get(target, target)
+            name = indices_config[source_code]['name']
             show_full_history = True
             benchmark_name = "沪深300"
             chart_title = f'{name} vs 沪深300'
@@ -2509,15 +2513,16 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="chart-wrapper">{price_chart_html}</div>
         </div>
 
-        <!-- 主要三指数对比 -->
+        <!-- 主要指数对比 -->
         <div class="charts-section">
             <div class="section-header">
                 <div class="section-title">
                     <div class="section-icon">⚖️</div>
-                    <h2>主要三指数对比</h2>
+                    <h2>主要指数对比</h2>
                 </div>
             </div>
-            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">中证500 / 中证1000 / 创业板指数，相对沪深300</div>
+            <div class="overview-subtitle" style="margin:-6px 0 8px 40px;color:#64748b;">上证50指数 / 中证500 / 中证1000 / 创业板指数 / 科创50指数，相对沪深300</div>
+            <div class="overview-subtitle" style="margin:0 0 16px 40px;color:#64748b;">比价 = 分子指数点位 ÷ 沪深300点位；历史分位越低，分子相对便宜，越偏向配置分子；分位越高，沪深300相对便宜。配置建议综合历史分位 60%、趋势 25%、均线偏离 15% 生成。</div>
             <div class="ratio-charts-grid">
                 {core_ratio_html}
             </div>
@@ -2745,6 +2750,8 @@ def generate_analysis_html(conclusions, codes=None):
         'ZZ500': ('zz500', '500'),
         'ZZ1000': ('zz1000', '1000'),
         'ZZA500': ('zza500', '创'),
+        'SH50_300': ('zz500', '50'),
+        'KC50_300': ('zza500', 'K'),
         'SH50': ('zz500', '50'),
         'KC50': ('zza500', 'K'),
         'VAL300': ('zz1000', '价')

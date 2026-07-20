@@ -16,9 +16,9 @@ on:
         default: "false"
         type: string
       erp_start_date:
-        description: "Optional ERP start date (YYYYMMDD or YYYY-MM-DD)"
+        description: "ERP backfill start date (YYYYMMDD or YYYY-MM-DD)"
         required: false
-        default: ""
+        default: "2026-02-14"
         type: string
       erp_end_date:
         description: "Optional ERP end date (YYYYMMDD or YYYY-MM-DD)"
@@ -218,7 +218,7 @@ jobs:
 
           REQUIRE_BITABLE_SYNC: "true"
           FORCE_RELATIVE: ${{ github.event.inputs.force_relative || 'false' }}
-          ERP_START_DATE: ${{ github.event.inputs.erp_start_date || '' }}
+          ERP_START_DATE: ${{ github.event.inputs.erp_start_date || '2026-02-14' }}
           ERP_END_DATE: ${{ github.event.inputs.erp_end_date || '' }}
         working-directory: csi300-relative-index
         run: |

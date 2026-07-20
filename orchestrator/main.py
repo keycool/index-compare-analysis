@@ -116,6 +116,47 @@ def validate_latest_date_fresh(payload: dict[str, Any], label: str) -> None:
         raise RuntimeError(f"{label} 数据过旧: latest_date={latest.date()}, stale_days={stale_days}")
 
 
+def validate_erp_history_continuity(payload: dict[str, Any], start_date: str | None) -> None:
+    """Reject silently truncated ERP history after the requested backfill start."""
+    if not start_date:
+        return
+
+    max_gap_days = int(os.environ.get("ERP_MAX_HISTORY_GAP_DAYS", "20"))
+    if max_gap_days <= 0:
+        return
+
+    raw_start = str(start_date).strip().replace(".", "-")
+    start_format = "%Y%m%d" if raw_start.isdigit() and len(raw_start) == 8 else "%Y-%m-%d"
+    start = datetime.strptime(raw_start, start_format).date()
+    record_dates = []
+    for record in payload.get("records", []):
+        try:
+            record_date = datetime.strptime(str(record.get("date", ""))[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if record_date >= start:
+            record_dates.append(record_date)
+
+    record_dates = sorted(set(record_dates))
+    if not record_dates:
+        raise RuntimeError(f"ERP history has no records on or after {start}")
+
+    previous = start
+    for current in record_dates:
+        gap_days = (current - previous).days
+        if gap_days > max_gap_days:
+            raise RuntimeError(
+                "ERP history gap exceeds limit: "
+                f"{previous} -> {current} ({gap_days} days, limit={max_gap_days})"
+            )
+        previous = current
+
+    print(
+        "[ERP] history continuity OK: "
+        f"start={start}, first={record_dates[0]}, last={record_dates[-1]}, records={len(record_dates)}"
+    )
+
+
 def build_latest_snapshot(erp_payload: dict[str, Any], relative_payload: dict[str, Any], latest_date: str | None) -> dict[str, Any]:
     """构造统一最新快照，供下游直接消费。"""
     erp_latest = erp_payload.get("latest_signal", {})
@@ -193,7 +234,8 @@ def build_erp_command(args: argparse.Namespace) -> list[str]:
     command = [sys.executable, str(ERP_MAIN)]
     if args.erp_start_date:
         command.append(args.erp_start_date)
-    if args.erp_end_date:
+        command.append(args.erp_end_date or datetime.now().strftime("%Y-%m-%d"))
+    elif args.erp_end_date:
         command.append(args.erp_end_date)
     return command
 
@@ -392,6 +434,7 @@ def main() -> None:
     validate_signal(erp_payload, "equity_risk_premium", ERP_SIGNAL)
     validate_signal(relative_payload, "csi300_relative_index", RELATIVE_SIGNAL)
     validate_latest_date_fresh(erp_payload, "ERP")
+    validate_erp_history_continuity(erp_payload, args.erp_start_date)
 
     merged_payload = build_merged_signal(erp_payload, relative_payload)
     save_json(MERGED_SIGNAL, merged_payload)

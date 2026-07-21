@@ -196,7 +196,7 @@ class FeishuBitableReader:
         records: list[dict[str, Any]] = []
         page_token: str | None = None
         while True:
-            params = {"page_size": min(page_size, 500)}
+            params = {"page_size": min(page_size, 500), "automatic_fields": "true"}
             if page_token:
                 params["page_token"] = page_token
             url = f"{BASE_URL}/bitable/v1/apps/{app_token}/tables/{table_id}/records"
@@ -209,8 +209,12 @@ class FeishuBitableReader:
             for item in data.get("items", []):
                 fields = normalize_row(item.get("fields", {}))
                 fields["record_id"] = item.get("record_id")
-                fields["_created_time"] = item.get("created_time")
-                fields["_last_modified_time"] = item.get("last_modified_time")
+                fields["_created_time"] = item.get("created_time") or get_first(
+                    fields, "created_time", "创建时间", "创建日期"
+                )
+                fields["_last_modified_time"] = item.get("last_modified_time") or get_first(
+                    fields, "last_modified_time", "更新时间", "最后更新时间", "修改时间"
+                )
                 records.append(fields)
             if not data.get("has_more"):
                 break

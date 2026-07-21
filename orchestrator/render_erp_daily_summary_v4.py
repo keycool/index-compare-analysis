@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from relative_signal_table import markdown_relative_signal_table
+
 
 ROOT = Path(__file__).resolve().parent
 PLAN_PATH = ROOT / "output" / "erp_execution_plan.json"
@@ -126,12 +128,8 @@ def main() -> None:
     # ── 比价建议 ──
     lines.append("## 比价建议")
     lines.append("")
-    recs = relative["recommendations"]
     lines.append(f"- `{relative['date']}`")
-    lines.append(f"  - 中证500：`{recs.get('zz500','标配')}` | 中证1000：`{recs.get('zz1000','标配')}`")
-    lines.append(f"  - 创业板：`{recs.get('cyb','标配')}` | 上证50：`{recs.get('sh50','标配')}` | 科创50：`{recs.get('kc50','标配')}`")
-    lines.append(f"  - 300价值：`{recs.get('val300','标配')}` | 300成长：`{recs.get('gro300','标配')}`")
-    lines.append(f"  - 恒生科技：`{recs.get('hstech','标配')}`")
+    lines.extend(markdown_relative_signal_table(relative))
     lines.append("")
 
     # ── 调仓建议 ──

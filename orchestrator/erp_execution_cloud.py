@@ -430,12 +430,55 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round((latest_val / base_val - 1.0) * 100.0, 2)
 
+    def latest_index_ratio(numerator_field: str, denominator_field: str) -> float | None:
+        numerator = safe_float(get_first(latest, numerator_field))
+        denominator = safe_float(get_first(latest, denominator_field))
+        if numerator is None or denominator in (None, 0):
+            return None
+        return numerator / denominator
+
+    def compute_index_ratio_percentile(numerator_field: str, denominator_field: str) -> float | None:
+        history: list[float] = []
+        for _, r in dated_rows:
+            numerator = safe_float(get_first(r, numerator_field))
+            denominator = safe_float(get_first(r, denominator_field))
+            if numerator is None or denominator in (None, 0):
+                continue
+            history.append(numerator / denominator)
+        if not history:
+            return None
+        latest_val = history[-1]
+        return round(sum(value <= latest_val for value in history) / len(history) * 100.0, 1)
+
+    sh50_300_ratio = (
+        safe_float(get_first(latest, "上证50/300比价", "50/300比价"))
+        or latest_index_ratio("上证50指数", "沪深300")
+    )
+    kc50_300_ratio = (
+        safe_float(get_first(latest, "科创50/300比价", "科创50/沪深300比价"))
+        or latest_index_ratio("科创50指数", "沪深300")
+    )
+    sh50_300_percentile = (
+        safe_float(get_first(latest, "上证50/300分位", "50/300分位"))
+        or compute_index_ratio_percentile("上证50指数", "沪深300")
+    )
+    kc50_300_percentile = (
+        safe_float(get_first(latest, "科创50/300分位", "科创50/沪深300分位"))
+        or compute_index_ratio_percentile("科创50指数", "沪深300")
+    )
+    cyb_sh50_recommendation = normalize_text(get_first(latest, "创业板/上证50建议", "50/创业板建议"))
+    if not cyb_sh50_recommendation:
+        cyb_sh50_recommendation = _REVERSE_REC.get(normalize_text(get_first(latest, "50建议")), "")
+
     return {
         "date": dt.strftime("%Y-%m-%d"),
         "recommendations": {
             "zz500": normalize_text(get_first(latest, "500建议")),
             "zz1000": normalize_text(get_first(latest, "1000建议")),
             "cyb": normalize_text(get_first(latest, "创业板建议")),
+            "sh50_300": normalize_text(get_first(latest, "上证50/300建议", "50/300建议")),
+            "kc50_300": normalize_text(get_first(latest, "科创50/300建议", "科创50/沪深300建议")),
+            "cyb_sh50": cyb_sh50_recommendation,
             "sh50": normalize_text(get_first(latest, "50建议")),
             "kc50": normalize_text(get_first(latest, "科创50建议")),
             "val300": normalize_text(get_first(latest, "300价值建议")),
@@ -446,7 +489,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "zz500_ratio": safe_float(get_first(latest, "500/300比价")),
             "zz1000_ratio": safe_float(get_first(latest, "1000/300比价")),
             "cyb_ratio": safe_float(get_first(latest, "创业板/300比价")),
-            "sh50_ratio": safe_float(get_first(latest, "50/创业板比价", "50/300比价")),
+            "sh50_300_ratio": sh50_300_ratio,
+            "kc50_300_ratio": kc50_300_ratio,
+            "sh50_ratio": safe_float(get_first(latest, "创业板/上证50比价", "50/创业板比价", "50/300比价")),
             "kc50_ratio": safe_float(get_first(latest, "科创50/上证50比价")),
             "val300_ratio": safe_float(get_first(latest, "300价值/成长比价")),
             "hstech_ratio": safe_float(get_first(latest, "恒生科技/恒生比价")),
@@ -455,6 +500,8 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "zz500_percentile": safe_float(get_first(latest, "500分位")),
             "zz1000_percentile": safe_float(get_first(latest, "1000分位")),
             "cyb_percentile": safe_float(get_first(latest, "创业板分位")),
+            "sh50_300_percentile": sh50_300_percentile,
+            "kc50_300_percentile": kc50_300_percentile,
             "sh50_percentile": safe_float(get_first(latest, "50分位")),
             "kc50_percentile": safe_float(get_first(latest, "科创50分位")),
             "val300_percentile": safe_float(get_first(latest, "300价值分位")),
@@ -465,7 +512,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "zz500_deviation": safe_float(get_first(latest, "500偏离(%)")),
             "zz1000_deviation": safe_float(get_first(latest, "1000偏离(%)")),
             "cyb_deviation": safe_float(get_first(latest, "创业板偏离(%)")),
-            "sh50_deviation": safe_float(get_first(latest, "50偏离(%)")),
+            "sh50_300_deviation": safe_float(get_first(latest, "上证50/300偏离(%)", "50/300偏离(%)")),
+            "kc50_300_deviation": safe_float(get_first(latest, "科创50/300偏离(%)", "科创50/沪深300偏离(%)")),
+            "sh50_deviation": safe_float(get_first(latest, "创业板/上证50偏离(%)", "50偏离(%)")),
             "kc50_deviation": safe_float(get_first(latest, "科创50偏离(%)")),
             "val300_deviation": safe_float(get_first(latest, "300价值偏离(%)")),
             "gro300_deviation": safe_float(get_first(latest, "300成长偏离(%)")),
@@ -475,7 +524,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "zz500_change_5d": compute_ratio_change("500/300比价", 5),
             "zz1000_change_5d": compute_ratio_change("1000/300比价", 5),
             "cyb_change_5d": compute_ratio_change("创业板/300比价", 5),
-            "sh50_change_5d": compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
+            "sh50_300_change_5d": compute_ratio_change("上证50/300比价", 5) or compute_ratio_change("50/300比价", 5),
+            "kc50_300_change_5d": compute_ratio_change("科创50/300比价", 5) or compute_ratio_change("科创50/沪深300比价", 5),
+            "sh50_change_5d": compute_ratio_change("创业板/上证50比价", 5) or compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
             "kc50_change_5d": compute_ratio_change("科创50/上证50比价", 5),
             "val300_change_5d": compute_ratio_change("300价值/成长比价", 5),
             "hstech_change_5d": compute_ratio_change("恒生科技/恒生比价", 5),

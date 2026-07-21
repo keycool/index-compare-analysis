@@ -131,6 +131,8 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     p500_series = calc_expanding_percentile(df.get("ZZ500_ratio"), df.index).round(1)
     p1000_series = calc_expanding_percentile(df.get("ZZ1000_ratio"), df.index).round(1)
     pcyb_series = calc_expanding_percentile(df.get("ZZA500_ratio"), df.index).round(1)
+    p50_300_series = calc_expanding_percentile(df.get("SH50_300_ratio"), df.index).round(1)
+    pkc50_300_series = calc_expanding_percentile(df.get("KC50_300_ratio"), df.index).round(1)
     p50_series = calc_expanding_percentile(df.get("SH50_ratio"), df.index).round(1)
     pval300_series = calc_expanding_percentile(df.get("VAL300_ratio"), df.index).round(1)
     pkc50_series = calc_expanding_percentile(df.get("KC50_ratio"), df.index).round(1)
@@ -143,6 +145,8 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     d500_series = calc_deviation_series(df.get("ZZ500_ratio"), df.get("ZZ500_MA30"), df.index).round(2)
     d1000_series = calc_deviation_series(df.get("ZZ1000_ratio"), df.get("ZZ1000_MA30"), df.index).round(2)
     dcyb_series = calc_deviation_series(df.get("ZZA500_ratio"), df.get("ZZA500_MA30"), df.index).round(2)
+    d50_300_series = calc_deviation_series(df.get("SH50_300_ratio"), df.get("SH50_300_MA30"), df.index).round(2)
+    dkc50_300_series = calc_deviation_series(df.get("KC50_300_ratio"), df.get("KC50_300_MA30"), df.index).round(2)
     d50_series = calc_deviation_series(df.get("SH50_ratio"), df.get("SH50_MA30"), df.index).round(2)
     dval300_series = calc_deviation_series(df.get("VAL300_ratio"), df.get("VAL300_MA30"), df.index).round(2)
     dkc50_series = calc_deviation_series(df.get("KC50_ratio"), df.get("KC50_MA30"), df.index).round(2)
@@ -165,6 +169,9 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "500/300比价": df.get("ZZ500_ratio"),
             "1000/300比价": df.get("ZZ1000_ratio"),
             "创业板/300比价": df.get("ZZA500_ratio"),
+            "上证50/300比价": df.get("SH50_300_ratio"),
+            "科创50/300比价": df.get("KC50_300_ratio"),
+            "创业板/上证50比价": df.get("SH50_ratio"),
             "50/创业板比价": df.get("SH50_ratio"),
             "科创50/上证50比价": df.get("KC50_ratio"),
             "300价值/成长比价": df.get("VAL300_ratio"),
@@ -172,6 +179,8 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "500分位": p500_series,
             "1000分位": p1000_series,
             "创业板分位": pcyb_series,
+            "上证50/300分位": p50_300_series,
+            "科创50/300分位": pkc50_300_series,
             "50分位": p50_series,
             "科创50分位": pkc50_series,
             "300价值分位": pval300_series,
@@ -180,6 +189,9 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "500偏离(%)": d500_series,
             "1000偏离(%)": d1000_series,
             "创业板偏离(%)": dcyb_series,
+            "上证50/300偏离(%)": d50_300_series,
+            "科创50/300偏离(%)": dkc50_300_series,
+            "创业板/上证50偏离(%)": d50_series,
             "50偏离(%)": d50_series,
             "科创50偏离(%)": dkc50_series,
             "300价值偏离(%)": dval300_series,
@@ -189,7 +201,7 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     )
 
     for col in [
-        "500建议", "1000建议", "创业板建议", "50建议",
+        "500建议", "1000建议", "创业板建议", "上证50/300建议", "科创50/300建议", "创业板/上证50建议", "50建议",
         "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
     ]:
         export_df[col] = ""
@@ -199,6 +211,9 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         export_df.loc[latest_idx, "500建议"] = conclusions.get("ZZ500", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "1000建议"] = conclusions.get("ZZ1000", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "创业板建议"] = conclusions.get("ZZA500", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "上证50/300建议"] = conclusions.get("SH50_300", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "科创50/300建议"] = conclusions.get("KC50_300", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "创业板/上证50建议"] = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
         _sh50_rec = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "50建议"] = _REVERSE_REC.get(_sh50_rec, "标配")
         export_df.loc[latest_idx, "科创50建议"] = conclusions.get("KC50", {}).get("recommendation", {}).get("action", "")
@@ -212,11 +227,11 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     number_cols = [
         "沪深300", "中证500", "中证1000", "创业板指数", "上证50指数",
         "科创50指数", "300价值指数", "300成长指数", "上证综指", "恒生科技指数",
-        "500/300比价", "1000/300比价", "创业板/300比价", "50/创业板比价",
+        "500/300比价", "1000/300比价", "创业板/300比价", "上证50/300比价", "科创50/300比价", "创业板/上证50比价", "50/创业板比价",
         "科创50/上证50比价", "300价值/成长比价", "恒生科技/恒生比价",
-        "500分位", "1000分位", "创业板分位", "50分位", "科创50分位",
+        "500分位", "1000分位", "创业板分位", "上证50/300分位", "科创50/300分位", "50分位", "科创50分位",
         "300价值分位", "300成长分位", "恒生科技分位",
-        "500偏离(%)", "1000偏离(%)", "创业板偏离(%)", "50偏离(%)",
+        "500偏离(%)", "1000偏离(%)", "创业板偏离(%)", "上证50/300偏离(%)", "科创50/300偏离(%)", "创业板/上证50偏离(%)", "50偏离(%)",
         "科创50偏离(%)", "300价值偏离(%)", "300成长偏离(%)", "恒生科技偏离(%)",
     ]
     for col in number_cols:
@@ -230,13 +245,13 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         "日期",
         "沪深300", "中证500", "中证1000", "创业板指数", "上证50指数",
         "科创50指数", "300价值指数", "300成长指数", "上证综指", "恒生科技指数",
-        "500/300比价", "1000/300比价", "创业板/300比价", "50/创业板比价",
+        "500/300比价", "1000/300比价", "创业板/300比价", "上证50/300比价", "科创50/300比价", "创业板/上证50比价", "50/创业板比价",
         "科创50/上证50比价", "300价值/成长比价", "恒生科技/恒生比价",
-        "500分位", "1000分位", "创业板分位", "50分位", "科创50分位",
+        "500分位", "1000分位", "创业板分位", "上证50/300分位", "科创50/300分位", "50分位", "科创50分位",
         "300价值分位", "300成长分位", "恒生科技分位",
-        "500偏离(%)", "1000偏离(%)", "创业板偏离(%)", "50偏离(%)",
+        "500偏离(%)", "1000偏离(%)", "创业板偏离(%)", "上证50/300偏离(%)", "科创50/300偏离(%)", "创业板/上证50偏离(%)", "50偏离(%)",
         "科创50偏离(%)", "300价值偏离(%)", "300成长偏离(%)", "恒生科技偏离(%)",
-        "500建议", "1000建议", "创业板建议", "50建议",
+        "500建议", "1000建议", "创业板建议", "上证50/300建议", "科创50/300建议", "创业板/上证50建议", "50建议",
         "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
         "数据源",
     ]

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import requests
 
+from relative_signal_table import text_relative_signal_table
+
 
 ROOT = Path(__file__).resolve().parent
 PLAN_PATH = ROOT / "output" / "erp_execution_plan.json"
@@ -137,6 +139,11 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     content.append([{"tag": "text", "text": erp_line + hk_line + pool_line}])
     content.append([{"tag": "text", "text": f"ERP管理资金: {portfolio['managed_amount']:,.0f}"}])
 
+    # ── Relative signal table ──
+    content.append([{"tag": "text", "text": "━━━━ 比价信号 ━━━━"}])
+    for line in text_relative_signal_table(relative):
+        content.append([{"tag": "text", "text": line}])
+
     # ── Divider before positions ──
     content.append([{"tag": "text", "text": "━━━━ 调仓建议 ━━━━"}])
 
@@ -207,6 +214,8 @@ def build_fallback_text_payload(plan: dict) -> dict:
         f"ERP执行日报 ({relative['date']})",
         f"A股 ERP {erp['percentile']:.0f}% 进攻{erp['aggressive_weight']:.0%}",
         f"资金: {portfolio['managed_amount']:,.0f}",
+        "比价信号:",
+        *text_relative_signal_table(relative),
         "调仓建议:",
     ]
     for item in positions:

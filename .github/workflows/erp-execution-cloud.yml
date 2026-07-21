@@ -12,6 +12,11 @@ on:
         required: false
         default: true
         type: boolean
+      merged_signal_url:
+        description: "Merged signal JSON URL produced by erp-relative-master-scheduler"
+        required: false
+        default: "https://index-compare-analysis.vercel.app/data/merged_signal.json"
+        type: string
 
 permissions:
   contents: read
@@ -52,6 +57,50 @@ jobs:
             echo "ERP_EXECUTION_PUSH_SUMMARY=false" >> "$GITHUB_ENV"
           fi
 
+      - name: Download latest merged signal
+        env:
+          ERP_MERGED_SIGNAL_URL: ${{ inputs.merged_signal_url || 'https://index-compare-analysis.vercel.app/data/merged_signal.json' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          url = os.environ["ERP_MERGED_SIGNAL_URL"].strip()
+          if not url:
+              raise SystemExit("ERP_MERGED_SIGNAL_URL is required")
+
+          with urllib.request.urlopen(url, timeout=30) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+
+          components = payload.get("components") or {}
+          erp = components.get("erp") or {}
+          relative = components.get("relative") or {}
+          if not erp.get("records"):
+              raise SystemExit("Merged signal missing ERP records")
+          if not relative.get("records"):
+              raise SystemExit("Merged signal missing relative records")
+
+          temp_dir = Path(os.environ["RUNNER_TEMP"])
+          erp_path = temp_dir / "erp_signal.json"
+          relative_path = temp_dir / "relative_signal.json"
+          erp_path.write_text(json.dumps(erp, ensure_ascii=False, indent=2), encoding="utf-8")
+          relative_path.write_text(json.dumps(relative, ensure_ascii=False, indent=2), encoding="utf-8")
+
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+              env_file.write(f"ERP_EXEC_ERP_SIGNAL_JSON={erp_path}\n")
+              env_file.write(f"ERP_EXEC_RELATIVE_SIGNAL_JSON={relative_path}\n")
+
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
+              summary.write("## ERP execution signal source\n\n")
+              summary.write(f"- Merged signal URL: `{url}`\n")
+              summary.write(f"- ERP latest date: `{erp.get('latest_date', '-')}`\n")
+              summary.write(f"- Relative latest date: `{relative.get('latest_date', '-')}`\n")
+              summary.write(f"- ERP records: `{len(erp.get('records', []))}`\n")
+              summary.write(f"- Relative records: `{len(relative.get('records', []))}`\n")
+          PY
+
       - name: Run ERP execution workflow
         run: |
           if [ "$ERP_EXECUTION_PUSH_SUMMARY" = "true" ]; then
@@ -68,6 +117,8 @@ jobs:
           ERP_EXEC_RELATIVE_TABLE_ID: ${{ secrets.ERP_EXEC_RELATIVE_TABLE_ID || secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
           ERP_EXEC_ASSET_APP_TOKEN: ${{ secrets.ERP_EXEC_ASSET_APP_TOKEN }}
           ERP_EXEC_ASSET_TABLE_ID: ${{ secrets.ERP_EXEC_ASSET_TABLE_ID }}
+          ERP_EXEC_ERP_SIGNAL_JSON: ${{ runner.temp }}/erp_signal.json
+          ERP_EXEC_RELATIVE_SIGNAL_JSON: ${{ runner.temp }}/relative_signal.json
           ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}

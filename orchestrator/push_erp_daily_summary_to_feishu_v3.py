@@ -138,6 +138,7 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     )
     content.append([{"tag": "text", "text": erp_line + hk_line + pool_line}])
     content.append([{"tag": "text", "text": f"ERP管理资金: {portfolio['managed_amount']:,.0f}"}])
+    content.append([{"tag": "text", "text": "展示口径: 比价表=对分子建议；标的表=真实ETF执行建议"}])
 
     # ── Relative signal table ──
     content.append([{"tag": "text", "text": "━━━━ 比价信号 ━━━━"}])

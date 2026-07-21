@@ -544,7 +544,7 @@ jobs:
           PY
 
       - name: Push ERP execution summary
-        if: success() && steps.preflight.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && inputs.push_erp_execution_summary == true
+        if: success() && steps.preflight.outputs.should_run == 'true' && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.push_erp_execution_summary == true)
         timeout-minutes: 25
         working-directory: csi300-relative-index
         run: |

@@ -258,8 +258,11 @@ def build_step_env(base_env: dict[str, str], target: str) -> dict[str, str]:
     if target == "erp":
         env["ERP_SHARED_SIGNAL_PATH"] = str(ERP_SIGNAL)
         env["EQUITY_PREMIUM_OUTPUT_PATH"] = str(ERP_ROOT / "equity_premium_enhanced.xlsx")
-        env["FEISHU_WEBHOOK_URL"] = env.get("ERP_FEISHU_WEBHOOK_URL") or env.get("FEISHU_WEBHOOK_URL", "")
-        env["FEISHU_WEBHOOK_SECRET"] = env.get("ERP_FEISHU_WEBHOOK_SECRET") or env.get("FEISHU_WEBHOOK_SECRET", "")
+        # The master workflow sends the execution summary from this repo after both
+        # ERP and relative signals are ready. Suppress the legacy ERP repo webhook
+        # to avoid an unchanged old-format bot message.
+        env["FEISHU_WEBHOOK_URL"] = ""
+        env["FEISHU_WEBHOOK_SECRET"] = ""
         env["FEISHU_APP_TOKEN"] = ""
         env["FEISHU_TABLE_ID"] = ""
     elif target == "relative":

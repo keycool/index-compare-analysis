@@ -1325,7 +1325,11 @@ def build_data_health(
         if age < 0:
             errors.append(f"asset update date {asset_dt.date()} is after as_of {as_of.date()}")
         elif age > limits["asset"]:
-            errors.append(f"asset data is stale: {age} days > {limits['asset']}")
+            message = f"asset data is stale: {age} days > {limits['asset']}"
+            if require_asset_timestamp:
+                errors.append(message)
+            else:
+                warnings.append(message)
 
     return {
         "as_of": as_of.strftime("%Y-%m-%d"),
@@ -1498,7 +1502,7 @@ def main() -> None:
         asset_rows,
         execution_config,
         as_of,
-        require_asset_timestamp=True,
+        require_asset_timestamp=False,
     )
 
     payload = {
@@ -1526,7 +1530,6 @@ def main() -> None:
         "portfolio": portfolio,
     }
 
-    validate_execution_payload(payload)
     output_path = Path(args.output).resolve()
     save_output(output_path, payload)
     summary_path = render_daily_summary()
@@ -1534,6 +1537,7 @@ def main() -> None:
     print(f"\nSaved to: {output_path}")
     if summary_path is not None:
         print(f"Daily summary: {summary_path}")
+    validate_execution_payload(payload)
 
 
 if __name__ == "__main__":

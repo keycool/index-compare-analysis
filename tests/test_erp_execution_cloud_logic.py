@@ -199,6 +199,26 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertEqual(health["asset_update"]["newest"], "2026-07-21")
         self.assertTrue(any("asset data is stale" in error for error in health["errors"]))
 
+    def test_asset_staleness_can_warn_without_blocking_cloud_run(self):
+        config = {"data_quality": {"max_staleness_days": {"erp": 14, "relative": 3, "asset": 14}}}
+        health = build_data_health(
+            {"date": "2026-07-20"},
+            {"available": False},
+            {"date": "2026-07-21"},
+            [
+                {"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-01"},
+                {"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-21"},
+            ],
+            config,
+            datetime(2026, 7, 21, tzinfo=ZoneInfo("Asia/Shanghai")),
+            require_asset_timestamp=False,
+        )
+
+        self.assertTrue(health["ok"])
+        self.assertEqual(health["dates"]["asset"], "2026-07-01")
+        self.assertFalse(health["errors"])
+        self.assertTrue(any("asset data is stale" in warning for warning in health["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -67,41 +67,58 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
           from pathlib import Path
 
           url = os.environ["ERP_MERGED_SIGNAL_URL"].strip()
+          summary_lines = ["## ERP execution signal source", ""]
           if not url:
-              raise SystemExit("ERP_MERGED_SIGNAL_URL is required")
+              summary_lines.append("- Merged signal URL: `<empty>`")
+              summary_lines.append("- Source: `Feishu OpenAPI fallback`")
+              Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+              raise SystemExit(0)
 
-          with urllib.request.urlopen(url, timeout=30) as response:
-              payload = json.loads(response.read().decode("utf-8"))
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
 
-          components = payload.get("components") or {}
-          erp = components.get("erp") or {}
-          relative = components.get("relative") or {}
-          if not erp.get("records"):
-              raise SystemExit("Merged signal missing ERP records")
-          if not relative.get("records"):
-              raise SystemExit("Merged signal missing relative records")
+              components = payload.get("components") or {}
+              erp = components.get("erp") or {}
+              relative = components.get("relative") or {}
+              if not erp.get("records"):
+                  raise ValueError("Merged signal missing ERP records")
+              if not relative.get("records"):
+                  raise ValueError("Merged signal missing relative records")
 
-          temp_dir = Path(os.environ["RUNNER_TEMP"])
-          erp_path = temp_dir / "erp_signal.json"
-          relative_path = temp_dir / "relative_signal.json"
-          erp_path.write_text(json.dumps(erp, ensure_ascii=False, indent=2), encoding="utf-8")
-          relative_path.write_text(json.dumps(relative, ensure_ascii=False, indent=2), encoding="utf-8")
+              temp_dir = Path(os.environ["RUNNER_TEMP"])
+              erp_path = temp_dir / "erp_signal.json"
+              relative_path = temp_dir / "relative_signal.json"
+              erp_path.write_text(json.dumps(erp, ensure_ascii=False, indent=2), encoding="utf-8")
+              relative_path.write_text(json.dumps(relative, ensure_ascii=False, indent=2), encoding="utf-8")
 
-          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
-              env_file.write(f"ERP_EXEC_ERP_SIGNAL_JSON={erp_path}\n")
-              env_file.write(f"ERP_EXEC_RELATIVE_SIGNAL_JSON={relative_path}\n")
+              with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+                  env_file.write(f"ERP_EXEC_ERP_SIGNAL_JSON={erp_path}\n")
+                  env_file.write(f"ERP_EXEC_RELATIVE_SIGNAL_JSON={relative_path}\n")
+
+              summary_lines.extend([
+                  f"- Merged signal URL: `{url}`",
+                  "- Source: `merged_signal.json`",
+                  f"- ERP latest date: `{erp.get('latest_date', '-')}`",
+                  f"- Relative latest date: `{relative.get('latest_date', '-')}`",
+                  f"- ERP records: `{len(erp.get('records', []))}`",
+                  f"- Relative records: `{len(relative.get('records', []))}`",
+              ])
+          except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+              print(f"::warning::Merged signal unavailable; falling back to Feishu OpenAPI: {exc}")
+              summary_lines.extend([
+                  f"- Merged signal URL: `{url}`",
+                  "- Source: `Feishu OpenAPI fallback`",
+                  f"- Fallback reason: `{exc}`",
+              ])
 
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
-              summary.write("## ERP execution signal source\n\n")
-              summary.write(f"- Merged signal URL: `{url}`\n")
-              summary.write(f"- ERP latest date: `{erp.get('latest_date', '-')}`\n")
-              summary.write(f"- Relative latest date: `{relative.get('latest_date', '-')}`\n")
-              summary.write(f"- ERP records: `{len(erp.get('records', []))}`\n")
-              summary.write(f"- Relative records: `{len(relative.get('records', []))}`\n")
+              summary.write("\n".join(summary_lines) + "\n")
           PY
 
       - name: Run ERP execution workflow
@@ -120,8 +137,6 @@ jobs:
           ERP_EXEC_RELATIVE_TABLE_ID: ${{ secrets.ERP_EXEC_RELATIVE_TABLE_ID || secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
           ERP_EXEC_ASSET_APP_TOKEN: ${{ secrets.ERP_EXEC_ASSET_APP_TOKEN }}
           ERP_EXEC_ASSET_TABLE_ID: ${{ secrets.ERP_EXEC_ASSET_TABLE_ID }}
-          ERP_EXEC_ERP_SIGNAL_JSON: ${{ runner.temp }}/erp_signal.json
-          ERP_EXEC_RELATIVE_SIGNAL_JSON: ${{ runner.temp }}/relative_signal.json
           ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}

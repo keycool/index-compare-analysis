@@ -370,6 +370,149 @@ def latest_valid_row(rows: list[dict[str, Any]], required_aliases: list[str]) ->
     return candidates[-1][1]
 
 
+def _copy_first(source: dict[str, Any], target: dict[str, Any], target_name: str, *source_names: str) -> None:
+    value = get_first(source, target_name, *source_names)
+    if value is not None:
+        target[target_name] = value
+
+
+def shared_erp_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    source_records = payload.get("records", [])
+    if isinstance(source_records, list):
+        for record in source_records:
+            if not isinstance(record, dict):
+                continue
+            row: dict[str, Any] = {}
+            _copy_first(record, row, "日期", "date", "trade_date")
+            _copy_first(record, row, "股权溢价指数", "equity_premium", "erp", "risk_premium")
+            if get_first(row, "日期") is not None and get_first(row, "股权溢价指数") is not None:
+                rows.append(row)
+
+    latest_signal = payload.get("latest_signal", {})
+    if isinstance(latest_signal, dict):
+        latest_row = dict(latest_signal)
+        if payload.get("latest_date") and get_first(latest_row, "日期", "date", "trade_date") is None:
+            latest_row["date"] = payload.get("latest_date")
+        row = {}
+        _copy_first(latest_row, row, "日期", "date", "trade_date")
+        _copy_first(latest_row, row, "股权溢价指数", "equity_premium", "erp", "risk_premium")
+        if get_first(row, "日期") is not None and get_first(row, "股权溢价指数") is not None:
+            rows.append(row)
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        dt = parse_date(get_first(row, "日期"))
+        if dt:
+            deduped[dt.strftime("%Y-%m-%d")] = row
+    return [deduped[key] for key in sorted(deduped)]
+
+
+def shared_relative_row_to_execution_row(record: dict[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {}
+    field_aliases: dict[str, tuple[str, ...]] = {
+        "日期": ("date", "trade_date"),
+        "沪深300": ("hs300", "csi300", "csi300_close"),
+        "中证500": ("zz500",),
+        "中证1000": ("zz1000",),
+        "创业板指数": ("zza500", "cyb"),
+        "上证50指数": ("sh50",),
+        "科创50指数": ("kc50",),
+        "300价值指数": ("val300",),
+        "300成长指数": ("gro300",),
+        "上证综指": ("shci",),
+        "恒生指数": ("hsi", "hs_index"),
+        "恒生科技指数": ("hstech",),
+        "500/300比价": ("zz500_ratio",),
+        "1000/300比价": ("zz1000_ratio",),
+        "创业板/300比价": ("zza500_ratio", "cyb_ratio"),
+        "50/创业板比价": ("sh50_ratio",),
+        "科创50/上证50比价": ("kc50_ratio",),
+        "300价值/成长比价": ("val300_ratio",),
+        "恒生科技/恒生比价": ("hstech_ratio",),
+        "500分位": ("zz500_percentile",),
+        "1000分位": ("zz1000_percentile",),
+        "创业板分位": ("zza500_percentile", "cyb_percentile"),
+        "50分位": ("sh50_percentile",),
+        "科创50分位": ("kc50_percentile",),
+        "300价值分位": ("val300_percentile",),
+        "300成长分位": ("gro300_percentile",),
+        "恒生科技分位": ("hstech_percentile",),
+        "500偏离(%)": ("zz500_deviation",),
+        "1000偏离(%)": ("zz1000_deviation",),
+        "创业板偏离(%)": ("zza500_deviation", "cyb_deviation"),
+        "50偏离(%)": ("sh50_deviation",),
+        "科创50偏离(%)": ("kc50_deviation",),
+        "300价值偏离(%)": ("val300_deviation",),
+        "300成长偏离(%)": ("gro300_deviation",),
+        "恒生科技偏离(%)": ("hstech_deviation",),
+        "500建议": ("zz500_recommendation",),
+        "1000建议": ("zz1000_recommendation",),
+        "创业板建议": ("zza500_recommendation", "cyb_recommendation"),
+        "50建议": ("sh50_recommendation",),
+        "科创50建议": ("kc50_recommendation",),
+        "300价值建议": ("val300_recommendation",),
+        "300成长建议": ("gro300_recommendation",),
+        "恒生科技建议": ("hstech_recommendation",),
+    }
+    for target_name, aliases in field_aliases.items():
+        _copy_first(record, row, target_name, *aliases)
+    return row
+
+
+def shared_relative_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    source_records = payload.get("records", [])
+    if isinstance(source_records, list):
+        for record in source_records:
+            if isinstance(record, dict):
+                row = shared_relative_row_to_execution_row(record)
+                if get_first(row, "日期") is not None:
+                    rows.append(row)
+
+    latest_signal = payload.get("latest_signal", {})
+    if isinstance(latest_signal, dict):
+        latest_record = dict(latest_signal)
+        if payload.get("latest_date") and get_first(latest_record, "日期", "date", "trade_date") is None:
+            latest_record["date"] = payload.get("latest_date")
+        latest_row = shared_relative_row_to_execution_row(latest_record)
+        latest_dt = parse_date(get_first(latest_row, "日期"))
+        if latest_dt:
+            latest_key = latest_dt.strftime("%Y-%m-%d")
+            merged = False
+            for index, row in enumerate(rows):
+                row_dt = parse_date(get_first(row, "日期"))
+                if row_dt and row_dt.strftime("%Y-%m-%d") == latest_key:
+                    rows[index] = {**row, **latest_row}
+                    merged = True
+                    break
+            if not merged:
+                rows.append(latest_row)
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        dt = parse_date(get_first(row, "日期"))
+        if dt:
+            deduped[dt.strftime("%Y-%m-%d")] = row
+    return [deduped[key] for key in sorted(deduped)]
+
+
+def load_shared_erp_rows(path: str) -> list[dict[str, Any]]:
+    payload = sanitize_structure(json.loads(Path(path).read_text(encoding="utf-8")))
+    rows = shared_erp_rows_from_payload(payload)
+    if not rows:
+        raise ValueError(f"ERP shared signal has no valid rows: {path}")
+    return rows
+
+
+def load_shared_relative_rows(path: str) -> list[dict[str, Any]]:
+    payload = sanitize_structure(json.loads(Path(path).read_text(encoding="utf-8")))
+    rows = shared_relative_rows_from_payload(payload)
+    if not rows:
+        raise ValueError(f"Relative shared signal has no valid rows: {path}")
+    return rows
+
+
 def compute_erp_snapshot(rows: list[dict[str, Any]], thresholds: dict[str, float],
                          weights: dict[str, float]) -> dict[str, Any]:
     valid: list[tuple[datetime, float]] = []
@@ -1264,6 +1407,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--asset-table-id", default=os.environ.get("ERP_EXEC_ASSET_TABLE_ID", DEFAULT_ASSET_TABLE_ID))
     parser.add_argument("--hsi-erp-app-token", default=os.environ.get("ERP_EXEC_HSI_ERP_APP_TOKEN", DEFAULT_HSI_ERP_APP_TOKEN))
     parser.add_argument("--hsi-erp-table-id", default=os.environ.get("ERP_EXEC_HSI_ERP_TABLE_ID", DEFAULT_HSI_ERP_TABLE_ID))
+    parser.add_argument("--erp-signal-json", default=os.environ.get("ERP_EXEC_ERP_SIGNAL_JSON", ""))
+    parser.add_argument("--relative-signal-json", default=os.environ.get("ERP_EXEC_RELATIVE_SIGNAL_JSON", ""))
     parser.add_argument("--execution-config-path", default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)))
     parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
@@ -1285,8 +1430,18 @@ def main() -> None:
 
     execution_config = sanitize_structure(json.loads(Path(args.execution_config_path).read_text(encoding="utf-8")))
 
-    erp_rows = reader.list_all_records(args.erp_app_token, args.erp_table_id, args.page_size)
-    relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
+    if args.erp_signal_json:
+        erp_rows = load_shared_erp_rows(args.erp_signal_json)
+        print(f"Loaded ERP shared signal JSON: {args.erp_signal_json} ({len(erp_rows)} rows)")
+    else:
+        erp_rows = reader.list_all_records(args.erp_app_token, args.erp_table_id, args.page_size)
+
+    if args.relative_signal_json:
+        relative_rows = load_shared_relative_rows(args.relative_signal_json)
+        print(f"Loaded Relative shared signal JSON: {args.relative_signal_json} ({len(relative_rows)} rows)")
+    else:
+        relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
+
     asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
 
     # HSI ERP (optional)
@@ -1326,6 +1481,8 @@ def main() -> None:
             "mode": "cloud_openapi",
             "erp_table": {"app_token": args.erp_app_token, "table_id": args.erp_table_id},
             "relative_table": {"app_token": args.relative_app_token, "table_id": args.relative_table_id},
+            "erp_signal_json": str(Path(args.erp_signal_json).resolve()) if args.erp_signal_json else None,
+            "relative_signal_json": str(Path(args.relative_signal_json).resolve()) if args.relative_signal_json else None,
             "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id},
             "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
             "as_of": as_of.strftime("%Y-%m-%d"),

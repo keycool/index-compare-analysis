@@ -558,6 +558,8 @@ jobs:
           ERP_EXEC_RELATIVE_TABLE_ID: ${{ secrets.ERP_EXEC_RELATIVE_TABLE_ID || secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
           ERP_EXEC_ASSET_APP_TOKEN: ${{ secrets.ERP_EXEC_ASSET_APP_TOKEN }}
           ERP_EXEC_ASSET_TABLE_ID: ${{ secrets.ERP_EXEC_ASSET_TABLE_ID }}
+          ERP_EXEC_ERP_SIGNAL_JSON: ${{ github.workspace }}/shared/erp_signal.json
+          ERP_EXEC_RELATIVE_SIGNAL_JSON: ${{ github.workspace }}/shared/relative_signal.json
           ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
 

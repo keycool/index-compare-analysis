@@ -544,10 +544,13 @@ jobs:
           PY
 
       - name: Push ERP execution summary
+        id: push_erp_execution_summary
         if: success() && steps.preflight.outputs.should_run == 'true' && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.push_erp_execution_summary == true)
+        continue-on-error: true
         timeout-minutes: 25
         working-directory: csi300-relative-index
         run: |
+          set -euo pipefail
           python orchestrator/run_erp_execution_cloud.py --push-summary
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -564,7 +567,7 @@ jobs:
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
 
       - name: Generate ERP dashboard artifact
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure' || steps.push_erp_execution_summary.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         run: |
           python external/equity-risk-premium/dashboard/generate_dashboard_data.py
 
@@ -589,11 +592,11 @@ jobs:
           retention-days: 7
 
       - name: Setup Pages
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure' || steps.push_erp_execution_summary.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         uses: actions/configure-pages@v5
 
       - name: Build Pages site
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure' || steps.push_erp_execution_summary.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         run: |
           python - << 'PY'
           import json
@@ -696,7 +699,7 @@ jobs:
           echo "[VERCEL] Deploy URL: $DEPLOY_URL"
 
       - name: Upload Pages artifact
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure' || steps.push_erp_execution_summary.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
         uses: actions/upload-pages-artifact@v4
         with:
           path: site

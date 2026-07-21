@@ -48,7 +48,7 @@ def run_python(script: Path) -> None:
     if completed.stderr:
         print(completed.stderr, file=sys.stderr)
     if completed.returncode != 0:
-        raise RuntimeError(f"Command failed: {script.name}")
+        raise RuntimeError(f"{script.name} exited with code {completed.returncode}")
 
 
 def main() -> None:

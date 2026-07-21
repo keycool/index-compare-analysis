@@ -28,6 +28,8 @@ from erp_execution_cloud import (  # noqa: E402
     build_target_weights,
     build_rebalance_plan,
     build_holding_breakdown,
+    build_data_health,
+    validate_execution_payload,
     aggregate_current_holdings,
     save_output,
     print_summary,
@@ -82,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--lark-cli", default=str(DEFAULT_LARK_CLI))
     parser.add_argument("--execution-config-path", default=str(DEFAULT_EXECUTION_CONFIG_PATH))
+    parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
     return parser.parse_args()
 
 
@@ -145,6 +148,9 @@ def load_json_file(path: Path) -> dict[str, Any]:
 
 def main() -> None:
     args = parse_args()
+    as_of = parse_date(args.as_of) if args.as_of else datetime.now().astimezone()
+    if as_of is None:
+        raise ValueError(f"Invalid --as-of date: {args.as_of}")
     execution_config = load_json_file(Path(args.execution_config_path).resolve())
 
     erp_table = BaseTable(args.erp_base_token, args.erp_table_id, "ERP")
@@ -177,6 +183,15 @@ def main() -> None:
 
     targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
     portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
+    data_health = build_data_health(
+        erp_snapshot,
+        hsi_erp_snapshot,
+        relative_snapshot,
+        asset_rows,
+        execution_config,
+        as_of,
+        require_asset_timestamp=False,
+    )
 
     payload = {
         "version": "3.0",
@@ -189,13 +204,20 @@ def main() -> None:
             "asset_table": vars(asset_table),
             "identity": args.as_identity,
             "lark_cli": args.lark_cli,
+            "as_of": as_of.strftime("%Y-%m-%d"),
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },
-        "signals": {"erp": erp_snapshot, "hsi_erp": hsi_erp_snapshot, "relative": relative_snapshot},
+        "signals": {
+            "erp": erp_snapshot,
+            "hsi_erp": hsi_erp_snapshot,
+            "relative": relative_snapshot,
+            "data_health": data_health,
+        },
         "portfolio": portfolio,
     }
 
+    validate_execution_payload(payload)
     output_path = Path(args.output).resolve()
     save_output(output_path, payload)
     print_summary(payload)

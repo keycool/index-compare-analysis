@@ -41,6 +41,16 @@
       "high": 0.60
     }
   },
+  "data_quality": {
+    "target_weight_tolerance": 0.0015,
+    "max_signal_date_gap_days": 10,
+    "max_staleness_days": {
+      "erp": 14,
+      "relative": 3,
+      "hsi_erp": 14,
+      "asset": 14
+    }
+  },
   "recommendation_multipliers": {
     "强烈超配": 1.30,
     "超配": 1.15,

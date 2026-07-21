@@ -86,7 +86,16 @@ jobs:
               raise SystemExit("Missing ERP daily summary artifact")
 
           plan = json.loads(plan_path.read_text(encoding="utf-8"))
+          portfolio = plan.get("portfolio", {})
           positions = plan.get("portfolio", {}).get("positions", [])
+          total_weight = sum(float(item.get("target_weight", 0)) for item in positions)
+          if abs(total_weight - 1.0) > 0.0015:
+              raise SystemExit(f"Target weights must sum to 100%, got {total_weight:.4%}")
+
+          health = plan.get("signals", {}).get("data_health", {})
+          if health.get("errors"):
+              raise SystemExit("Data health check failed: " + "; ".join(health["errors"]))
+
           defensive_value = next((item for item in positions if item.get("bucket") == "sh50"), None)
           if defensive_value is None:
               raise SystemExit("Missing defensive value bucket sh50 in ERP execution plan")
@@ -98,12 +107,17 @@ jobs:
               "## ERP execution validation",
               "",
               f"- Generated at: `{plan.get('generated_at', '-')}`",
-              f"- Managed amount: `{plan.get('portfolio', {}).get('managed_amount', 0):,.2f}`",
+              f"- As of: `{health.get('as_of', '-')}`",
+              f"- Managed amount: `{portfolio.get('managed_amount', 0):,.2f}`",
+              f"- Target weight sum: `{total_weight:.4%}`",
+              f"- Data dates: `{health.get('dates', {})}`",
               f"- Defensive value current amount: `{defensive_value.get('current_amount', 0):,.2f}`",
               f"- Defensive value target amount: `{defensive_value.get('target_amount', 0):,.2f}`",
-              "",
-              "### Defensive value holdings",
           ]
+          if health.get("warnings"):
+              lines.extend(["", "### Warnings"])
+              lines.extend(f"- {item}" for item in health["warnings"])
+          lines.extend(["", "### Defensive value holdings"])
           if breakdown:
               lines.extend(f"- `{item.get('name', '-')}`: `{item.get('amount', 0):,.2f}`" for item in breakdown)
           else:

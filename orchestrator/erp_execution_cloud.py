@@ -209,6 +209,8 @@ class FeishuBitableReader:
             for item in data.get("items", []):
                 fields = normalize_row(item.get("fields", {}))
                 fields["record_id"] = item.get("record_id")
+                fields["_created_time"] = item.get("created_time")
+                fields["_last_modified_time"] = item.get("last_modified_time")
                 records.append(fields)
             if not data.get("has_more"):
                 break
@@ -521,16 +523,15 @@ def compute_hsi_erp_snapshot(
 
 
 def _hsi_erp_neutral(hk_config: dict[str, Any]) -> dict[str, Any]:
-    weights = hk_config.get("aggressive_weights", {"neutral": 0.45})
     return {
         "date": None,
         "equity_premium": None,
-        "percentile": 50.0,
-        "aggressive_weight": float(weights.get("neutral", 0.45)),
-        "defensive_weight": 1.0 - float(weights.get("neutral", 0.45)),
+        "percentile": None,
+        "aggressive_weight": 0.0,
+        "defensive_weight": 1.0,
         "history_points": 0,
         "available": False,
-        "message": "HSI ERP table unavailable, using neutral allocation",
+        "message": "HSI ERP table unavailable; HK targets are capped at current HK exposure",
     }
 
 
@@ -571,12 +572,17 @@ def trajectory_multiplier(deviation: float | None, change_5d: float | None,
 def compute_cross_market_allocation(
     hsi_erp: dict[str, Any],
     cross_config: dict[str, Any],
+    current_hk_weight: float = 0.0,
 ) -> tuple[float, float]:
     """Returns (ashare_pool_pct, hkshare_pool_pct)."""
     hk_cap = float(cross_config.get("hk_pool_cap", 0.20))
+    if not hsi_erp.get("available"):
+        hk_pool = min(max(current_hk_weight, 0.0), hk_cap)
+        return 1.0 - hk_pool, hk_pool
+
     hk_min = float(cross_config.get("hk_min_erp_percentile", 30))
     hk_full = float(cross_config.get("hk_full_erp_percentile", 50))
-    hsi_pct = float(hsi_erp.get("percentile", 50.0))
+    hsi_pct = float(hsi_erp["percentile"])
 
     if hsi_pct <= hk_min:
         hk_pool = 0.0
@@ -701,6 +707,15 @@ def _style_pair_budget_ratio(val300_pct: float | None, style_config: dict[str, A
     return val_w + ((1.0 - gro_w) - val_w) * ratio
 
 
+def _balance_target_weights(targets: dict[str, dict[str, Any]], core_bucket: str = "hs300") -> None:
+    total = sum(float(item.get("target_weight", 0.0)) for item in targets.values())
+    diff = 1.0 - total
+    core = targets.get(core_bucket)
+    if core is None or abs(diff) < 0.00005:
+        return
+    core["target_weight"] = round(max(0.0, float(core.get("target_weight", 0.0)) + diff), 4)
+
+
 def build_target_weights(
     erp_snapshot: dict[str, Any],
     hsi_erp_snapshot: dict[str, Any],
@@ -724,7 +739,13 @@ def build_target_weights(
 
     # ── Cross-market ──
     cross_config = execution_config.get("cross_market", {})
-    ashare_pool, hk_pool = compute_cross_market_allocation(hsi_erp_snapshot, cross_config)
+    managed_total = sum(float(value) for value in current_holdings.values())
+    current_hk_weight = 0.0
+    if managed_total > 0:
+        current_hk_weight = (
+            float(current_holdings.get("hsi", 0.0)) + float(current_holdings.get("hstech", 0.0))
+        ) / managed_total
+    ashare_pool, hk_pool = compute_cross_market_allocation(hsi_erp_snapshot, cross_config, current_hk_weight)
 
     # ── A-share: ERP-driven sleeve split ──
     ashare_aggressive = float(erp_snapshot["aggressive_weight"])
@@ -822,18 +843,6 @@ def build_target_weights(
         "target_weight": round(sh50_tw, 4),
     }
 
-    # -- HS300 core (defensive residual + aggressive passive) --
-    used_def = sh50_tw + val300_tw + gro300_tw
-    agg_used = sum(float(item["target_weight"]) for item in targets.values() if item.get("pool") == "ashare" and item.get("sleeve") == "aggressive")
-    hs300_tw = max(0.0, ashare_def_total - used_def + max(0.0, ashare_pool * ashare_aggressive - agg_used))
-    meta_hs = bucket_meta.get("hs300", {})
-    targets["hs300"] = {
-        "bucket": "hs300", "label": meta_hs.get("label", "沪深300"),
-        "sleeve": "defensive", "pool": "ashare",
-        "signal": "core",
-        "target_weight": round(hs300_tw, 4),
-    }
-
     # ═══ A-share aggressive ═══
     ashare_agg_total = ashare_pool * ashare_aggressive
     agg_alpha_total = ashare_agg_total * ashare_alpha_budget
@@ -844,9 +853,54 @@ def build_target_weights(
     )
     targets.update(agg_buckets)
 
+    # -- HS300 core (defensive residual + aggressive passive) --
+    used_def = sum(
+        float(targets[key]["target_weight"])
+        for key in ("sh50", "val300", "gro300")
+        if key in targets
+    )
+    agg_used = sum(
+        float(item["target_weight"])
+        for item in targets.values()
+        if item.get("pool") == "ashare" and item.get("sleeve") == "aggressive"
+    )
+    hs300_tw = max(0.0, ashare_def_total - used_def) + max(0.0, ashare_agg_total - agg_used)
+    meta_hs = bucket_meta.get("hs300", {})
+    targets["hs300"] = {
+        "bucket": "hs300", "label": meta_hs.get("label", "沪深300"),
+        "sleeve": "defensive", "pool": "ashare",
+        "signal": "core",
+        "target_weight": round(hs300_tw, 4),
+    }
+
     # ═══ HK pool ═══
-    hk_def_total = hk_pool * (1.0 - hk_aggressive)
     meta_hsi = bucket_meta.get("hsi", {})
+    meta_ht = bucket_meta.get("hstech", {})
+    if not hsi_erp_snapshot.get("available"):
+        hsi_tw = 0.0
+        hstech_tw = 0.0
+        if managed_total > 0 and current_hk_weight > 0:
+            scale = hk_pool / current_hk_weight
+            hsi_tw = float(current_holdings.get("hsi", 0.0)) / managed_total * scale
+            hstech_tw = float(current_holdings.get("hstech", 0.0)) / managed_total * scale
+        targets["hsi"] = {
+            "bucket": "hsi", "label": meta_hsi.get("label", "恒生指数"),
+            "sleeve": "defensive", "pool": "hkshare",
+            "signal": "hold-no-hsi-erp",
+            "target_weight": round(hsi_tw, 4),
+        }
+        targets["hstech"] = {
+            "bucket": "hstech", "label": meta_ht.get("label", "恒生科技"),
+            "sleeve": "aggressive", "pool": "hkshare",
+            "signal": "hold-no-hsi-erp",
+            "target_weight": round(hstech_tw, 4),
+            "trajectory_multiplier": 1.0,
+            "trajectory_reason": "HSI ERP unavailable; no new HK exposure",
+        }
+        _balance_target_weights(targets)
+        return targets
+
+    hk_def_total = hk_pool * (1.0 - hk_aggressive)
     targets["hsi"] = {
         "bucket": "hsi", "label": meta_hsi.get("label", "恒生指数"),
         "sleeve": "defensive", "pool": "hkshare",
@@ -875,7 +929,6 @@ def build_target_weights(
     else:
         hstech_tw *= hstech_tm
 
-    meta_ht = bucket_meta.get("hstech", {})
     targets["hstech"] = {
         "bucket": "hstech", "label": meta_ht.get("label", "恒生科技"),
         "sleeve": "aggressive", "pool": "hkshare",
@@ -892,6 +945,7 @@ def build_target_weights(
         "target_weight": round(hstech_tw, 4),
     }
 
+    _balance_target_weights(targets)
     return targets
 
 
@@ -934,6 +988,7 @@ def build_rebalance_plan(
         {"defensive": 0, "aggressive": 1}.get(item.get("sleeve", ""), 2),
         item.get("bucket", ""),
     ))
+    target_weight_sum = sum(float(item.get("target_weight", 0.0)) for item in positions)
 
     return {
         "total_erp_amount": total_erp_amount,
@@ -941,6 +996,7 @@ def build_rebalance_plan(
         "unmapped_amount": unmapped_total,
         "managed_position_count": len(current_holdings),
         "unmapped_position_count": len(unmapped_holdings),
+        "target_weight_sum": round(target_weight_sum, 6),
         "ashare_pool": round(targets.get("hs300", {}).get("target_weight", 0) + sum(
             float(t.get("target_weight", 0)) for k, t in targets.items()
             if t.get("pool") == "ashare" and k != "hs300"
@@ -955,6 +1011,130 @@ def build_rebalance_plan(
 
 
 # ── Output ───────────────────────────────────────────────────
+
+def latest_asset_update(rows: list[dict[str, Any]]) -> datetime | None:
+    dates: list[datetime] = []
+    for row in rows:
+        third_level = parse_multiselect(get_first(row, "Ⅲ级分类", "III级分类", "三级分类"))
+        if "ERP" not in third_level:
+            continue
+        dt = parse_date(row.get("_last_modified_time") or row.get("_created_time"))
+        if dt:
+            dates.append(dt)
+    return max(dates) if dates else None
+
+
+def _snapshot_date(snapshot: dict[str, Any]) -> datetime | None:
+    return parse_date(snapshot.get("date"))
+
+
+def build_data_health(
+    erp_snapshot: dict[str, Any],
+    hsi_erp_snapshot: dict[str, Any],
+    relative_snapshot: dict[str, Any],
+    asset_rows: list[dict[str, Any]],
+    execution_config: dict[str, Any],
+    as_of: datetime,
+    *,
+    require_asset_timestamp: bool,
+) -> dict[str, Any]:
+    config = execution_config.get("data_quality", {})
+    max_staleness = config.get("max_staleness_days", {})
+    max_gap_days = int(config.get("max_signal_date_gap_days", 10))
+    dates = {
+        "erp": _snapshot_date(erp_snapshot),
+        "relative": _snapshot_date(relative_snapshot),
+        "hsi_erp": _snapshot_date(hsi_erp_snapshot),
+        "asset": latest_asset_update(asset_rows),
+    }
+    limits = {
+        "erp": int(max_staleness.get("erp", 14)),
+        "relative": int(max_staleness.get("relative", 3)),
+        "hsi_erp": int(max_staleness.get("hsi_erp", 14)),
+        "asset": int(max_staleness.get("asset", 14)),
+    }
+    errors: list[str] = []
+    warnings: list[str] = []
+    ages: dict[str, int | None] = {}
+
+    for name in ("erp", "relative"):
+        dt = dates[name]
+        if dt is None:
+            errors.append(f"{name} date is missing")
+            ages[name] = None
+            continue
+        age = (as_of.date() - dt.date()).days
+        ages[name] = age
+        if age < 0:
+            errors.append(f"{name} date {dt.date()} is after as_of {as_of.date()}")
+        elif age > limits[name]:
+            errors.append(f"{name} data is stale: {age} days > {limits[name]}")
+
+    if dates["erp"] is not None and dates["relative"] is not None:
+        gap = abs((dates["relative"].date() - dates["erp"].date()).days)
+        if gap > max_gap_days:
+            errors.append(f"ERP/relative date gap is too large: {gap} days > {max_gap_days}")
+
+    hsi_dt = dates["hsi_erp"]
+    if hsi_erp_snapshot.get("available"):
+        if hsi_dt is None:
+            errors.append("hsi_erp date is missing")
+            ages["hsi_erp"] = None
+        else:
+            age = (as_of.date() - hsi_dt.date()).days
+            ages["hsi_erp"] = age
+            if age < 0:
+                errors.append(f"hsi_erp date {hsi_dt.date()} is after as_of {as_of.date()}")
+            elif age > limits["hsi_erp"]:
+                errors.append(f"hsi_erp data is stale: {age} days > {limits['hsi_erp']}")
+    else:
+        ages["hsi_erp"] = None
+        warnings.append("HSI ERP unavailable; HK targets are capped at current HK exposure")
+
+    asset_dt = dates["asset"]
+    if asset_dt is None:
+        ages["asset"] = None
+        message = "asset record update timestamp is missing"
+        if require_asset_timestamp:
+            errors.append(message)
+        else:
+            warnings.append(message)
+    else:
+        age = (as_of.date() - asset_dt.date()).days
+        ages["asset"] = age
+        if age < 0:
+            errors.append(f"asset update date {asset_dt.date()} is after as_of {as_of.date()}")
+        elif age > limits["asset"]:
+            errors.append(f"asset data is stale: {age} days > {limits['asset']}")
+
+    return {
+        "as_of": as_of.strftime("%Y-%m-%d"),
+        "dates": {key: value.strftime("%Y-%m-%d") if value else None for key, value in dates.items()},
+        "ages_days": ages,
+        "max_signal_date_gap_days": max_gap_days,
+        "errors": errors,
+        "warnings": warnings,
+        "ok": not errors,
+    }
+
+
+def validate_execution_payload(payload: dict[str, Any]) -> None:
+    portfolio = payload.get("portfolio", {})
+    positions = portfolio.get("positions", [])
+    total_weight = sum(float(item.get("target_weight", 0.0)) for item in positions)
+    tolerance = float(
+        payload.get("inputs", {})
+        .get("execution_config", {})
+        .get("data_quality", {})
+        .get("target_weight_tolerance", 0.0015)
+    )
+    errors: list[str] = []
+    if abs(total_weight - 1.0) > tolerance:
+        errors.append(f"target weights must sum to 1.0, got {total_weight:.6f}")
+    errors.extend(payload.get("signals", {}).get("data_health", {}).get("errors", []))
+    if errors:
+        raise RuntimeError("ERP execution validation failed: " + "; ".join(errors))
+
 
 def save_output(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -990,7 +1170,7 @@ def print_summary(payload: dict[str, Any]) -> None:
     if hsi.get("available"):
         print(f"HK     ERP: {hsi['date']}  premium={hsi['equity_premium']:.2f}  pct={hsi['percentile']:.2f}%  agg={hsi['aggressive_weight']:.2%}")
     else:
-        print(f"HK     ERP: {hsi.get('message', 'unavailable')} (neutral fallback)")
+        print(f"HK     ERP: {hsi.get('message', 'unavailable')}")
 
     pool_ashare = portfolio.get("ashare_pool", 0)
     pool_hk = portfolio.get("hkshare_pool", 0)
@@ -1031,6 +1211,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hsi-erp-table-id", default=os.environ.get("ERP_EXEC_HSI_ERP_TABLE_ID", DEFAULT_HSI_ERP_TABLE_ID))
     parser.add_argument("--execution-config-path", default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)))
     parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
+    parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
     parser.add_argument("--page-size", type=int, default=500)
     return parser.parse_args()
 
@@ -1039,6 +1220,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    as_of = parse_date(args.as_of) if args.as_of else datetime.now(SHANGHAI_TZ)
+    if as_of is None:
+        raise ValueError(f"Invalid --as-of date: {args.as_of}")
 
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
@@ -1069,6 +1253,15 @@ def main() -> None:
 
     targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
     portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
+    data_health = build_data_health(
+        erp_snapshot,
+        hsi_erp_snapshot,
+        relative_snapshot,
+        asset_rows,
+        execution_config,
+        as_of,
+        require_asset_timestamp=True,
+    )
 
     payload = {
         "version": "3.0",
@@ -1080,6 +1273,7 @@ def main() -> None:
             "relative_table": {"app_token": args.relative_app_token, "table_id": args.relative_table_id},
             "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id},
             "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
+            "as_of": as_of.strftime("%Y-%m-%d"),
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },
@@ -1087,10 +1281,12 @@ def main() -> None:
             "erp": erp_snapshot,
             "hsi_erp": hsi_erp_snapshot,
             "relative": relative_snapshot,
+            "data_health": data_health,
         },
         "portfolio": portfolio,
     }
 
+    validate_execution_payload(payload)
     output_path = Path(args.output).resolve()
     save_output(output_path, payload)
     summary_path = render_daily_summary()

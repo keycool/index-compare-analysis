@@ -193,6 +193,11 @@ jobs:
           pip install -r csi300-relative-index/.claude/skills/index-compare/requirements.txt
           pip install -r external/equity-risk-premium/skills/equity-risk-premium/requirements.txt
 
+      - name: Run Relative signal regression tests
+        if: steps.preflight.outputs.should_run == 'true'
+        working-directory: csi300-relative-index
+        run: python -m unittest discover -s tests -p "test_relative_*.py"
+
       - name: Run master orchestrator
         if: steps.preflight.outputs.should_run == 'true'
         env:

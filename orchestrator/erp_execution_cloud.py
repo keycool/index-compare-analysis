@@ -265,8 +265,8 @@ _REVERSE_REC = {
 
 
 def _kc50_rec_to_bucket_rec(rec: str) -> str:
-    """Convert KC50 ratio recommendation to KC50 bucket recommendation."""
-    return _REVERSE_REC.get(normalize_text(rec), "标配")
+    """KC50 ratio signals are already recommendations for the numerator KC50."""
+    return normalize_text(rec) or "标配"
 
 
 # ── Holding resolution ───────────────────────────────────────
@@ -820,10 +820,7 @@ def _build_pool_aggressive_buckets(
     scores: dict[str, float] = {}
     for bucket in bucket_keys:
         base = float(base_weights.get(bucket, 0.3))
-        rec = recs.get(bucket, "标配")
-        # KC50 reverse logic
-        if bucket == "kc50":
-            rec = _kc50_rec_to_bucket_rec(rec)
+        rec = _rec_for_bucket(bucket, recs)
         scores[bucket] = base * recommendation_multiplier(rec, multipliers)
 
     local_weights = normalize_to_weights(scores)
@@ -856,6 +853,7 @@ def _build_pool_aggressive_buckets(
             tw = 0.0
         else:
             tw *= traj_mult
+            tw = min(tw, float(caps.get(bucket, 1.0)))
 
         meta = bucket_metadata.get(bucket, {})
         targets[bucket] = {
@@ -879,13 +877,11 @@ def _build_pool_aggressive_buckets(
 
 
 def _rec_for_bucket(bucket: str, recs: dict[str, str]) -> str:
-    if bucket == "kc50":
-        return _kc50_rec_to_bucket_rec(recs.get(bucket, "标配"))
     return recs.get(bucket, "标配")
 
 
 def _style_pair_budget_ratio(val300_pct: float | None, style_config: dict[str, Any]) -> float:
-    """Returns fraction of style pair budget allocated to VAL300 (rest goes to GRO300)."""
+    """Return fraction of style pair budget allocated to VAL300."""
     thresholds = style_config.get("percentile_thresholds", {"low": 30, "high": 70})
     split = style_config.get("split", {})
     if val300_pct is None:
@@ -897,10 +893,9 @@ def _style_pair_budget_ratio(val300_pct: float | None, style_config: dict[str, A
     gro_w = float(split.get("growth_cheap_weight", 0.70))
 
     if val300_pct <= low:
-        return val_w  # value cheap → most to VAL300
+        return val_w
     if val300_pct >= high:
-        return 1.0 - gro_w  # growth cheap → most to GRO300
-    # linear interpolation
+        return 1.0 - gro_w
     ratio = (val300_pct - low) / max(1e-9, high - low)
     return val_w + ((1.0 - gro_w) - val_w) * ratio
 
@@ -991,6 +986,7 @@ def build_target_weights(
             tw = 0.0
         else:
             tw *= tm
+            tw = min(tw, float(caps.get(bucket, 1.0)))
         meta = bucket_meta.get(bucket, {})
         return {
             "bucket": bucket, "label": meta.get("label", bucket),
@@ -1126,6 +1122,7 @@ def build_target_weights(
         hstech_tw = 0.0
     else:
         hstech_tw *= hstech_tm
+        hstech_tw = min(hstech_tw, float(caps.get("hstech", 0.08)))
 
     targets["hstech"] = {
         "bucket": "hstech", "label": meta_ht.get("label", "恒生科技"),
@@ -1210,16 +1207,30 @@ def build_rebalance_plan(
 
 # ── Output ───────────────────────────────────────────────────
 
-def latest_asset_update(rows: list[dict[str, Any]]) -> datetime | None:
+def erp_asset_update_bounds(rows: list[dict[str, Any]]) -> dict[str, Any]:
     dates: list[datetime] = []
+    total = 0
+    missing = 0
     for row in rows:
         third_level = parse_multiselect(get_first(row, "Ⅲ级分类", "III级分类", "三级分类"))
         if "ERP" not in third_level:
             continue
+        total += 1
         dt = parse_date(row.get("_last_modified_time") or row.get("_created_time"))
         if dt:
             dates.append(dt)
-    return max(dates) if dates else None
+        else:
+            missing += 1
+    return {
+        "oldest": min(dates) if dates else None,
+        "newest": max(dates) if dates else None,
+        "total_count": total,
+        "missing_count": missing,
+    }
+
+
+def latest_asset_update(rows: list[dict[str, Any]]) -> datetime | None:
+    return erp_asset_update_bounds(rows)["newest"]
 
 
 def _snapshot_date(snapshot: dict[str, Any]) -> datetime | None:
@@ -1239,11 +1250,12 @@ def build_data_health(
     config = execution_config.get("data_quality", {})
     max_staleness = config.get("max_staleness_days", {})
     max_gap_days = int(config.get("max_signal_date_gap_days", 10))
+    asset_update = erp_asset_update_bounds(asset_rows)
     dates = {
         "erp": _snapshot_date(erp_snapshot),
         "relative": _snapshot_date(relative_snapshot),
         "hsi_erp": _snapshot_date(hsi_erp_snapshot),
-        "asset": latest_asset_update(asset_rows),
+        "asset": asset_update["oldest"],
     }
     limits = {
         "erp": int(max_staleness.get("erp", 14)),
@@ -1290,6 +1302,16 @@ def build_data_health(
         warnings.append("HSI ERP unavailable; HK targets are capped at current HK exposure")
 
     asset_dt = dates["asset"]
+    if asset_update["missing_count"]:
+        message = (
+            f"asset record update timestamp is missing for "
+            f"{asset_update['missing_count']} of {asset_update['total_count']} ERP rows"
+        )
+        if require_asset_timestamp:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
     if asset_dt is None:
         ages["asset"] = None
         message = "asset record update timestamp is missing"
@@ -1308,6 +1330,12 @@ def build_data_health(
     return {
         "as_of": as_of.strftime("%Y-%m-%d"),
         "dates": {key: value.strftime("%Y-%m-%d") if value else None for key, value in dates.items()},
+        "asset_update": {
+            "oldest": asset_update["oldest"].strftime("%Y-%m-%d") if asset_update["oldest"] else None,
+            "newest": asset_update["newest"].strftime("%Y-%m-%d") if asset_update["newest"] else None,
+            "total_count": asset_update["total_count"],
+            "missing_count": asset_update["missing_count"],
+        },
         "ages_days": ages,
         "max_signal_date_gap_days": max_gap_days,
         "errors": errors,

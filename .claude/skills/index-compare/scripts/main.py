@@ -134,13 +134,18 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     p50_300_series = calc_expanding_percentile(df.get("SH50_300_ratio"), df.index).round(1)
     pkc50_300_series = calc_expanding_percentile(df.get("KC50_300_ratio"), df.index).round(1)
     p50_series = calc_expanding_percentile(df.get("SH50_ratio"), df.index).round(1)
-    pval300_series = calc_expanding_percentile(df.get("VAL300_ratio"), df.index).round(1)
+    # Historical internal key VAL300 is GRO300 / VAL300. Export each asset's
+    # signal using a ratio where that asset is the numerator.
+    growth300_ratio = df.get("VAL300_ratio")
+    if growth300_ratio is None:
+        growth300_ratio = pd.Series([float("nan")] * len(df.index), index=df.index)
+    else:
+        growth300_ratio = pd.to_numeric(growth300_ratio, errors="coerce")
+    value300_ratio = 1.0 / growth300_ratio.replace(0, pd.NA)
+    pgrowth300_series = calc_expanding_percentile(growth300_ratio, df.index).round(1)
+    pvalue300_series = calc_expanding_percentile(value300_ratio, df.index).round(1)
     pkc50_series = calc_expanding_percentile(df.get("KC50_ratio"), df.index).round(1)
     phtech_series = calc_expanding_percentile(df.get("HKTECH_ratio"), df.index).round(1)
-    # GRO300: 1 / VAL300_ratio
-    _gro300_ratio = 1.0 / df.get("VAL300_ratio").replace(0, pd.NA)
-    pgro300_series = calc_expanding_percentile(_gro300_ratio, df.index).round(1)
-
     # ── 偏离 ──
     d500_series = calc_deviation_series(df.get("ZZ500_ratio"), df.get("ZZ500_MA30"), df.index).round(2)
     d1000_series = calc_deviation_series(df.get("ZZ1000_ratio"), df.get("ZZ1000_MA30"), df.index).round(2)
@@ -148,10 +153,11 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
     d50_300_series = calc_deviation_series(df.get("SH50_300_ratio"), df.get("SH50_300_MA30"), df.index).round(2)
     dkc50_300_series = calc_deviation_series(df.get("KC50_300_ratio"), df.get("KC50_300_MA30"), df.index).round(2)
     d50_series = calc_deviation_series(df.get("SH50_ratio"), df.get("SH50_MA30"), df.index).round(2)
-    dval300_series = calc_deviation_series(df.get("VAL300_ratio"), df.get("VAL300_MA30"), df.index).round(2)
+    dgrowth300_series = calc_deviation_series(growth300_ratio, df.get("VAL300_MA30"), df.index).round(2)
+    value300_ma30 = value300_ratio.rolling(window=30).mean()
+    dvalue300_series = calc_deviation_series(value300_ratio, value300_ma30, df.index).round(2)
     dkc50_series = calc_deviation_series(df.get("KC50_ratio"), df.get("KC50_MA30"), df.index).round(2)
     dhtech_series = calc_deviation_series(df.get("HKTECH_ratio"), df.get("HKTECH_MA30"), df.index).round(2)
-    dgro300_series = (-dval300_series).round(2)
 
     export_df = pd.DataFrame(
         {
@@ -174,7 +180,7 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "创业板/上证50比价": df.get("SH50_ratio"),
             "50/创业板比价": df.get("SH50_ratio"),
             "科创50/上证50比价": df.get("KC50_ratio"),
-            "300价值/成长比价": df.get("VAL300_ratio"),
+            "300价值/成长比价": value300_ratio,
             "恒生科技/恒生比价": df.get("HKTECH_ratio"),
             "500分位": p500_series,
             "1000分位": p1000_series,
@@ -183,8 +189,8 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "科创50/300分位": pkc50_300_series,
             "50分位": p50_series,
             "科创50分位": pkc50_series,
-            "300价值分位": pval300_series,
-            "300成长分位": pgro300_series,
+            "300价值分位": pvalue300_series,
+            "300成长分位": pgrowth300_series,
             "恒生科技分位": phtech_series,
             "500偏离(%)": d500_series,
             "1000偏离(%)": d1000_series,
@@ -194,8 +200,8 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
             "创业板/上证50偏离(%)": d50_series,
             "50偏离(%)": d50_series,
             "科创50偏离(%)": dkc50_series,
-            "300价值偏离(%)": dval300_series,
-            "300成长偏离(%)": dgro300_series,
+            "300价值偏离(%)": dvalue300_series,
+            "300成长偏离(%)": dgrowth300_series,
             "恒生科技偏离(%)": dhtech_series,
         }
     )
@@ -217,10 +223,10 @@ def build_export_dataframe(processed_df: pd.DataFrame, conclusions: Dict[str, An
         _sh50_rec = conclusions.get("SH50", {}).get("recommendation", {}).get("action", "")
         export_df.loc[latest_idx, "50建议"] = _REVERSE_REC.get(_sh50_rec, "标配")
         export_df.loc[latest_idx, "科创50建议"] = conclusions.get("KC50", {}).get("recommendation", {}).get("action", "")
-        export_df.loc[latest_idx, "300价值建议"] = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
+        _growth300_rec = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
+        export_df.loc[latest_idx, "300成长建议"] = _growth300_rec
+        export_df.loc[latest_idx, "300价值建议"] = _REVERSE_REC.get(_growth300_rec, "标配")
         export_df.loc[latest_idx, "恒生科技建议"] = conclusions.get("HKTECH", {}).get("recommendation", {}).get("action", "")
-        _val_rec = conclusions.get("VAL300", {}).get("recommendation", {}).get("action", "")
-        export_df.loc[latest_idx, "300成长建议"] = _REVERSE_REC.get(_val_rec, "标配")
 
     export_df["数据源"] = "tushare"
 

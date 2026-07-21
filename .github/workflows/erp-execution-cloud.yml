@@ -10,7 +10,7 @@ on:
       push_summary:
         description: "Push ERP execution summary to Feishu webhook after generation"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:

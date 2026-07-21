@@ -25,6 +25,11 @@ on:
         required: false
         default: ""
         type: string
+      push_erp_execution_summary:
+        description: "Also push ERP execution summary after the master run"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -537,6 +542,24 @@ jobs:
           if records and created + updated == 0:
               print("::warning::ERP Feishu sync wrote zero records; continuing")
           PY
+
+      - name: Push ERP execution summary
+        if: success() && steps.preflight.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && inputs.push_erp_execution_summary == true
+        timeout-minutes: 25
+        working-directory: csi300-relative-index
+        run: |
+          python orchestrator/run_erp_execution_cloud.py --push-summary
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          ERP_EXEC_ERP_APP_TOKEN: ${{ secrets.ERP_EXEC_ERP_APP_TOKEN || secrets.ERP_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          ERP_EXEC_ERP_TABLE_ID: ${{ secrets.ERP_EXEC_ERP_TABLE_ID || secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+          ERP_EXEC_RELATIVE_APP_TOKEN: ${{ secrets.ERP_EXEC_RELATIVE_APP_TOKEN || secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
+          ERP_EXEC_RELATIVE_TABLE_ID: ${{ secrets.ERP_EXEC_RELATIVE_TABLE_ID || secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+          ERP_EXEC_ASSET_APP_TOKEN: ${{ secrets.ERP_EXEC_ASSET_APP_TOKEN }}
+          ERP_EXEC_ASSET_TABLE_ID: ${{ secrets.ERP_EXEC_ASSET_TABLE_ID }}
+          ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
+          ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
 
       - name: Generate ERP dashboard artifact
         if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'

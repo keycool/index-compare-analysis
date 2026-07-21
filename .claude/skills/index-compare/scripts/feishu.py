@@ -177,7 +177,7 @@ class FeishuWebhook:
             rows.append([{"tag": "text", "text": self.webhook_keyword}])
 
         rows.append([{"tag": "text", "text": TITLE_RELATIVE_SIGNALS}])
-        rows.append([{"tag": "text", "text": "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u914d\u7f6e\u5efa\u8bae"}])
+        rows.append([{"tag": "text", "text": "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u5bf9\u5206\u5b50\u5efa\u8bae"}])
         for row in self._build_signal_rows(latest_data, conclusions):
             rows.append(
                 [
@@ -215,7 +215,7 @@ class FeishuWebhook:
         if self.webhook_keyword:
             lines.append(self.webhook_keyword)
 
-        lines.extend([f"{title} ({date_str})", "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u914d\u7f6e\u5efa\u8bae"])
+        lines.extend([f"{title} ({date_str})", "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u5bf9\u5206\u5b50\u5efa\u8bae"])
         for row in self._build_signal_rows(latest_data, conclusions):
             lines.append(
                 f"{row['name']} | {row['ratio']} | {row['percentile']} | {row['recommendation']}"

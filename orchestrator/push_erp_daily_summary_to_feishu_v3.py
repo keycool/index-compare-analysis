@@ -18,7 +18,7 @@ from pathlib import Path
 
 import requests
 
-from relative_signal_table import text_relative_signal_table
+from relative_signal_table import text_asset_suggestion_table, text_relative_signal_table
 
 
 ROOT = Path(__file__).resolve().parent
@@ -144,6 +144,10 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     for line in text_relative_signal_table(relative):
         content.append([{"tag": "text", "text": line}])
 
+    content.append([{"tag": "text", "text": "━━━━ 可配置标的建议 ━━━━"}])
+    for line in text_asset_suggestion_table(portfolio):
+        content.append([{"tag": "text", "text": line}])
+
     # ── Divider before positions ──
     content.append([{"tag": "text", "text": "━━━━ 调仓建议 ━━━━"}])
 
@@ -216,6 +220,8 @@ def build_fallback_text_payload(plan: dict) -> dict:
         f"资金: {portfolio['managed_amount']:,.0f}",
         "比价信号:",
         *text_relative_signal_table(relative),
+        "可配置标的建议:",
+        *text_asset_suggestion_table(portfolio),
         "调仓建议:",
     ]
     for item in positions:

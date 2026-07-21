@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from relative_signal_table import markdown_relative_signal_table
+from relative_signal_table import markdown_asset_suggestion_table, markdown_relative_signal_table
 
 
 ROOT = Path(__file__).resolve().parent
@@ -130,6 +130,12 @@ def main() -> None:
     lines.append("")
     lines.append(f"- `{relative['date']}`")
     lines.extend(markdown_relative_signal_table(relative))
+    lines.append("")
+
+    # ── 可配置标的建议 ──
+    lines.append("## 可配置标的建议")
+    lines.append("")
+    lines.extend(markdown_asset_suggestion_table(portfolio))
     lines.append("")
 
     # ── 调仓建议 ──

@@ -83,7 +83,8 @@ def health_lines(plan: dict) -> list[str]:
     if health.get("as_of"):
         lines.append(f"统一截止日: {health['as_of']}")
     if health.get("portfolio_snapshot_as_of"):
-        lines.append(f"持仓快照日: {health['portfolio_snapshot_as_of']}")
+        suffix = "（人工声明，未由记录更新时间证明）" if health.get("asset_date_source") == "operator_asserted_portfolio_snapshot_as_of" else ""
+        lines.append(f"持仓快照日: {health['portfolio_snapshot_as_of']}{suffix}")
     for item in health.get("errors", []):
         lines.append(f"阻断错误: {item}")
     for item in health.get("warnings", []):

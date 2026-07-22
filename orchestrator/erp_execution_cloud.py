@@ -1328,7 +1328,7 @@ def build_data_health(
     max_gap_days = int(config.get("max_signal_date_gap_days", 10))
     asset_update = erp_asset_update_bounds(asset_rows)
     asset_dt = portfolio_snapshot_as_of or asset_update["oldest"]
-    asset_date_source = "portfolio_snapshot_as_of" if portfolio_snapshot_as_of else "record_update_time"
+    asset_date_source = "operator_asserted_portfolio_snapshot_as_of" if portfolio_snapshot_as_of else "record_update_time"
     dates = {
         "erp": _snapshot_date(erp_snapshot),
         "relative": _snapshot_date(relative_snapshot),
@@ -1346,6 +1346,12 @@ def build_data_health(
     ages: dict[str, int | None] = {}
 
     def add_signal_issue(message: str) -> None:
+        if strict_signal_dates:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
+    def add_recommendation_issue(message: str) -> None:
         if strict_signal_dates:
             errors.append(message)
         else:
@@ -1385,6 +1391,21 @@ def build_data_health(
         ages["hsi_erp"] = None
         warnings.append("HSI ERP unavailable; HK targets are capped at current HK exposure")
 
+    required_recommendations = [
+        "zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech",
+    ]
+    recommendations = relative_snapshot.get("recommendations", {})
+    missing_recommendations = [
+        key for key in required_recommendations
+        if not normalize_text(recommendations.get(key))
+    ]
+    if missing_recommendations:
+        add_recommendation_issue(
+            "relative recommendations missing for "
+            + ", ".join(missing_recommendations)
+            + "; refusing to treat missing recommendations as neutral in rebalance mode"
+        )
+
     if portfolio_snapshot_as_of is None and asset_update["missing_count"]:
         message = (
             f"asset record update timestamp is missing for "
@@ -1394,6 +1415,12 @@ def build_data_health(
             errors.append(message)
         else:
             warnings.append(message)
+    elif portfolio_snapshot_as_of is not None and asset_update["missing_count"]:
+        warnings.append(
+            "portfolio snapshot date is operator asserted; "
+            f"asset record update timestamp is missing for {asset_update['missing_count']} "
+            f"of {asset_update['total_count']} ERP rows"
+        )
 
     if asset_dt is None:
         ages["asset"] = None
@@ -1425,6 +1452,14 @@ def build_data_health(
         },
         "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
         "asset_date_source": asset_date_source,
+        "portfolio_snapshot_assertion": {
+            "mode": "operator_asserted" if portfolio_snapshot_as_of else None,
+            "verified_by_record_timestamps": portfolio_snapshot_as_of is None and asset_update["missing_count"] == 0,
+        },
+        "relative_recommendations": {
+            "required": required_recommendations,
+            "missing": missing_recommendations,
+        },
         "ages_days": ages,
         "max_signal_date_gap_days": max_gap_days,
         "errors": errors,
@@ -1447,6 +1482,26 @@ def validate_execution_payload(payload: dict[str, Any]) -> None:
     if abs(total_weight - 1.0) > tolerance:
         errors.append(f"target weights must sum to 1.0, got {total_weight:.6f}")
     errors.extend(payload.get("signals", {}).get("data_health", {}).get("errors", []))
+    if payload.get("inputs", {}).get("execution_mode") == "rebalance":
+        required_recommendations = [
+            "zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech",
+        ]
+        recommendations = (
+            payload.get("signals", {})
+            .get("relative", {})
+            .get("recommendations", {})
+        )
+        missing = [
+            key for key in required_recommendations
+            if not normalize_text(recommendations.get(key))
+        ]
+        already_reported = any("relative recommendations missing" in error for error in errors)
+        if missing and not already_reported:
+            errors.append(
+                "relative recommendations missing for "
+                + ", ".join(missing)
+                + "; rebalance plans cannot treat missing recommendations as neutral"
+            )
     if errors:
         raise RuntimeError("ERP execution validation failed: " + "; ".join(errors))
 

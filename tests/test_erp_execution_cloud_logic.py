@@ -7,6 +7,7 @@ from orchestrator.erp_execution_cloud import (
     build_target_weights,
     compute_relative_snapshot,
     filter_signal_rows_as_of,
+    validate_execution_payload,
 )
 
 
@@ -97,6 +98,7 @@ def base_config():
 
 def base_relative_snapshot():
     return {
+        "date": "2026-07-21",
         "recommendations": {
             "zz500": REC["neutral"],
             "zz1000": REC["neutral"],
@@ -136,6 +138,12 @@ def base_relative_snapshot():
             "hstech_change_5d": 0.0,
         },
     }
+
+
+def health_relative_snapshot(date: str = "2026-07-21"):
+    snapshot = base_relative_snapshot()
+    snapshot["date"] = date
+    return snapshot
 
 
 class ErpExecutionCloudLogicTest(unittest.TestCase):
@@ -189,7 +197,7 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         health = build_data_health(
             {"date": "2026-07-20"},
             {"available": False},
-            {"date": "2026-07-21"},
+            health_relative_snapshot("2026-07-21"),
             [
                 {"III级分类": ["ERP"], "_last_modified_time": "2026-07-01"},
                 {"III级分类": ["ERP"], "_last_modified_time": "2026-07-21"},
@@ -209,7 +217,7 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         health = build_data_health(
             {"date": "2026-07-20"},
             {"available": False},
-            {"date": "2026-07-21"},
+            health_relative_snapshot("2026-07-21"),
             [
                 {"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-01"},
                 {"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-21"},
@@ -229,7 +237,7 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         health = build_data_health(
             {"date": "2026-07-09"},
             {"available": False},
-            {"date": "2026-07-21"},
+            health_relative_snapshot("2026-07-21"),
             [{"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-21"}],
             config,
             datetime(2026, 7, 21, tzinfo=ZoneInfo("Asia/Shanghai")),
@@ -246,7 +254,7 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         health = build_data_health(
             {"date": "2026-07-20"},
             {"available": False},
-            {"date": "2026-07-20"},
+            health_relative_snapshot("2026-07-20"),
             [{"III\u7ea7\u5206\u7c7b": ["ERP"]}],
             config,
             datetime(2026, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai")),
@@ -257,8 +265,60 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertTrue(health["ok"])
         self.assertEqual(health["dates"]["asset"], "2026-07-20")
         self.assertEqual(health["portfolio_snapshot_as_of"], "2026-07-20")
-        self.assertEqual(health["asset_date_source"], "portfolio_snapshot_as_of")
+        self.assertEqual(health["asset_date_source"], "operator_asserted_portfolio_snapshot_as_of")
+        self.assertEqual(health["portfolio_snapshot_assertion"]["mode"], "operator_asserted")
+        self.assertFalse(health["portfolio_snapshot_assertion"]["verified_by_record_timestamps"])
         self.assertFalse(any("asset record update timestamp" in error for error in health["errors"]))
+        self.assertTrue(any("operator asserted" in warning for warning in health["warnings"]))
+
+    def test_missing_relative_recommendations_block_rebalance(self):
+        config = {"data_quality": {"max_staleness_days": {"erp": 14, "relative": 3, "asset": 14}}}
+        health = build_data_health(
+            {"date": "2026-07-20"},
+            {"available": False},
+            {"date": "2026-07-20", "recommendations": {"zz500": ""}},
+            [{"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-20"}],
+            config,
+            datetime(2026, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai")),
+            require_asset_timestamp=True,
+        )
+
+        self.assertFalse(health["ok"])
+        self.assertIn("zz1000", health["relative_recommendations"]["missing"])
+        self.assertTrue(any("relative recommendations missing" in error for error in health["errors"]))
+
+    def test_missing_relative_recommendations_warn_in_research(self):
+        config = {"data_quality": {"max_staleness_days": {"erp": 14, "relative": 3, "asset": 14}}}
+        health = build_data_health(
+            {"date": "2026-07-20"},
+            {"available": False},
+            {"date": "2026-07-20", "recommendations": {"zz500": ""}},
+            [{"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-20"}],
+            config,
+            datetime(2026, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai")),
+            require_asset_timestamp=False,
+            strict_signal_dates=False,
+        )
+
+        self.assertTrue(health["ok"])
+        self.assertFalse(health["errors"])
+        self.assertTrue(any("relative recommendations missing" in warning for warning in health["warnings"]))
+
+    def test_validator_blocks_legacy_rebalance_plan_with_empty_recommendations(self):
+        payload = {
+            "inputs": {
+                "execution_mode": "rebalance",
+                "execution_config": {"data_quality": {"target_weight_tolerance": 0.0015}},
+            },
+            "signals": {
+                "data_health": {"errors": []},
+                "relative": {"recommendations": {"zz500": ""}},
+            },
+            "portfolio": {"positions": [{"target_weight": 1.0}]},
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "relative recommendations missing"):
+            validate_execution_payload(payload)
 
     def test_filter_signal_rows_as_of_excludes_future_rows(self):
         rows = [

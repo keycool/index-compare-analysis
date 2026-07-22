@@ -189,6 +189,7 @@ def main() -> None:
 
     targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
     portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
+    strict_mode = args.execution_mode == "rebalance"
     data_health = build_data_health(
         erp_snapshot,
         hsi_erp_snapshot,
@@ -196,7 +197,8 @@ def main() -> None:
         asset_rows,
         execution_config,
         as_of,
-        require_asset_timestamp=args.execution_mode == "rebalance",
+        require_asset_timestamp=strict_mode,
+        strict_signal_dates=strict_mode,
     )
 
     payload = {

@@ -587,6 +587,14 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round((latest_val / base_val - 1.0) * 100.0, 2)
 
+    def invert_percent_change(change_pct: float | None) -> float | None:
+        if change_pct is None:
+            return None
+        ratio = 1.0 + float(change_pct) / 100.0
+        if ratio == 0:
+            return None
+        return round((1.0 / ratio - 1.0) * 100.0, 2)
+
     def latest_index_ratio(numerator_field: str, denominator_field: str) -> float | None:
         numerator = safe_float(get_first(latest, numerator_field))
         denominator = safe_float(get_first(latest, denominator_field))
@@ -626,6 +634,18 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     cyb_sh50_recommendation = normalize_text(get_first(latest, "创业板/上证50建议", "50/创业板建议"))
     if not cyb_sh50_recommendation:
         cyb_sh50_recommendation = _REVERSE_REC.get(normalize_text(get_first(latest, "50建议")), "")
+
+    val300_change_5d = compute_ratio_change("300价值/成长比价", 5)
+    gro300_change_5d = (
+        compute_ratio_change("300成长/价值比价", 5)
+        or compute_ratio_change("300成长/300价值比价", 5)
+        or compute_inverse_ratio_change("300价值/成长比价", 5)
+        or invert_percent_change(val300_change_5d)
+    )
+    val300_deviation = safe_float(get_first(latest, "300价值偏离(%)"))
+    gro300_deviation = safe_float(get_first(latest, "300成长偏离(%)"))
+    if gro300_deviation is None and val300_deviation is not None:
+        gro300_deviation = round(-float(val300_deviation), 2)
 
     return {
         "date": dt.strftime("%Y-%m-%d"),
@@ -673,8 +693,8 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "kc50_300_deviation": safe_float(get_first(latest, "科创50/300偏离(%)", "科创50/沪深300偏离(%)")),
             "sh50_deviation": safe_float(get_first(latest, "创业板/上证50偏离(%)", "50偏离(%)")),
             "kc50_deviation": safe_float(get_first(latest, "科创50偏离(%)")),
-            "val300_deviation": safe_float(get_first(latest, "300价值偏离(%)")),
-            "gro300_deviation": safe_float(get_first(latest, "300成长偏离(%)")),
+            "val300_deviation": val300_deviation,
+            "gro300_deviation": gro300_deviation,
             "hstech_deviation": safe_float(get_first(latest, "恒生科技偏离(%)")),
         },
         "changes": {
@@ -685,12 +705,8 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "kc50_300_change_5d": compute_ratio_change("科创50/300比价", 5) or compute_ratio_change("科创50/沪深300比价", 5),
             "sh50_change_5d": compute_ratio_change("创业板/上证50比价", 5) or compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
             "kc50_change_5d": compute_ratio_change("科创50/上证50比价", 5),
-            "val300_change_5d": compute_ratio_change("300价值/成长比价", 5),
-            "gro300_change_5d": (
-                compute_ratio_change("300成长/价值比价", 5)
-                or compute_ratio_change("300成长/300价值比价", 5)
-                or compute_inverse_ratio_change("300价值/成长比价", 5)
-            ),
+            "val300_change_5d": val300_change_5d,
+            "gro300_change_5d": gro300_change_5d,
             "hstech_change_5d": compute_ratio_change("恒生科技/恒生比价", 5),
         },
     }
@@ -1265,6 +1281,7 @@ def build_data_health(
     as_of: datetime,
     *,
     require_asset_timestamp: bool,
+    strict_signal_dates: bool = True,
 ) -> dict[str, Any]:
     config = execution_config.get("data_quality", {})
     max_staleness = config.get("max_staleness_days", {})
@@ -1286,36 +1303,42 @@ def build_data_health(
     warnings: list[str] = []
     ages: dict[str, int | None] = {}
 
+    def add_signal_issue(message: str) -> None:
+        if strict_signal_dates:
+            errors.append(message)
+        else:
+            warnings.append(message)
+
     for name in ("erp", "relative"):
         dt = dates[name]
         if dt is None:
-            errors.append(f"{name} date is missing")
+            add_signal_issue(f"{name} date is missing")
             ages[name] = None
             continue
         age = (as_of.date() - dt.date()).days
         ages[name] = age
         if age < 0:
-            errors.append(f"{name} date {dt.date()} is after as_of {as_of.date()}")
+            add_signal_issue(f"{name} date {dt.date()} is after as_of {as_of.date()}")
         elif age > limits[name]:
-            errors.append(f"{name} data is stale: {age} days > {limits[name]}")
+            add_signal_issue(f"{name} data is stale: {age} days > {limits[name]}")
 
     if dates["erp"] is not None and dates["relative"] is not None:
         gap = abs((dates["relative"].date() - dates["erp"].date()).days)
         if gap > max_gap_days:
-            errors.append(f"ERP/relative date gap is too large: {gap} days > {max_gap_days}")
+            add_signal_issue(f"ERP/relative date gap is too large: {gap} days > {max_gap_days}")
 
     hsi_dt = dates["hsi_erp"]
     if hsi_erp_snapshot.get("available"):
         if hsi_dt is None:
-            errors.append("hsi_erp date is missing")
+            add_signal_issue("hsi_erp date is missing")
             ages["hsi_erp"] = None
         else:
             age = (as_of.date() - hsi_dt.date()).days
             ages["hsi_erp"] = age
             if age < 0:
-                errors.append(f"hsi_erp date {hsi_dt.date()} is after as_of {as_of.date()}")
+                add_signal_issue(f"hsi_erp date {hsi_dt.date()} is after as_of {as_of.date()}")
             elif age > limits["hsi_erp"]:
-                errors.append(f"hsi_erp data is stale: {age} days > {limits['hsi_erp']}")
+                add_signal_issue(f"hsi_erp data is stale: {age} days > {limits['hsi_erp']}")
     else:
         ages["hsi_erp"] = None
         warnings.append("HSI ERP unavailable; HK targets are capped at current HK exposure")
@@ -1520,6 +1543,7 @@ def main() -> None:
 
     targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
     portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
+    strict_mode = args.execution_mode == "rebalance"
     data_health = build_data_health(
         erp_snapshot,
         hsi_erp_snapshot,
@@ -1527,7 +1551,8 @@ def main() -> None:
         asset_rows,
         execution_config,
         as_of,
-        require_asset_timestamp=args.execution_mode == "rebalance",
+        require_asset_timestamp=strict_mode,
+        strict_signal_dates=strict_mode,
     )
 
     payload = {

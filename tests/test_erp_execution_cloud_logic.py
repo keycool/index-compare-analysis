@@ -219,6 +219,23 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertFalse(health["errors"])
         self.assertTrue(any("asset data is stale" in warning for warning in health["warnings"]))
 
+    def test_signal_date_gap_can_warn_in_research_mode(self):
+        config = {"data_quality": {"max_signal_date_gap_days": 10, "max_staleness_days": {"erp": 30, "relative": 30, "asset": 30}}}
+        health = build_data_health(
+            {"date": "2026-07-09"},
+            {"available": False},
+            {"date": "2026-07-21"},
+            [{"III\u7ea7\u5206\u7c7b": ["ERP"], "_last_modified_time": "2026-07-21"}],
+            config,
+            datetime(2026, 7, 21, tzinfo=ZoneInfo("Asia/Shanghai")),
+            require_asset_timestamp=False,
+            strict_signal_dates=False,
+        )
+
+        self.assertTrue(health["ok"])
+        self.assertFalse(health["errors"])
+        self.assertTrue(any("ERP/relative date gap" in warning for warning in health["warnings"]))
+
     def test_growth_style_change_is_derived_from_real_relative_history(self):
         rows = []
         value_growth_ratios = [1.00, 1.02, 1.01, 1.03, 1.04, 0.80]
@@ -238,7 +255,6 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
                     "300\u4ef7\u503c\u5206\u4f4d": 20.0,
                     "300\u6210\u957f\u5206\u4f4d": 80.0,
                     "300\u4ef7\u503c\u504f\u79bb(%)": -2.0,
-                    "300\u6210\u957f\u504f\u79bb(%)": 2.0,
                 }
             )
 
@@ -246,6 +262,7 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
 
         self.assertEqual(snapshot["changes"]["val300_change_5d"], -20.0)
         self.assertEqual(snapshot["changes"]["gro300_change_5d"], 25.0)
+        self.assertEqual(snapshot["deviations"]["gro300_deviation"], 2.0)
 
 
 if __name__ == "__main__":

@@ -288,6 +288,121 @@ def _kc50_rec_to_bucket_rec(rec: str) -> str:
     return normalize_text(rec) or "标配"
 
 
+_REC_STRONG_OVER = "\u5f3a\u70c8\u8d85\u914d"
+_REC_OVER = "\u8d85\u914d"
+_REC_NEUTRAL = "\u6807\u914d"
+_REC_UNDER = "\u4f4e\u914d"
+_REC_STRONG_UNDER = "\u5f3a\u70c8\u4f4e\u914d"
+
+
+def _recommendation_from_score(score: float) -> str:
+    if score > 1.0:
+        return _REC_STRONG_OVER
+    if score > 0.5:
+        return _REC_OVER
+    if score > -0.5:
+        return _REC_NEUTRAL
+    if score > -1.0:
+        return _REC_UNDER
+    return _REC_STRONG_UNDER
+
+
+def _percentile_score(percentile: Any) -> int | None:
+    value = safe_float(percentile)
+    if value is None:
+        return None
+    if value <= 15:
+        return 2
+    if value <= 30:
+        return 1
+    if value < 70:
+        return 0
+    if value < 85:
+        return -1
+    return -2
+
+
+def _trend_score(changes: list[Any]) -> int:
+    values = [float(value) for value in (safe_float(item) for item in changes) if value is not None]
+    if not values:
+        return 0
+    up_count = sum(1 for value in values if value > 0.5)
+    down_count = sum(1 for value in values if value < -0.5)
+    if all(value > 1 for value in values):
+        return 2
+    if all(value < -1 for value in values):
+        return -2
+    if up_count >= 2:
+        return 1
+    if down_count >= 2:
+        return -1
+    return 0
+
+
+def _deviation_score(deviation: Any) -> int:
+    value = safe_float(deviation)
+    if value is None:
+        return 0
+    if value <= -4.0:
+        return 2
+    if value <= -2.0:
+        return 1
+    if value >= 4.0:
+        return -2
+    if value >= 2.0:
+        return -1
+    return 0
+
+
+def _derive_relative_recommendation(percentile: Any, deviation: Any, changes: list[Any]) -> str:
+    percentile_component = _percentile_score(percentile)
+    if percentile_component is None:
+        return ""
+    trend_component = _trend_score(changes)
+    percentile_value = float(safe_float(percentile) or 0.0)
+    if percentile_value > 60:
+        trend_component = -trend_component
+    score = percentile_component * 0.6 + trend_component * 0.25 + _deviation_score(deviation) * 0.15
+    return _recommendation_from_score(score)
+
+
+def _fill_derived_relative_recommendations(snapshot: dict[str, Any]) -> None:
+    recs = snapshot.setdefault("recommendations", {})
+    sources = snapshot.setdefault("recommendation_sources", {})
+    for key, value in recs.items():
+        if normalize_text(value):
+            sources.setdefault(key, "table")
+
+    fields: dict[str, tuple[str, str, str, bool]] = {
+        "zz500": ("zz500_percentile", "zz500_deviation", "zz500_change_5d", False),
+        "zz1000": ("zz1000_percentile", "zz1000_deviation", "zz1000_change_5d", False),
+        "cyb": ("cyb_percentile", "cyb_deviation", "cyb_change_5d", False),
+        "sh50": ("sh50_percentile", "sh50_deviation", "sh50_change_5d", True),
+        "kc50": ("kc50_percentile", "kc50_deviation", "kc50_change_5d", False),
+        "val300": ("val300_percentile", "val300_deviation", "val300_change_5d", False),
+        "gro300": ("gro300_percentile", "gro300_deviation", "gro300_change_5d", False),
+        "hstech": ("hstech_percentile", "hstech_deviation", "hstech_change_5d", False),
+    }
+    percentiles = snapshot.get("percentiles", {})
+    deviations = snapshot.get("deviations", {})
+    changes = snapshot.get("changes", {})
+    for key, (percentile_key, deviation_key, change_key, reverse) in fields.items():
+        if normalize_text(recs.get(key)):
+            continue
+        derived = _derive_relative_recommendation(
+            percentiles.get(percentile_key),
+            deviations.get(deviation_key),
+            [changes.get(change_key)],
+        )
+        if reverse and derived:
+            derived = _REVERSE_REC.get(derived, "")
+        if derived:
+            recs[key] = derived
+            sources[key] = "derived_from_percentile_trend_deviation"
+        else:
+            sources[key] = "missing"
+
+
 # ── Holding resolution ───────────────────────────────────────
 
 def resolve_holding_bucket(name: str, alias_lookup: dict[str, str], ignored_lookup: set[str]) -> str | None:
@@ -686,7 +801,7 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if gro300_deviation is None and val300_deviation is not None:
         gro300_deviation = round(-float(val300_deviation), 2)
 
-    return {
+    snapshot = {
         "date": dt.strftime("%Y-%m-%d"),
         "recommendations": {
             "zz500": normalize_text(get_first(latest, "500建议")),
@@ -749,6 +864,8 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "hstech_change_5d": compute_ratio_change("恒生科技/恒生比价", 5),
         },
     }
+    _fill_derived_relative_recommendations(snapshot)
+    return snapshot
 
 
 # ── HSI ERP (optional, falls back to neutral) ────────────────
@@ -1688,6 +1805,7 @@ def main() -> None:
         "portfolio": portfolio,
     }
 
+    validate_execution_payload(payload)
     output_path = Path(args.output).resolve()
     save_output(output_path, payload)
     summary_path = render_daily_summary()
@@ -1695,7 +1813,6 @@ def main() -> None:
     print(f"\nSaved to: {output_path}")
     if summary_path is not None:
         print(f"Daily summary: {summary_path}")
-    validate_execution_payload(payload)
 
 
 if __name__ == "__main__":

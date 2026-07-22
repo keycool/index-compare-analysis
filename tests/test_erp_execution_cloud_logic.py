@@ -331,7 +331,7 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
 
         self.assertEqual([row["value"] for row in filtered], ["old", "as-of"])
 
-    def test_relative_snapshot_accepts_percentile_rows_without_recommendations(self):
+    def test_relative_snapshot_derives_recommendations_for_historical_rows(self):
         rows = []
         for day in range(1, 7):
             rows.append(
@@ -343,6 +343,8 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
                     "1000\u5206\u4f4d": 50.0,
                     "\u521b\u4e1a\u677f/300\u6bd4\u4ef7": 1.0,
                     "\u521b\u4e1a\u677f\u5206\u4f4d": 50.0,
+                    "50/\u521b\u4e1a\u677f\u6bd4\u4ef7": 1.0,
+                    "50\u5206\u4f4d": 50.0,
                     "\u79d1\u521b50/\u4e0a\u8bc150\u6bd4\u4ef7": 1.0,
                     "\u79d1\u521b50\u5206\u4f4d": 50.0,
                     "300\u4ef7\u503c/\u6210\u957f\u6bd4\u4ef7": 1.0,
@@ -356,7 +358,14 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         snapshot = compute_relative_snapshot(rows)
 
         self.assertEqual(snapshot["date"], "2026-07-06")
-        self.assertEqual(snapshot["recommendations"]["zz500"], "")
+        self.assertEqual(snapshot["recommendations"]["zz500"], REC["neutral"])
+        self.assertEqual(snapshot["recommendation_sources"]["zz500"], "derived_from_percentile_trend_deviation")
+        self.assertFalse(
+            [
+                key for key in ("zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech")
+                if not snapshot["recommendations"].get(key)
+            ]
+        )
 
     def test_growth_style_change_is_derived_from_real_relative_history(self):
         rows = []

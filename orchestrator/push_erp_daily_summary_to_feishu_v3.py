@@ -62,6 +62,50 @@ def ordered_positions(plan: dict) -> list[dict]:
     )
 
 
+def is_research_mode(plan: dict) -> bool:
+    return plan.get("inputs", {}).get("execution_mode") == "research"
+
+
+def mode_label(plan: dict) -> str:
+    return "research（研究草案，不可作为调仓指令）" if is_research_mode(plan) else "rebalance（正式调仓模式）"
+
+
+def hsi_unavailable_text(message: str) -> str:
+    return (
+        f"港股 ERP 缺失：禁止新增港股敞口；"
+        f"按当前港股比例保留并受港股总上限约束（{message}）"
+    )
+
+
+def health_lines(plan: dict) -> list[str]:
+    health = plan.get("signals", {}).get("data_health", {})
+    lines = [f"执行模式: {mode_label(plan)}"]
+    if health.get("as_of"):
+        lines.append(f"统一截止日: {health['as_of']}")
+    if health.get("portfolio_snapshot_as_of"):
+        lines.append(f"持仓快照日: {health['portfolio_snapshot_as_of']}")
+    for item in health.get("errors", []):
+        lines.append(f"阻断错误: {item}")
+    for item in health.get("warnings", []):
+        lines.append(f"健康警告: {item}")
+    return lines
+
+
+def direction_text(item: dict, research_mode: bool) -> str:
+    delta = abs(float(item.get("delta_amount", 0.0)))
+    if research_mode:
+        if item["delta_amount"] > 0:
+            return f"目标高于当前 {delta:,.0f}"
+        if item["delta_amount"] < 0:
+            return f"目标低于当前 {delta:,.0f}"
+        return "持平观察"
+    if item["delta_amount"] > 0:
+        return f"加仓 {delta:,.0f}"
+    if item["delta_amount"] < 0:
+        return f"减仓 {delta:,.0f}"
+    return "—"
+
+
 def forced_exit_text(item: dict) -> str:
     if not item.get("forced_exit"):
         return ""
@@ -115,11 +159,15 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     hsi = plan["signals"].get("hsi_erp", {})
     portfolio = plan["portfolio"]
     positions = ordered_positions(plan)
+    research_mode = is_research_mode(plan)
 
     content: list[list[dict[str, str]]] = []
 
     # ── Header ──
-    content.append([{"tag": "text", "text": f"📊 ERP执行日报 ({relative['date']})"}])
+    header = "ERP研究草案" if research_mode else "ERP执行日报"
+    content.append([{"tag": "text", "text": f"📊 {header} ({relative['date']})"}])
+    for line in health_lines(plan):
+        content.append([{"tag": "text", "text": line}])
 
     # ── Signal summary (compact) ──
     erp_line = (
@@ -131,14 +179,19 @@ def build_payload(plan: dict, summary_text: str) -> dict:
             f" | 港股 ERP {hsi['percentile']:.0f}% → 进攻 {hsi['aggressive_weight']:.0%}"
         )
     elif hsi.get("message"):
-        hk_line = f" | 港股 {hsi['message'][:20]}"
+        hk_line = f" | {hsi_unavailable_text(hsi['message'])}"
     pool_line = (
         f" | A股 {portfolio.get('ashare_pool', 0):.0%}"
         f" / 港股 {portfolio.get('hkshare_pool', 0):.0%}"
     )
     content.append([{"tag": "text", "text": erp_line + hk_line + pool_line}])
     content.append([{"tag": "text", "text": f"ERP管理资金: {portfolio['managed_amount']:,.0f}"}])
-    content.append([{"tag": "text", "text": "展示口径: 比价表=对分子建议；标的表=真实ETF执行建议"}])
+    display_scope = (
+        "展示口径: research 仅为研究草案；比价表=对分子建议；标的表=ETF目标差额草案"
+        if research_mode
+        else "展示口径: 比价表=对分子建议；标的表=真实ETF执行建议"
+    )
+    content.append([{"tag": "text", "text": display_scope}])
 
     # ── Relative signal table ──
     content.append([{"tag": "text", "text": "━━━━ 比价信号 ━━━━"}])
@@ -146,11 +199,12 @@ def build_payload(plan: dict, summary_text: str) -> dict:
         content.append([{"tag": "text", "text": line}])
 
     content.append([{"tag": "text", "text": "━━━━ 可配置标的建议 ━━━━"}])
-    for line in text_asset_suggestion_table(portfolio):
+    for line in text_asset_suggestion_table(portfolio, plan.get("inputs", {}).get("execution_mode", "rebalance")):
         content.append([{"tag": "text", "text": line}])
 
     # ── Divider before positions ──
-    content.append([{"tag": "text", "text": "━━━━ 调仓建议 ━━━━"}])
+    position_title = "━━━━ 研究草案（不可作为调仓指令） ━━━━" if research_mode else "━━━━ 调仓建议 ━━━━"
+    content.append([{"tag": "text", "text": position_title}])
 
     # ── Positions ──
     current_pool = None
@@ -165,13 +219,6 @@ def build_payload(plan: dict, summary_text: str) -> dict:
             pool_label = "🇭🇰 港股" if pool == "hkshare" else "🇨🇳 A股"
             content.append([{"tag": "text", "text": f"【{pool_label}】"}])
 
-        if item["delta_amount"] > 0:
-            direction = "加仓"
-        elif item["delta_amount"] < 0:
-            direction = "减仓"
-        else:
-            direction = "—"
-
         sleeve_icon = "🛡" if sleeve == "defensive" else "⚔"
 
         # Build the line piece by piece
@@ -179,7 +226,7 @@ def build_payload(plan: dict, summary_text: str) -> dict:
             f"{sleeve_icon} {item['label']}"
             f" | 当前 {item['current_amount']:,.0f}"
             f" | 目标 {item['target_amount']:,.0f}"
-            f" | {direction} {abs(item['delta_amount']):,.0f}"
+            f" | {direction_text(item, research_mode)}"
         )
         # Append warning tags in priority order
         text += forced_exit_text(item)
@@ -200,7 +247,7 @@ def build_payload(plan: dict, summary_text: str) -> dict:
         "content": {
             "post": {
                 "zh_cn": {
-                    "title": f"ERP执行日报 ({relative['date']})",
+                    "title": f"{header} ({relative['date']})",
                     "content": content,
                 }
             }
@@ -214,27 +261,25 @@ def build_fallback_text_payload(plan: dict) -> dict:
     erp = plan["signals"]["erp"]
     portfolio = plan["portfolio"]
     positions = ordered_positions(plan)
+    research_mode = is_research_mode(plan)
+    header = "ERP研究草案" if research_mode else "ERP执行日报"
+    position_title = "研究草案（不可作为调仓指令）:" if research_mode else "调仓建议:"
 
     lines = [
-        f"ERP执行日报 ({relative['date']})",
+        f"{header} ({relative['date']})",
+        *health_lines(plan),
         f"A股 ERP {erp['percentile']:.0f}% 进攻{erp['aggressive_weight']:.0%}",
         f"资金: {portfolio['managed_amount']:,.0f}",
         "比价信号:",
         *text_relative_signal_table(relative),
         "可配置标的建议:",
-        *text_asset_suggestion_table(portfolio),
-        "调仓建议:",
+        *text_asset_suggestion_table(portfolio, plan.get("inputs", {}).get("execution_mode", "rebalance")),
+        position_title,
     ]
     for item in positions:
-        if item["delta_amount"] > 0:
-            direction = "加仓"
-        elif item["delta_amount"] < 0:
-            direction = "减仓"
-        else:
-            direction = "保持"
         line = (
             f"{item['label']}: 当前 {item['current_amount']:,.0f}, "
-            f"目标 {item['target_amount']:,.0f}, {direction} {abs(item['delta_amount']):,.0f}"
+            f"目标 {item['target_amount']:,.0f}, {direction_text(item, research_mode)}"
         )
         fe = forced_exit_text(item).replace(" | ", ", ")
         re = reentry_text(item).replace(" | ", ", ")

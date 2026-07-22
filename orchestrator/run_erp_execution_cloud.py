@@ -36,6 +36,11 @@ def parse_args() -> argparse.Namespace:
         choices=["rebalance", "research"],
         help="rebalance blocks on stale holdings; research keeps stale holdings as warnings",
     )
+    parser.add_argument(
+        "--portfolio-snapshot-as-of",
+        default="",
+        help="Explicit portfolio snapshot date used for holdings freshness checks",
+    )
     return parser.parse_args()
 
 
@@ -59,7 +64,10 @@ def run_python(script: Path, *extra_args: str) -> None:
 
 def main() -> None:
     args = parse_args()
-    run_python(EXECUTION_SCRIPT, "--execution-mode", args.execution_mode)
+    extra_args = ["--execution-mode", args.execution_mode]
+    if args.portfolio_snapshot_as_of:
+        extra_args.extend(["--portfolio-snapshot-as-of", args.portfolio_snapshot_as_of])
+    run_python(EXECUTION_SCRIPT, *extra_args)
     if args.push_summary:
         run_python(PUSH_SCRIPT)
 

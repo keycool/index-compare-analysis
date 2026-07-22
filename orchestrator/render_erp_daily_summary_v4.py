@@ -39,7 +39,21 @@ def num(value: float) -> str:
     return f"{value:,.2f}"
 
 
-def action_text(action: str, delta: float) -> str:
+def is_research_mode(plan: dict) -> bool:
+    return plan.get("inputs", {}).get("execution_mode") == "research"
+
+
+def mode_label(plan: dict) -> str:
+    return "research（研究草案，不可作为调仓指令）" if is_research_mode(plan) else "rebalance（正式调仓模式）"
+
+
+def action_text(action: str, delta: float, research_mode: bool = False) -> str:
+    if research_mode:
+        if action == "buy":
+            return f"目标高于当前 {num(abs(delta))}"
+        if action == "sell":
+            return f"目标低于当前 {num(abs(delta))}"
+        return "持平观察"
     if action == "buy":
         return f"加仓 {num(abs(delta))}"
     if action == "sell":
@@ -92,6 +106,39 @@ def ordered_positions(positions: list[dict]) -> list[dict]:
     return sorted(positions, key=lambda item: BUCKET_ORDER.get(item.get("bucket", ""), 99))
 
 
+def hsi_unavailable_text(message: str) -> str:
+    return (
+        f"数据不可用（{message}），禁止新增港股敞口；"
+        "按当前港股比例保留，并受港股总上限约束。"
+    )
+
+
+def append_data_health(lines: list[str], plan: dict) -> None:
+    health = plan.get("signals", {}).get("data_health", {})
+    lines.append("## 数据健康")
+    lines.append("")
+    lines.append(f"- 执行模式：`{mode_label(plan)}`")
+    if health.get("as_of"):
+        lines.append(f"- 统一截止日：`{health['as_of']}`")
+    if health.get("portfolio_snapshot_as_of"):
+        lines.append(f"- 持仓快照日：`{health['portfolio_snapshot_as_of']}`")
+    if health.get("dates"):
+        dates = health["dates"]
+        lines.append(
+            f"- 数据日期：ERP `{dates.get('erp')}` / Relative `{dates.get('relative')}` / "
+            f"港股 ERP `{dates.get('hsi_erp')}` / 持仓 `{dates.get('asset')}`"
+        )
+    if health.get("errors"):
+        lines.append("- 阻断错误：")
+        lines.extend(f"  - {item}" for item in health["errors"])
+    if health.get("warnings"):
+        lines.append("- 健康警告：")
+        lines.extend(f"  - {item}" for item in health["warnings"])
+    if not health.get("errors") and not health.get("warnings"):
+        lines.append("- 通过：没有阻断错误或健康警告。")
+    lines.append("")
+
+
 def main() -> None:
     plan = load_json(PLAN_PATH)
     config = load_json(CONFIG_PATH)
@@ -101,12 +148,14 @@ def main() -> None:
     relative = plan["signals"]["relative"]
     portfolio = plan["portfolio"]
     positions = ordered_positions(portfolio["positions"])
+    research_mode = is_research_mode(plan)
 
     lines: list[str] = []
-    lines.append("# ERP 日报摘要 v3")
+    lines.append("# ERP 研究草案 v3" if research_mode else "# ERP 调仓日报 v3")
     lines.append("")
     lines.append(f"生成时间: {datetime.now(SHANGHAI_TZ).isoformat(timespec='seconds')}")
     lines.append("")
+    append_data_health(lines, plan)
 
     # ── 今日信号 ──
     lines.append("## 今日信号")
@@ -118,7 +167,7 @@ def main() -> None:
         lines.append(f"- **港股 ERP** (`{hsi['date']}`)：股权溢价 `{hsi['equity_premium']:.2f}`，历史分位 `{hsi['percentile']:.2f}%`。")
         lines.append(f"  → 进攻 `{pct(hsi['aggressive_weight'])}` / 防守 `{pct(hsi['defensive_weight'])}`。")
     else:
-        lines.append(f"- **港股 ERP**：数据不可用（{hsi.get('message', 'fallback neutral')}），使用中性配置。")
+        lines.append(f"- **港股 ERP**：{hsi_unavailable_text(hsi.get('message', 'fallback neutral'))}")
 
     pool_ashare = portfolio.get("ashare_pool", 0)
     pool_hk = portfolio.get("hkshare_pool", 0)
@@ -135,11 +184,11 @@ def main() -> None:
     # ── 可配置标的建议 ──
     lines.append("## 可配置标的建议")
     lines.append("")
-    lines.extend(markdown_asset_suggestion_table(portfolio))
+    lines.extend(markdown_asset_suggestion_table(portfolio, plan.get("inputs", {}).get("execution_mode", "rebalance")))
     lines.append("")
 
     # ── 调仓建议 ──
-    lines.append("## 调仓建议")
+    lines.append("## 研究草案（不可作为调仓指令）" if research_mode else "## 调仓建议")
     lines.append("")
 
     # Group by pool
@@ -154,7 +203,7 @@ def main() -> None:
             line = (
                 f"- {sleeve_tag} `{item['label']}`：当前 `{num(item['current_amount'])}`，"
                 f"目标 `{num(item['target_amount'])}`，"
-                f"建议 `{action_text(item['action'], item['delta_amount'])}`。"
+                f"{'草案' if research_mode else '建议'} `{action_text(item['action'], item['delta_amount'], research_mode)}`。"
             )
             fe = forced_exit_text(item)
             re = reentry_text(item)

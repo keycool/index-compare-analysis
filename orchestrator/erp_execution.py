@@ -37,6 +37,7 @@ from erp_execution_cloud import (  # noqa: E402
     normalize_to_weights,
     recommendation_multiplier,
     trajectory_multiplier,
+    filter_signal_rows_as_of,
     parse_date,
     safe_float,
     parse_multiselect,
@@ -85,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lark-cli", default=str(DEFAULT_LARK_CLI))
     parser.add_argument("--execution-config-path", default=str(DEFAULT_EXECUTION_CONFIG_PATH))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
+    parser.add_argument("--portfolio-snapshot-as-of", default=os.environ.get("ERP_PORTFOLIO_SNAPSHOT_AS_OF", ""))
     parser.add_argument(
         "--execution-mode",
         default=os.environ.get("ERP_EXECUTION_MODE", "rebalance"),
@@ -157,6 +159,9 @@ def main() -> None:
     as_of = parse_date(args.as_of) if args.as_of else datetime.now().astimezone()
     if as_of is None:
         raise ValueError(f"Invalid --as-of date: {args.as_of}")
+    portfolio_snapshot_as_of = parse_date(args.portfolio_snapshot_as_of) if args.portfolio_snapshot_as_of else None
+    if args.portfolio_snapshot_as_of and portfolio_snapshot_as_of is None:
+        raise ValueError(f"Invalid --portfolio-snapshot-as-of date: {args.portfolio_snapshot_as_of}")
     execution_config = load_json_file(Path(args.execution_config_path).resolve())
 
     erp_table = BaseTable(args.erp_base_token, args.erp_table_id, "ERP")
@@ -166,6 +171,8 @@ def main() -> None:
     erp_rows = load_all_records(erp_table, args.as_identity, args.limit, args.lark_cli)
     relative_rows = load_all_records(relative_table, args.as_identity, args.limit, args.lark_cli)
     asset_rows = load_all_records(asset_table, args.as_identity, args.limit, args.lark_cli)
+    erp_rows = filter_signal_rows_as_of(erp_rows, as_of)
+    relative_rows = filter_signal_rows_as_of(relative_rows, as_of)
 
     # HSI ERP (optional)
     hsi_rows = None
@@ -173,6 +180,7 @@ def main() -> None:
         try:
             hsi_table = BaseTable(args.hsi_erp_base_token, args.hsi_erp_table_id, "HSI ERP")
             hsi_rows = load_all_records(hsi_table, args.as_identity, args.limit, args.lark_cli)
+            hsi_rows = filter_signal_rows_as_of(hsi_rows, as_of)
         except Exception:
             hsi_rows = None
 
@@ -199,6 +207,7 @@ def main() -> None:
         as_of,
         require_asset_timestamp=strict_mode,
         strict_signal_dates=strict_mode,
+        portfolio_snapshot_as_of=portfolio_snapshot_as_of,
     )
 
     payload = {
@@ -214,6 +223,7 @@ def main() -> None:
             "identity": args.as_identity,
             "lark_cli": args.lark_cli,
             "as_of": as_of.strftime("%Y-%m-%d"),
+            "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },

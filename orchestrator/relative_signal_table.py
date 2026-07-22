@@ -70,8 +70,14 @@ def fmt_amount(value: Any) -> str:
     return f"{float(value):,.0f}" if is_finite_number(value) else "-"
 
 
-def action_text(action: str, delta_amount: Any) -> str:
+def action_text(action: str, delta_amount: Any, execution_mode: str = "rebalance") -> str:
     amount = fmt_amount(abs(float(delta_amount))) if is_finite_number(delta_amount) else "-"
+    if execution_mode == "research":
+        if action == "buy":
+            return f"目标高于当前 {amount}"
+        if action == "sell":
+            return f"目标低于当前 {amount}"
+        return "持平观察"
     if action == "buy":
         return f"加仓 {amount}"
     if action == "sell":
@@ -117,7 +123,7 @@ def text_relative_signal_table(relative: dict[str, Any]) -> list[str]:
     return lines
 
 
-def asset_suggestion_rows(portfolio: dict[str, Any]) -> list[dict[str, str]]:
+def asset_suggestion_rows(portfolio: dict[str, Any], execution_mode: str = "rebalance") -> list[dict[str, str]]:
     positions = sorted(
         portfolio.get("positions", []),
         key=lambda item: ASSET_ORDER.get(item.get("bucket", ""), 99),
@@ -131,7 +137,7 @@ def asset_suggestion_rows(portfolio: dict[str, Any]) -> list[dict[str, str]]:
             signal = "核心"
         suggestion = (
             f"{signal}；目标 {fmt_weight(item.get('target_weight'))}，"
-            f"{action_text(str(item.get('action', 'hold')), item.get('delta_amount', 0))}"
+            f"{action_text(str(item.get('action', 'hold')), item.get('delta_amount', 0), execution_mode)}"
         )
         rows.append(
             {
@@ -144,21 +150,21 @@ def asset_suggestion_rows(portfolio: dict[str, Any]) -> list[dict[str, str]]:
     return rows
 
 
-def markdown_asset_suggestion_table(portfolio: dict[str, Any]) -> list[str]:
+def markdown_asset_suggestion_table(portfolio: dict[str, Any], execution_mode: str = "rebalance") -> list[str]:
     lines = [
         "| 标的 | 来源信号 | 配置建议 | 说明 |",
         "|---|---|---|---|",
     ]
-    for row in asset_suggestion_rows(portfolio):
+    for row in asset_suggestion_rows(portfolio, execution_mode):
         lines.append(
             f"| {row['标的']} | {row['来源信号']} | `{row['配置建议']}` | {row['说明']} |"
         )
     return lines
 
 
-def text_asset_suggestion_table(portfolio: dict[str, Any]) -> list[str]:
+def text_asset_suggestion_table(portfolio: dict[str, Any], execution_mode: str = "rebalance") -> list[str]:
     lines = ["标的 | 来源信号 | 配置建议 | 说明"]
-    for row in asset_suggestion_rows(portfolio):
+    for row in asset_suggestion_rows(portfolio, execution_mode):
         lines.append(
             f"{row['标的']} | {row['来源信号']} | {row['配置建议']} | {row['说明']}"
         )

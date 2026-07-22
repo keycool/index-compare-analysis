@@ -125,6 +125,25 @@ def parse_date(value: Any) -> datetime | None:
     return None
 
 
+def row_effective_date(row: dict[str, Any]) -> datetime | None:
+    return parse_date(
+        get_first(row, "日期", "date", "Date", "交易日期", "数据日期")
+        or row.get("date")
+        or row.get("日期")
+    )
+
+
+def filter_signal_rows_as_of(rows: list[dict[str, Any]], as_of: datetime) -> list[dict[str, Any]]:
+    dated_rows: list[tuple[datetime, dict[str, Any]]] = []
+    for row in rows:
+        dt = row_effective_date(row)
+        if dt is not None:
+            dated_rows.append((dt, row))
+    if not dated_rows:
+        return rows
+    return [row for dt, row in dated_rows if dt.date() <= as_of.date()]
+
+
 def safe_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -547,6 +566,10 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     latest = latest_valid_row(rows, [
         "500建议", "1000建议", "创业板建议", "50建议",
         "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
+        "500分位", "1000分位", "创业板分位", "50分位", "科创50分位",
+        "300价值分位", "300成长分位", "恒生科技分位",
+        "500/300比价", "1000/300比价", "创业板/300比价",
+        "科创50/上证50比价", "300价值/成长比价", "恒生科技/恒生比价",
     ])
     dt = parse_date(get_first(latest, "日期"))
     if not dt:
@@ -586,6 +609,20 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if base_val == 0:
             return None
         return round((latest_val / base_val - 1.0) * 100.0, 2)
+
+    def compute_inverse_ratio_deviation(field_name: str, window: int = 30) -> float | None:
+        history: list[float] = []
+        for _, r in dated_rows:
+            value = safe_float(get_first(r, field_name))
+            if value not in (None, 0):
+                history.append(1.0 / float(value))
+        if len(history) < window:
+            return None
+        latest_val = history[-1]
+        ma_value = sum(history[-window:]) / window
+        if ma_value == 0:
+            return None
+        return round((latest_val / ma_value - 1.0) * 100.0, 2)
 
     def invert_percent_change(change_pct: float | None) -> float | None:
         if change_pct is None:
@@ -644,6 +681,8 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     val300_deviation = safe_float(get_first(latest, "300价值偏离(%)"))
     gro300_deviation = safe_float(get_first(latest, "300成长偏离(%)"))
+    if gro300_deviation is None and val300_deviation is not None:
+        gro300_deviation = compute_inverse_ratio_deviation("300价值/成长比价", 30)
     if gro300_deviation is None and val300_deviation is not None:
         gro300_deviation = round(-float(val300_deviation), 2)
 
@@ -1282,16 +1321,19 @@ def build_data_health(
     *,
     require_asset_timestamp: bool,
     strict_signal_dates: bool = True,
+    portfolio_snapshot_as_of: datetime | None = None,
 ) -> dict[str, Any]:
     config = execution_config.get("data_quality", {})
     max_staleness = config.get("max_staleness_days", {})
     max_gap_days = int(config.get("max_signal_date_gap_days", 10))
     asset_update = erp_asset_update_bounds(asset_rows)
+    asset_dt = portfolio_snapshot_as_of or asset_update["oldest"]
+    asset_date_source = "portfolio_snapshot_as_of" if portfolio_snapshot_as_of else "record_update_time"
     dates = {
         "erp": _snapshot_date(erp_snapshot),
         "relative": _snapshot_date(relative_snapshot),
         "hsi_erp": _snapshot_date(hsi_erp_snapshot),
-        "asset": asset_update["oldest"],
+        "asset": asset_dt,
     }
     limits = {
         "erp": int(max_staleness.get("erp", 14)),
@@ -1343,8 +1385,7 @@ def build_data_health(
         ages["hsi_erp"] = None
         warnings.append("HSI ERP unavailable; HK targets are capped at current HK exposure")
 
-    asset_dt = dates["asset"]
-    if asset_update["missing_count"]:
+    if portfolio_snapshot_as_of is None and asset_update["missing_count"]:
         message = (
             f"asset record update timestamp is missing for "
             f"{asset_update['missing_count']} of {asset_update['total_count']} ERP rows"
@@ -1382,6 +1423,8 @@ def build_data_health(
             "total_count": asset_update["total_count"],
             "missing_count": asset_update["missing_count"],
         },
+        "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
+        "asset_date_source": asset_date_source,
         "ages_days": ages,
         "max_signal_date_gap_days": max_gap_days,
         "errors": errors,
@@ -1486,6 +1529,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-config-path", default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)))
     parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
+    parser.add_argument("--portfolio-snapshot-as-of", default=os.environ.get("ERP_PORTFOLIO_SNAPSHOT_AS_OF", ""))
     parser.add_argument(
         "--execution-mode",
         default=os.environ.get("ERP_EXECUTION_MODE", "rebalance"),
@@ -1503,6 +1547,9 @@ def main() -> None:
     as_of = parse_date(args.as_of) if args.as_of else datetime.now(SHANGHAI_TZ)
     if as_of is None:
         raise ValueError(f"Invalid --as-of date: {args.as_of}")
+    portfolio_snapshot_as_of = parse_date(args.portfolio_snapshot_as_of) if args.portfolio_snapshot_as_of else None
+    if args.portfolio_snapshot_as_of and portfolio_snapshot_as_of is None:
+        raise ValueError(f"Invalid --portfolio-snapshot-as-of date: {args.portfolio_snapshot_as_of}")
 
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
@@ -1515,12 +1562,14 @@ def main() -> None:
         print(f"Loaded ERP shared signal JSON: {args.erp_signal_json} ({len(erp_rows)} rows)")
     else:
         erp_rows = reader.list_all_records(args.erp_app_token, args.erp_table_id, args.page_size)
+    erp_rows = filter_signal_rows_as_of(erp_rows, as_of)
 
     if args.relative_signal_json:
         relative_rows = load_shared_relative_rows(args.relative_signal_json)
         print(f"Loaded Relative shared signal JSON: {args.relative_signal_json} ({len(relative_rows)} rows)")
     else:
         relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
+    relative_rows = filter_signal_rows_as_of(relative_rows, as_of)
 
     asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
 
@@ -1529,6 +1578,7 @@ def main() -> None:
     if args.hsi_erp_app_token and args.hsi_erp_table_id:
         try:
             hsi_rows = reader.list_all_records(args.hsi_erp_app_token, args.hsi_erp_table_id, args.page_size)
+            hsi_rows = filter_signal_rows_as_of(hsi_rows, as_of)
         except Exception:
             hsi_rows = None
 
@@ -1553,6 +1603,7 @@ def main() -> None:
         as_of,
         require_asset_timestamp=strict_mode,
         strict_signal_dates=strict_mode,
+        portfolio_snapshot_as_of=portfolio_snapshot_as_of,
     )
 
     payload = {
@@ -1569,6 +1620,7 @@ def main() -> None:
             "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id},
             "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
             "as_of": as_of.strftime("%Y-%m-%d"),
+            "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },

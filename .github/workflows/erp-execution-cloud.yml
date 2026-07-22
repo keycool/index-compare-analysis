@@ -25,6 +25,11 @@ on:
         options:
           - rebalance
           - research
+      portfolio_snapshot_as_of:
+        description: "Optional portfolio snapshot date for strict holdings freshness checks (YYYY-MM-DD)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -132,9 +137,9 @@ jobs:
       - name: Run ERP execution workflow
         run: |
           if [ "$ERP_EXECUTION_PUSH_SUMMARY" = "true" ]; then
-            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --push-summary
+            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --portfolio-snapshot-as-of "$ERP_PORTFOLIO_SNAPSHOT_AS_OF" --push-summary
           else
-            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE"
+            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --portfolio-snapshot-as-of "$ERP_PORTFOLIO_SNAPSHOT_AS_OF"
           fi
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -149,6 +154,7 @@ jobs:
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}
           ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'rebalance' }}
+          ERP_PORTFOLIO_SNAPSHOT_AS_OF: ${{ inputs.portfolio_snapshot_as_of || '' }}
 
       - name: Validate ERP execution artifacts
         run: |

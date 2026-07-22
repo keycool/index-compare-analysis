@@ -2,7 +2,12 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from orchestrator.erp_execution_cloud import build_data_health, build_target_weights, compute_relative_snapshot
+from orchestrator.erp_execution_cloud import (
+    build_data_health,
+    build_target_weights,
+    compute_relative_snapshot,
+    filter_signal_rows_as_of,
+)
 
 
 REC = {
@@ -236,6 +241,63 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertFalse(health["errors"])
         self.assertTrue(any("ERP/relative date gap" in warning for warning in health["warnings"]))
 
+    def test_portfolio_snapshot_as_of_satisfies_strict_asset_gate(self):
+        config = {"data_quality": {"max_staleness_days": {"erp": 14, "relative": 3, "asset": 14}}}
+        health = build_data_health(
+            {"date": "2026-07-20"},
+            {"available": False},
+            {"date": "2026-07-20"},
+            [{"III\u7ea7\u5206\u7c7b": ["ERP"]}],
+            config,
+            datetime(2026, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai")),
+            require_asset_timestamp=True,
+            portfolio_snapshot_as_of=datetime(2026, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+
+        self.assertTrue(health["ok"])
+        self.assertEqual(health["dates"]["asset"], "2026-07-20")
+        self.assertEqual(health["portfolio_snapshot_as_of"], "2026-07-20")
+        self.assertEqual(health["asset_date_source"], "portfolio_snapshot_as_of")
+        self.assertFalse(any("asset record update timestamp" in error for error in health["errors"]))
+
+    def test_filter_signal_rows_as_of_excludes_future_rows(self):
+        rows = [
+            {"\u65e5\u671f": "2026-07-10", "value": "old"},
+            {"\u65e5\u671f": "2026-07-20", "value": "as-of"},
+            {"\u65e5\u671f": "2026-07-22", "value": "future"},
+        ]
+
+        filtered = filter_signal_rows_as_of(rows, datetime(2026, 7, 20, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+        self.assertEqual([row["value"] for row in filtered], ["old", "as-of"])
+
+    def test_relative_snapshot_accepts_percentile_rows_without_recommendations(self):
+        rows = []
+        for day in range(1, 7):
+            rows.append(
+                {
+                    "\u65e5\u671f": f"2026-07-{day:02d}",
+                    "500/300\u6bd4\u4ef7": 1.0 + day / 100,
+                    "500\u5206\u4f4d": 50.0,
+                    "1000/300\u6bd4\u4ef7": 1.0,
+                    "1000\u5206\u4f4d": 50.0,
+                    "\u521b\u4e1a\u677f/300\u6bd4\u4ef7": 1.0,
+                    "\u521b\u4e1a\u677f\u5206\u4f4d": 50.0,
+                    "\u79d1\u521b50/\u4e0a\u8bc150\u6bd4\u4ef7": 1.0,
+                    "\u79d1\u521b50\u5206\u4f4d": 50.0,
+                    "300\u4ef7\u503c/\u6210\u957f\u6bd4\u4ef7": 1.0,
+                    "300\u4ef7\u503c\u5206\u4f4d": 50.0,
+                    "300\u6210\u957f\u5206\u4f4d": 50.0,
+                    "\u6052\u751f\u79d1\u6280/\u6052\u751f\u6bd4\u4ef7": 1.0,
+                    "\u6052\u751f\u79d1\u6280\u5206\u4f4d": 50.0,
+                }
+            )
+
+        snapshot = compute_relative_snapshot(rows)
+
+        self.assertEqual(snapshot["date"], "2026-07-06")
+        self.assertEqual(snapshot["recommendations"]["zz500"], "")
+
     def test_growth_style_change_is_derived_from_real_relative_history(self):
         rows = []
         value_growth_ratios = [1.00, 1.02, 1.01, 1.03, 1.04, 0.80]
@@ -263,6 +325,32 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertEqual(snapshot["changes"]["val300_change_5d"], -20.0)
         self.assertEqual(snapshot["changes"]["gro300_change_5d"], 25.0)
         self.assertEqual(snapshot["deviations"]["gro300_deviation"], 2.0)
+
+    def test_growth_style_deviation_is_derived_from_inverse_ratio_history(self):
+        rows = []
+        value_growth_ratios = [1.0] * 29 + [0.8]
+        for day, ratio in enumerate(value_growth_ratios, start=1):
+            rows.append(
+                {
+                    "\u65e5\u671f": f"2026-07-{day:02d}",
+                    "500\u5efa\u8bae": REC["neutral"],
+                    "1000\u5efa\u8bae": REC["neutral"],
+                    "\u521b\u4e1a\u677f\u5efa\u8bae": REC["neutral"],
+                    "50\u5efa\u8bae": REC["neutral"],
+                    "\u79d1\u521b50\u5efa\u8bae": REC["neutral"],
+                    "300\u4ef7\u503c\u5efa\u8bae": REC["over"],
+                    "300\u6210\u957f\u5efa\u8bae": REC["under"],
+                    "\u6052\u751f\u79d1\u6280\u5efa\u8bae": REC["neutral"],
+                    "300\u4ef7\u503c/\u6210\u957f\u6bd4\u4ef7": ratio,
+                    "300\u4ef7\u503c\u5206\u4f4d": 20.0,
+                    "300\u6210\u957f\u5206\u4f4d": 80.0,
+                    "300\u4ef7\u503c\u504f\u79bb(%)": -2.0,
+                }
+            )
+
+        snapshot = compute_relative_snapshot(rows)
+
+        self.assertEqual(snapshot["deviations"]["gro300_deviation"], 23.97)
 
 
 if __name__ == "__main__":

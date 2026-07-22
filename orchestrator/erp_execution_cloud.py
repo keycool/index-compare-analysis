@@ -573,6 +573,20 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round((latest_val / base_val - 1.0) * 100.0, 2)
 
+    def compute_inverse_ratio_change(field_name: str, periods: int = 5) -> float | None:
+        history: list[tuple[datetime, float]] = []
+        for row_dt, r in dated_rows:
+            value = safe_float(get_first(r, field_name))
+            if value not in (None, 0):
+                history.append((row_dt, 1.0 / float(value)))
+        if len(history) <= periods:
+            return None
+        latest_val = history[-1][1]
+        base_val = history[-1 - periods][1]
+        if base_val == 0:
+            return None
+        return round((latest_val / base_val - 1.0) * 100.0, 2)
+
     def latest_index_ratio(numerator_field: str, denominator_field: str) -> float | None:
         numerator = safe_float(get_first(latest, numerator_field))
         denominator = safe_float(get_first(latest, denominator_field))
@@ -672,6 +686,11 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "sh50_change_5d": compute_ratio_change("创业板/上证50比价", 5) or compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
             "kc50_change_5d": compute_ratio_change("科创50/上证50比价", 5),
             "val300_change_5d": compute_ratio_change("300价值/成长比价", 5),
+            "gro300_change_5d": (
+                compute_ratio_change("300成长/价值比价", 5)
+                or compute_ratio_change("300成长/300价值比价", 5)
+                or compute_inverse_ratio_change("300价值/成长比价", 5)
+            ),
             "hstech_change_5d": compute_ratio_change("恒生科技/恒生比价", 5),
         },
     }
@@ -1444,6 +1463,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-config-path", default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)))
     parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
+    parser.add_argument(
+        "--execution-mode",
+        default=os.environ.get("ERP_EXECUTION_MODE", "rebalance"),
+        choices=["rebalance", "research"],
+        help="rebalance blocks on stale holdings; research keeps stale holdings as warnings",
+    )
     parser.add_argument("--page-size", type=int, default=500)
     return parser.parse_args()
 
@@ -1502,7 +1527,7 @@ def main() -> None:
         asset_rows,
         execution_config,
         as_of,
-        require_asset_timestamp=False,
+        require_asset_timestamp=args.execution_mode == "rebalance",
     )
 
     payload = {
@@ -1511,6 +1536,7 @@ def main() -> None:
         "generated_at": datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds"),
         "inputs": {
             "mode": "cloud_openapi",
+            "execution_mode": args.execution_mode,
             "erp_table": {"app_token": args.erp_app_token, "table_id": args.erp_table_id},
             "relative_table": {"app_token": args.relative_app_token, "table_id": args.relative_table_id},
             "erp_signal_json": str(Path(args.erp_signal_json).resolve()) if args.erp_signal_json else None,

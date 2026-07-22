@@ -17,6 +17,14 @@ on:
         required: false
         default: "https://index-compare-analysis.vercel.app/data/merged_signal.json"
         type: string
+      execution_mode:
+        description: "rebalance blocks stale holdings; research keeps stale holdings as warnings"
+        required: false
+        default: "rebalance"
+        type: choice
+        options:
+          - rebalance
+          - research
 
 permissions:
   contents: read
@@ -124,9 +132,9 @@ jobs:
       - name: Run ERP execution workflow
         run: |
           if [ "$ERP_EXECUTION_PUSH_SUMMARY" = "true" ]; then
-            python orchestrator/run_erp_execution_cloud.py --push-summary
+            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --push-summary
           else
-            python orchestrator/run_erp_execution_cloud.py
+            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE"
           fi
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -140,6 +148,7 @@ jobs:
           ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}
+          ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'rebalance' }}
 
       - name: Validate ERP execution artifacts
         run: |

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from orchestrator.erp_execution_cloud import build_data_health, build_target_weights
+from orchestrator.erp_execution_cloud import build_data_health, build_target_weights, compute_relative_snapshot
 
 
 REC = {
@@ -218,6 +218,34 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertEqual(health["dates"]["asset"], "2026-07-01")
         self.assertFalse(health["errors"])
         self.assertTrue(any("asset data is stale" in warning for warning in health["warnings"]))
+
+    def test_growth_style_change_is_derived_from_real_relative_history(self):
+        rows = []
+        value_growth_ratios = [1.00, 1.02, 1.01, 1.03, 1.04, 0.80]
+        for day, ratio in enumerate(value_growth_ratios, start=1):
+            rows.append(
+                {
+                    "\u65e5\u671f": f"2026-07-{day:02d}",
+                    "500\u5efa\u8bae": REC["neutral"],
+                    "1000\u5efa\u8bae": REC["neutral"],
+                    "\u521b\u4e1a\u677f\u5efa\u8bae": REC["neutral"],
+                    "50\u5efa\u8bae": REC["neutral"],
+                    "\u79d1\u521b50\u5efa\u8bae": REC["neutral"],
+                    "300\u4ef7\u503c\u5efa\u8bae": REC["over"],
+                    "300\u6210\u957f\u5efa\u8bae": REC["under"],
+                    "\u6052\u751f\u79d1\u6280\u5efa\u8bae": REC["neutral"],
+                    "300\u4ef7\u503c/\u6210\u957f\u6bd4\u4ef7": ratio,
+                    "300\u4ef7\u503c\u5206\u4f4d": 20.0,
+                    "300\u6210\u957f\u5206\u4f4d": 80.0,
+                    "300\u4ef7\u503c\u504f\u79bb(%)": -2.0,
+                    "300\u6210\u957f\u504f\u79bb(%)": 2.0,
+                }
+            )
+
+        snapshot = compute_relative_snapshot(rows)
+
+        self.assertEqual(snapshot["changes"]["val300_change_5d"], -20.0)
+        self.assertEqual(snapshot["changes"]["gro300_change_5d"], 25.0)
 
 
 if __name__ == "__main__":

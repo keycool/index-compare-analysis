@@ -30,12 +30,18 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Push the generated summary to the configured Feishu webhook",
     )
+    parser.add_argument(
+        "--execution-mode",
+        default="rebalance",
+        choices=["rebalance", "research"],
+        help="rebalance blocks on stale holdings; research keeps stale holdings as warnings",
+    )
     return parser.parse_args()
 
 
-def run_python(script: Path) -> None:
+def run_python(script: Path, *extra_args: str) -> None:
     completed = subprocess.run(
-        [sys.executable, str(script)],
+        [sys.executable, str(script), *extra_args],
         cwd=ROOT.parent,
         text=True,
         capture_output=True,
@@ -53,7 +59,7 @@ def run_python(script: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    run_python(EXECUTION_SCRIPT)
+    run_python(EXECUTION_SCRIPT, "--execution-mode", args.execution_mode)
     if args.push_summary:
         run_python(PUSH_SCRIPT)
 

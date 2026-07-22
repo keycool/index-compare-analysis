@@ -85,6 +85,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lark-cli", default=str(DEFAULT_LARK_CLI))
     parser.add_argument("--execution-config-path", default=str(DEFAULT_EXECUTION_CONFIG_PATH))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
+    parser.add_argument(
+        "--execution-mode",
+        default=os.environ.get("ERP_EXECUTION_MODE", "rebalance"),
+        choices=["rebalance", "research"],
+        help="rebalance blocks on stale holdings; research keeps stale holdings as warnings",
+    )
     return parser.parse_args()
 
 
@@ -190,7 +196,7 @@ def main() -> None:
         asset_rows,
         execution_config,
         as_of,
-        require_asset_timestamp=False,
+        require_asset_timestamp=args.execution_mode == "rebalance",
     )
 
     payload = {
@@ -199,6 +205,7 @@ def main() -> None:
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "inputs": {
             "mode": "lark_cli",
+            "execution_mode": args.execution_mode,
             "erp_table": vars(erp_table),
             "relative_table": vars(relative_table),
             "asset_table": vars(asset_table),

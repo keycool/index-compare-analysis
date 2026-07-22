@@ -164,7 +164,7 @@ def build_payload(plan: dict, summary_text: str) -> dict:
     content: list[list[dict[str, str]]] = []
 
     # ── Header ──
-    header = "ERP研究草案" if research_mode else "ERP执行日报"
+    header = "ERP执行日报 - research研究草案（不可执行）" if research_mode else "ERP执行日报"
     content.append([{"tag": "text", "text": f"📊 {header} ({relative['date']})"}])
     for line in health_lines(plan):
         content.append([{"tag": "text", "text": line}])
@@ -262,7 +262,7 @@ def build_fallback_text_payload(plan: dict) -> dict:
     portfolio = plan["portfolio"]
     positions = ordered_positions(plan)
     research_mode = is_research_mode(plan)
-    header = "ERP研究草案" if research_mode else "ERP执行日报"
+    header = "ERP执行日报 - research研究草案（不可执行）" if research_mode else "ERP执行日报"
     position_title = "研究草案（不可作为调仓指令）:" if research_mode else "调仓建议:"
 
     lines = [

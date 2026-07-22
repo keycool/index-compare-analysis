@@ -43,10 +43,24 @@ DEFAULT_HSI_ERP_TABLE_ID = ""
 DEFAULT_OUTPUT = Path(__file__).resolve().parent / "output" / "erp_execution_plan.json"
 DEFAULT_EXECUTION_CONFIG_PATH = Path(__file__).resolve().parent / "erp_execution_config.json"
 DEFAULT_RENDER_SCRIPT = Path(__file__).resolve().parent / "render_erp_daily_summary_v4.py"
+DEFAULT_INDEX_COMPARE_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / ".claude" / "skills" / "index-compare" / "config.json"
+)
 
 BASE_URL = "https://open.feishu.cn/open-apis"
 AUTH_URL = f"{BASE_URL}/auth/v3/tenant_access_token/internal"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+DEFAULT_RELATIVE_ANALYSIS_SETTINGS = {
+    "ma_window": 30,
+    "trend_windows": [5, 10, 20],
+    "percentile_levels": {
+        "extreme_low": 15,
+        "low": 30,
+        "high": 70,
+        "extreme_high": 85,
+    },
+}
 
 # ── Mojibake repair map ──────────────────────────────────────
 MOJIBAKE_MAP = {
@@ -295,6 +309,29 @@ _REC_UNDER = "\u4f4e\u914d"
 _REC_STRONG_UNDER = "\u5f3a\u70c8\u4f4e\u914d"
 
 
+def load_relative_analysis_settings() -> dict[str, Any]:
+    settings = json.loads(json.dumps(DEFAULT_RELATIVE_ANALYSIS_SETTINGS))
+    config_path = Path(os.environ.get("ERP_RELATIVE_ANALYSIS_CONFIG_PATH") or DEFAULT_INDEX_COMPARE_CONFIG_PATH)
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return settings
+
+    analysis = config.get("analysis", {}) if isinstance(config, dict) else {}
+    percentile_levels = config.get("percentile_levels", {}) if isinstance(config, dict) else {}
+    if isinstance(analysis.get("ma_window"), int):
+        settings["ma_window"] = analysis["ma_window"]
+    if isinstance(analysis.get("trend_windows"), list):
+        windows = [int(float(item)) for item in analysis["trend_windows"] if safe_float(item) is not None]
+        if windows:
+            settings["trend_windows"] = windows
+    if isinstance(percentile_levels, dict):
+        settings["percentile_levels"].update(
+            {key: float(value) for key, value in percentile_levels.items() if safe_float(value) is not None}
+        )
+    return settings
+
+
 def _recommendation_from_score(score: float) -> str:
     if score > 1.0:
         return _REC_STRONG_OVER
@@ -307,17 +344,17 @@ def _recommendation_from_score(score: float) -> str:
     return _REC_STRONG_UNDER
 
 
-def _percentile_score(percentile: Any) -> int | None:
+def _percentile_score(percentile: Any, levels: dict[str, Any]) -> int | None:
     value = safe_float(percentile)
     if value is None:
         return None
-    if value <= 15:
+    if value <= float(levels["extreme_low"]):
         return 2
-    if value <= 30:
+    if value <= float(levels["low"]):
         return 1
-    if value < 70:
+    if value < float(levels["high"]):
         return 0
-    if value < 85:
+    if value < float(levels["extreme_high"]):
         return -1
     return -2
 
@@ -339,66 +376,79 @@ def _trend_score(changes: list[Any]) -> int:
     return 0
 
 
-def _deviation_score(deviation: Any) -> int:
-    value = safe_float(deviation)
+def _deviation_score_from_zscore(zscore: Any) -> int:
+    value = safe_float(zscore)
     if value is None:
         return 0
-    if value <= -4.0:
-        return 2
-    if value <= -2.0:
-        return 1
-    if value >= 4.0:
-        return -2
     if value >= 2.0:
+        return -2
+    if value >= 1.0:
         return -1
+    if value <= -2.0:
+        return 2
+    if value <= -1.0:
+        return 1
     return 0
 
 
-def _derive_relative_recommendation(percentile: Any, deviation: Any, changes: list[Any]) -> str:
-    percentile_component = _percentile_score(percentile)
+def _derive_relative_recommendation(
+    percentile: Any,
+    zscore: Any,
+    changes: list[Any],
+    percentile_levels: dict[str, Any],
+) -> str:
+    percentile_component = _percentile_score(percentile, percentile_levels)
     if percentile_component is None:
         return ""
     trend_component = _trend_score(changes)
     percentile_value = float(safe_float(percentile) or 0.0)
     if percentile_value > 60:
         trend_component = -trend_component
-    score = percentile_component * 0.6 + trend_component * 0.25 + _deviation_score(deviation) * 0.15
+    score = (
+        percentile_component * 0.6
+        + trend_component * 0.25
+        + _deviation_score_from_zscore(zscore) * 0.15
+    )
     return _recommendation_from_score(score)
 
 
 def _fill_derived_relative_recommendations(snapshot: dict[str, Any]) -> None:
     recs = snapshot.setdefault("recommendations", {})
     sources = snapshot.setdefault("recommendation_sources", {})
+    settings = load_relative_analysis_settings()
+    trend_windows = [int(item) for item in settings.get("trend_windows", [5, 10, 20])]
+    percentile_levels = settings.get("percentile_levels", DEFAULT_RELATIVE_ANALYSIS_SETTINGS["percentile_levels"])
     for key, value in recs.items():
         if normalize_text(value):
             sources.setdefault(key, "table")
 
     fields: dict[str, tuple[str, str, str, bool]] = {
-        "zz500": ("zz500_percentile", "zz500_deviation", "zz500_change_5d", False),
-        "zz1000": ("zz1000_percentile", "zz1000_deviation", "zz1000_change_5d", False),
-        "cyb": ("cyb_percentile", "cyb_deviation", "cyb_change_5d", False),
-        "sh50": ("sh50_percentile", "sh50_deviation", "sh50_change_5d", True),
-        "kc50": ("kc50_percentile", "kc50_deviation", "kc50_change_5d", False),
-        "val300": ("val300_percentile", "val300_deviation", "val300_change_5d", False),
-        "gro300": ("gro300_percentile", "gro300_deviation", "gro300_change_5d", False),
-        "hstech": ("hstech_percentile", "hstech_deviation", "hstech_change_5d", False),
+        "zz500": ("zz500_percentile", "zz500_zscore", "zz500_change", False),
+        "zz1000": ("zz1000_percentile", "zz1000_zscore", "zz1000_change", False),
+        "cyb": ("cyb_percentile", "cyb_zscore", "cyb_change", False),
+        "sh50": ("sh50_percentile", "sh50_zscore", "sh50_change", True),
+        "kc50": ("kc50_percentile", "kc50_zscore", "kc50_change", False),
+        "val300": ("val300_percentile", "val300_zscore", "val300_change", False),
+        "gro300": ("gro300_percentile", "gro300_zscore", "gro300_change", False),
+        "hstech": ("hstech_percentile", "hstech_zscore", "hstech_change", False),
     }
     percentiles = snapshot.get("percentiles", {})
-    deviations = snapshot.get("deviations", {})
+    zscores = snapshot.get("zscores", {})
     changes = snapshot.get("changes", {})
-    for key, (percentile_key, deviation_key, change_key, reverse) in fields.items():
+    for key, (percentile_key, zscore_key, change_prefix, reverse) in fields.items():
         if normalize_text(recs.get(key)):
             continue
         derived = _derive_relative_recommendation(
             percentiles.get(percentile_key),
-            deviations.get(deviation_key),
-            [changes.get(change_key)],
+            zscores.get(zscore_key),
+            [changes.get(f"{change_prefix}_{window}d") for window in trend_windows],
+            percentile_levels,
         )
         if reverse and derived:
             derived = _REVERSE_REC.get(derived, "")
         if derived:
             recs[key] = derived
-            sources[key] = "derived_from_percentile_trend_deviation"
+            sources[key] = "derived_from_analyze_rules"
         else:
             sources[key] = "missing"
 
@@ -739,6 +789,75 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             return None
         return round((latest_val / ma_value - 1.0) * 100.0, 2)
 
+    analysis_settings = load_relative_analysis_settings()
+    ma_window = int(analysis_settings.get("ma_window", 30))
+
+    def compute_ratio_zscore(field_name: str, window: int = ma_window) -> float:
+        history: list[float] = []
+        for _, r in dated_rows:
+            value = safe_float(get_first(r, field_name))
+            if value is not None:
+                history.append(float(value))
+        if len(history) < window:
+            return 0.0
+        window_values = history[-window:]
+        ma_value = sum(window_values) / len(window_values)
+        if len(window_values) <= 1:
+            return 0.0
+        std_value = math.sqrt(sum((value - ma_value) ** 2 for value in window_values) / (len(window_values) - 1))
+        if std_value == 0:
+            return 0.0
+        return round((window_values[-1] - ma_value) / std_value, 2)
+
+    def compute_inverse_ratio_zscore(field_name: str, window: int = ma_window) -> float:
+        history: list[float] = []
+        for _, r in dated_rows:
+            value = safe_float(get_first(r, field_name))
+            if value not in (None, 0):
+                history.append(1.0 / float(value))
+        if len(history) < window:
+            return 0.0
+        window_values = history[-window:]
+        ma_value = sum(window_values) / len(window_values)
+        if len(window_values) <= 1:
+            return 0.0
+        std_value = math.sqrt(sum((value - ma_value) ** 2 for value in window_values) / (len(window_values) - 1))
+        if std_value == 0:
+            return 0.0
+        return round((window_values[-1] - ma_value) / std_value, 2)
+
+    def first_ratio_change(periods: int, *field_names: str) -> float | None:
+        for field_name in field_names:
+            value = compute_ratio_change(field_name, periods)
+            if value is not None:
+                return value
+        return None
+
+    def first_inverse_ratio_change(periods: int, *field_names: str) -> float | None:
+        for field_name in field_names:
+            value = compute_inverse_ratio_change(field_name, periods)
+            if value is not None:
+                return value
+        return None
+
+    def first_ratio_zscore(*field_names: str) -> float:
+        for field_name in field_names:
+            if any(safe_float(get_first(r, field_name)) is not None for _, r in dated_rows):
+                return compute_ratio_zscore(field_name)
+        return 0.0
+
+    def first_inverse_ratio_zscore(*field_names: str) -> float:
+        for field_name in field_names:
+            if any((safe_float(get_first(r, field_name)) not in (None, 0)) for _, r in dated_rows):
+                return compute_inverse_ratio_zscore(field_name)
+        return 0.0
+
+    def has_ratio_field(*field_names: str) -> bool:
+        return any(
+            any(safe_float(get_first(r, field_name)) is not None for _, r in dated_rows)
+            for field_name in field_names
+        )
+
     def invert_percent_change(change_pct: float | None) -> float | None:
         if change_pct is None:
             return None
@@ -787,13 +906,43 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not cyb_sh50_recommendation:
         cyb_sh50_recommendation = _REVERSE_REC.get(normalize_text(get_first(latest, "50建议")), "")
 
-    val300_change_5d = compute_ratio_change("300价值/成长比价", 5)
-    gro300_change_5d = (
-        compute_ratio_change("300成长/价值比价", 5)
-        or compute_ratio_change("300成长/300价值比价", 5)
-        or compute_inverse_ratio_change("300价值/成长比价", 5)
-        or invert_percent_change(val300_change_5d)
+    trend_windows = [int(item) for item in analysis_settings.get("trend_windows", [5, 10, 20])]
+    zz500_changes = {window: first_ratio_change(window, "500/300比价") for window in trend_windows}
+    zz1000_changes = {window: first_ratio_change(window, "1000/300比价") for window in trend_windows}
+    cyb_changes = {window: first_ratio_change(window, "创业板/300比价") for window in trend_windows}
+    sh50_300_changes = {
+        window: first_ratio_change(window, "上证50/300比价", "50/300比价")
+        for window in trend_windows
+    }
+    kc50_300_changes = {
+        window: first_ratio_change(window, "科创50/300比价", "科创50/沪深300比价")
+        for window in trend_windows
+    }
+    sh50_changes = {
+        window: first_ratio_change(window, "创业板/上证50比价", "50/创业板比价", "50/300比价")
+        for window in trend_windows
+    }
+    kc50_changes = {window: first_ratio_change(window, "科创50/上证50比价") for window in trend_windows}
+    val300_changes = {window: first_ratio_change(window, "300价值/成长比价") for window in trend_windows}
+    def compute_gro300_change(window: int) -> float | None:
+        direct = first_ratio_change(window, "300成长/价值比价", "300成长/300价值比价")
+        if direct is not None:
+            return direct
+        inverse = first_inverse_ratio_change(window, "300价值/成长比价")
+        if inverse is not None:
+            return inverse
+        return invert_percent_change(val300_changes.get(window))
+
+    gro300_changes = {window: compute_gro300_change(window) for window in trend_windows}
+    gro300_zscore = (
+        first_ratio_zscore("300成长/价值比价", "300成长/300价值比价")
+        if has_ratio_field("300成长/价值比价", "300成长/300价值比价")
+        else first_inverse_ratio_zscore("300价值/成长比价")
     )
+    hstech_changes = {window: first_ratio_change(window, "恒生科技/恒生比价") for window in trend_windows}
+
+    val300_change_5d = val300_changes.get(5)
+    gro300_change_5d = gro300_changes.get(5)
     val300_deviation = safe_float(get_first(latest, "300价值偏离(%)"))
     gro300_deviation = safe_float(get_first(latest, "300成长偏离(%)"))
     if gro300_deviation is None and val300_deviation is not None:
@@ -851,17 +1000,29 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "gro300_deviation": gro300_deviation,
             "hstech_deviation": safe_float(get_first(latest, "恒生科技偏离(%)")),
         },
+        "zscores": {
+            "zz500_zscore": first_ratio_zscore("500/300比价"),
+            "zz1000_zscore": first_ratio_zscore("1000/300比价"),
+            "cyb_zscore": first_ratio_zscore("创业板/300比价"),
+            "sh50_300_zscore": first_ratio_zscore("上证50/300比价", "50/300比价"),
+            "kc50_300_zscore": first_ratio_zscore("科创50/300比价", "科创50/沪深300比价"),
+            "sh50_zscore": first_ratio_zscore("创业板/上证50比价", "50/创业板比价", "50/300比价"),
+            "kc50_zscore": first_ratio_zscore("科创50/上证50比价"),
+            "val300_zscore": first_ratio_zscore("300价值/成长比价"),
+            "gro300_zscore": gro300_zscore,
+            "hstech_zscore": first_ratio_zscore("恒生科技/恒生比价"),
+        },
         "changes": {
-            "zz500_change_5d": compute_ratio_change("500/300比价", 5),
-            "zz1000_change_5d": compute_ratio_change("1000/300比价", 5),
-            "cyb_change_5d": compute_ratio_change("创业板/300比价", 5),
-            "sh50_300_change_5d": compute_ratio_change("上证50/300比价", 5) or compute_ratio_change("50/300比价", 5),
-            "kc50_300_change_5d": compute_ratio_change("科创50/300比价", 5) or compute_ratio_change("科创50/沪深300比价", 5),
-            "sh50_change_5d": compute_ratio_change("创业板/上证50比价", 5) or compute_ratio_change("50/创业板比价", 5) or compute_ratio_change("50/300比价", 5),
-            "kc50_change_5d": compute_ratio_change("科创50/上证50比价", 5),
-            "val300_change_5d": val300_change_5d,
-            "gro300_change_5d": gro300_change_5d,
-            "hstech_change_5d": compute_ratio_change("恒生科技/恒生比价", 5),
+            **{f"zz500_change_{window}d": value for window, value in zz500_changes.items()},
+            **{f"zz1000_change_{window}d": value for window, value in zz1000_changes.items()},
+            **{f"cyb_change_{window}d": value for window, value in cyb_changes.items()},
+            **{f"sh50_300_change_{window}d": value for window, value in sh50_300_changes.items()},
+            **{f"kc50_300_change_{window}d": value for window, value in kc50_300_changes.items()},
+            **{f"sh50_change_{window}d": value for window, value in sh50_changes.items()},
+            **{f"kc50_change_{window}d": value for window, value in kc50_changes.items()},
+            **{f"val300_change_{window}d": value for window, value in val300_changes.items()},
+            **{f"gro300_change_{window}d": value for window, value in gro300_changes.items()},
+            **{f"hstech_change_{window}d": value for window, value in hstech_changes.items()},
         },
     }
     _fill_derived_relative_recommendations(snapshot)

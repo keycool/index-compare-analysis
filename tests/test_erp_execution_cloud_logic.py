@@ -3,11 +3,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from orchestrator.erp_execution_cloud import (
+    DEFAULT_RELATIVE_ANALYSIS_SETTINGS,
     build_data_health,
     build_target_weights,
     compute_relative_snapshot,
     filter_signal_rows_as_of,
     validate_execution_payload,
+    _derive_relative_recommendation,
 )
 
 
@@ -359,13 +361,27 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
 
         self.assertEqual(snapshot["date"], "2026-07-06")
         self.assertEqual(snapshot["recommendations"]["zz500"], REC["neutral"])
-        self.assertEqual(snapshot["recommendation_sources"]["zz500"], "derived_from_percentile_trend_deviation")
+        self.assertEqual(snapshot["recommendation_sources"]["zz500"], "derived_from_analyze_rules")
         self.assertFalse(
             [
                 key for key in ("zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech")
                 if not snapshot["recommendations"].get(key)
             ]
         )
+
+    def test_derived_recommendation_uses_5d_10d_20d_trend(self):
+        levels = DEFAULT_RELATIVE_ANALYSIS_SETTINGS["percentile_levels"]
+
+        recommendation = _derive_relative_recommendation(30.0, 0.0, [2.0, -0.2, -0.2], levels)
+
+        self.assertEqual(recommendation, REC["over"])
+
+    def test_derived_recommendation_uses_zscore_not_raw_deviation(self):
+        levels = DEFAULT_RELATIVE_ANALYSIS_SETTINGS["percentile_levels"]
+
+        recommendation = _derive_relative_recommendation(30.0, 2.0, [0.0, 0.0, 0.0], levels)
+
+        self.assertEqual(recommendation, REC["neutral"])
 
     def test_growth_style_change_is_derived_from_real_relative_history(self):
         rows = []

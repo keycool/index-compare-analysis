@@ -428,7 +428,6 @@ def _fill_derived_relative_recommendations(snapshot: dict[str, Any]) -> None:
         "cyb": ("cyb_percentile", "cyb_zscore", "cyb_change", False),
         "sh50": ("sh50_percentile", "sh50_zscore", "sh50_change", True),
         "kc50": ("kc50_percentile", "kc50_zscore", "kc50_change", False),
-        "val300": ("val300_percentile", "val300_zscore", "val300_change", False),
         "gro300": ("gro300_percentile", "gro300_zscore", "gro300_change", False),
         "hstech": ("hstech_percentile", "hstech_zscore", "hstech_change", False),
     }
@@ -451,6 +450,15 @@ def _fill_derived_relative_recommendations(snapshot: dict[str, Any]) -> None:
             sources[key] = "derived_from_analyze_rules"
         else:
             sources[key] = "missing"
+
+    if not normalize_text(recs.get("val300")):
+        growth_rec = normalize_text(recs.get("gro300"))
+        reversed_growth = _REVERSE_REC.get(growth_rec, "")
+        if reversed_growth:
+            recs["val300"] = reversed_growth
+            sources["val300"] = "derived_from_growth_recommendation_reverse"
+        else:
+            sources["val300"] = "missing"
 
 
 # ── Holding resolution ───────────────────────────────────────

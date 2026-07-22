@@ -1,4 +1,5 @@
 import unittest
+import random
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -9,7 +10,9 @@ from orchestrator.erp_execution_cloud import (
     compute_relative_snapshot,
     filter_signal_rows_as_of,
     validate_execution_payload,
+    _REVERSE_REC,
     _derive_relative_recommendation,
+    _fill_derived_relative_recommendations,
 )
 
 
@@ -382,6 +385,63 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         recommendation = _derive_relative_recommendation(30.0, 2.0, [0.0, 0.0, 0.0], levels)
 
         self.assertEqual(recommendation, REC["neutral"])
+
+    def test_value_recommendation_is_reverse_of_growth_for_historical_rows(self):
+        rows = []
+        for day in range(1, 7):
+            rows.append(
+                {
+                    "\u65e5\u671f": f"2026-07-{day:02d}",
+                    "500/300\u6bd4\u4ef7": 1.0,
+                    "500\u5206\u4f4d": 50.0,
+                    "1000/300\u6bd4\u4ef7": 1.0,
+                    "1000\u5206\u4f4d": 50.0,
+                    "\u521b\u4e1a\u677f/300\u6bd4\u4ef7": 1.0,
+                    "\u521b\u4e1a\u677f\u5206\u4f4d": 50.0,
+                    "50/\u521b\u4e1a\u677f\u6bd4\u4ef7": 1.0,
+                    "50\u5206\u4f4d": 50.0,
+                    "\u79d1\u521b50/\u4e0a\u8bc150\u6bd4\u4ef7": 1.0,
+                    "\u79d1\u521b50\u5206\u4f4d": 50.0,
+                    "300\u4ef7\u503c/\u6210\u957f\u6bd4\u4ef7": 1.0,
+                    "300\u4ef7\u503c\u5206\u4f4d": 99.0,
+                    "300\u6210\u957f\u5206\u4f4d": 50.0,
+                    "\u6052\u751f\u79d1\u6280/\u6052\u751f\u6bd4\u4ef7": 1.0,
+                    "\u6052\u751f\u79d1\u6280\u5206\u4f4d": 50.0,
+                }
+            )
+
+        snapshot = compute_relative_snapshot(rows)
+
+        self.assertEqual(snapshot["recommendations"]["gro300"], REC["neutral"])
+        self.assertEqual(snapshot["recommendations"]["val300"], REC["neutral"])
+        self.assertEqual(snapshot["recommendation_sources"]["val300"], "derived_from_growth_recommendation_reverse")
+
+    def test_value_growth_derived_recommendations_are_always_reversed(self):
+        rng = random.Random(20260722)
+        for _ in range(300):
+            snapshot = {
+                "recommendations": {"val300": "", "gro300": ""},
+                "percentiles": {
+                    "val300_percentile": rng.uniform(0.0, 100.0),
+                    "gro300_percentile": rng.uniform(0.0, 100.0),
+                },
+                "zscores": {
+                    "val300_zscore": rng.uniform(-3.0, 3.0),
+                    "gro300_zscore": rng.uniform(-3.0, 3.0),
+                },
+                "changes": {
+                    "val300_change_5d": rng.uniform(-5.0, 5.0),
+                    "val300_change_10d": rng.uniform(-5.0, 5.0),
+                    "val300_change_20d": rng.uniform(-5.0, 5.0),
+                    "gro300_change_5d": rng.uniform(-5.0, 5.0),
+                    "gro300_change_10d": rng.uniform(-5.0, 5.0),
+                    "gro300_change_20d": rng.uniform(-5.0, 5.0),
+                },
+            }
+
+            _fill_derived_relative_recommendations(snapshot)
+
+            self.assertEqual(snapshot["recommendations"]["val300"], _REVERSE_REC[snapshot["recommendations"]["gro300"]])
 
     def test_growth_style_change_is_derived_from_real_relative_history(self):
         rows = []

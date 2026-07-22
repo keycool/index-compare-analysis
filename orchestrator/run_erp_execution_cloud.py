@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
         help="rebalance blocks on stale holdings; research keeps stale holdings as warnings",
     )
     parser.add_argument(
+        "--as-of",
+        default="",
+        help="Unified signal cutoff date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
         "--portfolio-snapshot-as-of",
         default="",
         help="Explicit portfolio snapshot date used for holdings freshness checks",
@@ -65,6 +70,8 @@ def run_python(script: Path, *extra_args: str) -> None:
 def main() -> None:
     args = parse_args()
     extra_args = ["--execution-mode", args.execution_mode]
+    if args.as_of:
+        extra_args.extend(["--as-of", args.as_of])
     if args.portfolio_snapshot_as_of:
         extra_args.extend(["--portfolio-snapshot-as-of", args.portfolio_snapshot_as_of])
     run_python(EXECUTION_SCRIPT, *extra_args)

@@ -6,8 +6,8 @@ on:
       - master
   schedule:
     # GitHub cron uses UTC:
-    # 12:00 UTC = 20:00 Asia/Shanghai
-    - cron: "0 12 * * *"
+    # 15:00 UTC = 23:00 Asia/Shanghai, Monday-Friday.
+    - cron: "0 15 * * 1-5"
   workflow_dispatch:
     inputs:
       force_relative:
@@ -55,17 +55,22 @@ jobs:
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           LATEST_SIGNAL_URL: https://index-compare-analysis.vercel.app/data/merged_signal.json
+          MIN_ALL_A_DAILY_ROWS: "5000"
         run: |
           python - << 'PY'
           import json
           import os
           import urllib.error
           import urllib.request
-          from datetime import datetime, timedelta
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
 
           event_name = "${{ github.event_name }}"
           output_path = os.environ["GITHUB_OUTPUT"]
           summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+          shanghai_today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+          shanghai_today_text = f"{shanghai_today[:4]}-{shanghai_today[4:6]}-{shanghai_today[6:8]}"
+          min_all_a_rows = int(os.environ.get("MIN_ALL_A_DAILY_ROWS", "5000"))
 
           def write_output(key: str, value: str) -> None:
               with open(output_path, "a", encoding="utf-8") as f:
@@ -91,34 +96,95 @@ jobs:
               raise SystemExit("TUSHARE_TOKEN is required for schedule freshness check")
 
           latest_signal_url = os.environ.get("LATEST_SIGNAL_URL", "").strip()
-          start_date = (datetime.utcnow() - timedelta(days=20)).strftime("%Y%m%d")
-          end_date = datetime.utcnow().strftime("%Y%m%d")
 
-          req_body = json.dumps({
-              "api_name": "index_daily",
-              "token": token,
-              "params": {
-                  "ts_code": "000300.SH",
-                  "start_date": start_date,
-                  "end_date": end_date,
-              },
-              "fields": "trade_date",
-          }).encode("utf-8")
+          def tushare_call(api_name: str, params: dict, fields: str) -> dict:
+              req_body = json.dumps({
+                  "api_name": api_name,
+                  "token": token,
+                  "params": params,
+                  "fields": fields,
+              }).encode("utf-8")
+              req = urllib.request.Request(
+                  "https://api.tushare.pro",
+                  data=req_body,
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=45) as resp:
+                  payload = json.loads(resp.read().decode("utf-8"))
+              if payload.get("code") not in (0, None):
+                  raise RuntimeError(f"Tushare {api_name} failed: {payload}")
+              return payload
 
-          req = urllib.request.Request(
-              "https://api.tushare.pro",
-              data=req_body,
-              headers={"Content-Type": "application/json"},
-              method="POST",
+          calendar_payload = tushare_call(
+              "trade_cal",
+              {"exchange": "SSE", "start_date": shanghai_today, "end_date": shanghai_today},
+              "cal_date,is_open",
           )
-          with urllib.request.urlopen(req, timeout=30) as resp:
-              tushare_payload = json.loads(resp.read().decode("utf-8"))
+          calendar_items = (((calendar_payload or {}).get("data") or {}).get("items")) or []
+          is_sse_trading_day = bool(calendar_items and str(calendar_items[0][1]) == "1")
 
-          items = (((tushare_payload or {}).get("data") or {}).get("items")) or []
-          if not items:
-              raise SystemExit(f"Tushare returned no index_daily items: {tushare_payload}")
+          if not is_sse_trading_day:
+              write_output("should_run", "false")
+              write_output("reason", "not_sse_trading_day")
+              write_output("latest_trade_date", "none")
+              write_output("deployed_latest_date", "not_checked")
+              write_summary([
+                  "## Preflight check",
+                  "",
+                  f"- Event: `{event_name}`",
+                  f"- Shanghai date: `{shanghai_today_text}`",
+                  "- SSE trading day: `false`",
+                  "- Decision: `skip`",
+                  "- Reason: `not_sse_trading_day`",
+                  "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
+              ])
+              raise SystemExit(0)
 
-          latest_trade_date_raw = str(items[0][0])
+          index_payload = tushare_call(
+              "index_daily",
+              {"ts_code": "000300.SH", "trade_date": shanghai_today},
+              "trade_date",
+          )
+          index_items = (((index_payload or {}).get("data") or {}).get("items")) or []
+          has_today_index_data = bool(index_items)
+
+          all_a_payload = tushare_call(
+              "daily",
+              {"trade_date": shanghai_today},
+              "ts_code,trade_date",
+          )
+          all_a_items = (((all_a_payload or {}).get("data") or {}).get("items")) or []
+          all_a_daily_rows = len(all_a_items)
+
+          data_ready = has_today_index_data and all_a_daily_rows >= min_all_a_rows
+          if not data_ready:
+              missing_reasons = []
+              if not has_today_index_data:
+                  missing_reasons.append("missing_hs300_index_daily")
+              if all_a_daily_rows < min_all_a_rows:
+                  missing_reasons.append(f"all_a_daily_rows_below_{min_all_a_rows}")
+              reason = ",".join(missing_reasons)
+              write_output("should_run", "false")
+              write_output("reason", reason)
+              write_output("latest_trade_date", shanghai_today_text if has_today_index_data else "none")
+              write_output("deployed_latest_date", "not_checked")
+              write_summary([
+                  "## Preflight check",
+                  "",
+                  f"- Event: `{event_name}`",
+                  f"- Shanghai date: `{shanghai_today_text}`",
+                  "- SSE trading day: `true`",
+                  f"- HS300 index_daily ready: `{has_today_index_data}`",
+                  f"- All-A daily rows: `{all_a_daily_rows}`",
+                  f"- All-A minimum rows: `{min_all_a_rows}`",
+                  "- Decision: `skip`",
+                  f"- Reason: `{reason}`",
+                  "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
+              ])
+              raise SystemExit(0)
+
+          latest_trade_date_raw = shanghai_today
           latest_trade_date = f"{latest_trade_date_raw[:4]}-{latest_trade_date_raw[4:6]}-{latest_trade_date_raw[6:8]}"
 
           deployed_latest_date = ""
@@ -156,6 +222,11 @@ jobs:
               "## Preflight check",
               "",
               f"- Event: `{event_name}`",
+              f"- Shanghai date: `{shanghai_today_text}`",
+              "- SSE trading day: `true`",
+              "- HS300 index_daily ready: `true`",
+              f"- All-A daily rows: `{all_a_daily_rows}`",
+              f"- All-A minimum rows: `{min_all_a_rows}`",
               f"- Tushare latest trade date: `{latest_trade_date}`",
               f"- Deployed relative latest date: `{deployed_latest_date or 'unknown'}`",
               f"- Decision: `{'run' if should_run else 'skip'}`",

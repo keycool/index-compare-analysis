@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,10 @@ MERGED_SIGNAL = SHARED_DIR / "merged_signal.json"
 
 def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def log_stage(message: str) -> None:
+    print(f"[ORCH] {now_iso()} {message}", flush=True)
 
 
 def run_command(command: list[str], cwd: Path, env: dict[str, str], step_name: str) -> dict[str, Any]:
@@ -58,6 +63,45 @@ def run_command(command: list[str], cwd: Path, env: dict[str, str], step_name: s
         raise RuntimeError(f"{step_name} 执行失败，退出码 {completed.returncode}")
 
     payload = extract_json_from_stdout(completed.stdout)
+    return payload if payload is not None else {"success": True}
+
+
+def run_command_streaming(command: list[str], cwd: Path, env: dict[str, str], step_name: str) -> dict[str, Any]:
+    print(f"\n{'=' * 60}")
+    print(step_name)
+    print(f"{'=' * 60}")
+    print("command:", " ".join(command), flush=True)
+
+    step_env = env.copy()
+    step_env["PYTHONUNBUFFERED"] = "1"
+    started = time.monotonic()
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=step_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+
+    output_lines: list[str] = []
+    if process.stdout is not None:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            output_lines.append(line)
+
+    returncode = process.wait()
+    elapsed = time.monotonic() - started
+    print(f"[ORCH] step_done={step_name} returncode={returncode} elapsed_seconds={elapsed:.1f}", flush=True)
+
+    stdout = "".join(output_lines)
+    if returncode != 0:
+        raise RuntimeError(f"{step_name} failed with exit code {returncode}")
+
+    payload = extract_json_from_stdout(stdout)
     return payload if payload is not None else {"success": True}
 
 
@@ -401,6 +445,7 @@ def sync_erp_to_new_table(erp_payload: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     args = parse_args()
     env = os.environ.copy()
+    started = time.monotonic()
 
     if not ERP_MAIN.exists():
         raise FileNotFoundError(f"未找到 ERP 入口: {ERP_MAIN}")
@@ -414,19 +459,22 @@ def main() -> None:
     print(f"ERP_REPO_PATH: {ERP_ROOT}")
     print(f"SHARED_DIR: {SHARED_DIR}")
 
-    erp_result = run_command(
+    log_stage("stage=erp_start")
+    erp_result = run_command_streaming(
         build_erp_command(args),
         ERP_ROOT,
         build_step_env(env, "erp"),
         "步骤 1/3 运行 Equity Risk Premium",
     )
-    relative_result = run_command(
+    log_stage("stage=relative_start")
+    relative_result = run_command_streaming(
         build_relative_command(args),
         CSI_ROOT,
         build_step_env(env, "relative"),
         "步骤 2/3 运行 CSI300 Relative Index",
     )
 
+    log_stage("stage=load_shared_signals")
     if not ERP_SIGNAL.exists():
         raise FileNotFoundError(f"未找到共享接口: {ERP_SIGNAL}")
     if not RELATIVE_SIGNAL.exists():
@@ -434,11 +482,13 @@ def main() -> None:
 
     erp_payload = load_json(ERP_SIGNAL)
     relative_payload = load_json(RELATIVE_SIGNAL)
+    log_stage("stage=validate_shared_signals")
     validate_signal(erp_payload, "equity_risk_premium", ERP_SIGNAL)
     validate_signal(relative_payload, "csi300_relative_index", RELATIVE_SIGNAL)
     validate_latest_date_fresh(erp_payload, "ERP")
     validate_erp_history_continuity(erp_payload, args.erp_start_date)
 
+    log_stage("stage=build_merged_signal")
     merged_payload = build_merged_signal(erp_payload, relative_payload)
     save_json(MERGED_SIGNAL, merged_payload)
 
@@ -463,6 +513,7 @@ def main() -> None:
     }
 
     print(f"\n[OK] merged signal 已生成: {MERGED_SIGNAL}")
+    print(f"[ORCH] total_elapsed_seconds={time.monotonic() - started:.1f}", flush=True)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

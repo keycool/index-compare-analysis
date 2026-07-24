@@ -33,6 +33,10 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
         self.assertIn("steps.preflight.outputs.should_run == 'true'", self.workflow_text)
         self.assertIn("needs.run-master-orchestrator.outputs.should_run == 'true'", self.workflow_text)
 
+    def test_master_orchestrator_step_has_timeout(self):
+        self.assertIn("- name: Run master orchestrator", self.workflow_text)
+        self.assertIn("timeout-minutes: 20", self.workflow_text)
+
 
 if __name__ == "__main__":
     unittest.main()

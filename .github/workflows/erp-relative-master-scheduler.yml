@@ -271,6 +271,7 @@ jobs:
 
       - name: Run master orchestrator
         if: steps.preflight.outputs.should_run == 'true'
+        timeout-minutes: 20
         env:
           ERP_REPO_PATH: ${{ github.workspace }}/external/equity-risk-premium
           SHARED_DIR: ${{ github.workspace }}/shared

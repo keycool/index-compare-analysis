@@ -1,9 +1,11 @@
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -88,6 +90,54 @@ class ValueGrowthDirectionTest(unittest.TestCase):
         self.assertEqual(style_row["ratio"], "2.0000")
         self.assertEqual(style_row["percentile"], "100.0%")
         self.assertEqual(style_row["recommendation"], "强烈低配")
+
+    def test_feishu_payload_puts_equity_premium_before_relative_signals(self):
+        from scripts.feishu import FeishuWebhook
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            erp_path = Path(temp_dir) / "erp_signal.json"
+            hsi_path = Path(temp_dir) / "hsi_erp_signal.json"
+            erp_path.write_text(
+                json.dumps(
+                    {
+                        "latest_date": "2026-07-21",
+                        "records": [
+                            {"date": "2026-07-20", "equity_premium": 4.0},
+                            {"date": "2026-07-21", "equity_premium": 6.0},
+                        ],
+                        "latest_signal": {"date": "2026-07-21", "equity_premium": 6.0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hsi_path.write_text(
+                json.dumps({"date": "2026-07-21", "latest_value": 3.2, "percentile": 42.5}),
+                encoding="utf-8",
+            )
+            env = {
+                "INDEX_COMPARE_ERP_SIGNAL_PATH": str(erp_path),
+                "INDEX_COMPARE_HSI_ERP_SIGNAL_PATH": str(hsi_path),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                payload = FeishuWebhook()._build_post_payload(
+                    {
+                        "\u65e5\u671f": "2026-07-21",
+                        "500/300\u6bd4\u4ef7": 1.2,
+                        "500\u5206\u4f4d": 55.0,
+                        "500\u5efa\u8bae": "\u6807\u914d",
+                    },
+                    {},
+                    "\u6307\u6570\u6bd4\u4ef7\u5206\u6790",
+                )
+
+        content = payload["content"]["post"]["zh_cn"]["content"]
+        texts = [row[0]["text"] for row in content]
+        self.assertLess(
+            texts.index("\u80a1\u6743\u6ea2\u4ef7\u6307\u6570"),
+            texts.index("\u6bd4\u4ef7\u4fe1\u53f7"),
+        )
+        self.assertIn("\u6caa\u6df1300\u80a1\u6743\u6ea2\u4ef7\u6307\u6570 | 6.0000 | 100.0% | 2026-07-21", texts)
+        self.assertIn("\u6052\u751f\u6307\u6570\u80a1\u6743\u6ea2\u4ef7\u6307\u6570 | 3.2000 | 42.5% | 2026-07-21", texts)
 
 
 if __name__ == "__main__":

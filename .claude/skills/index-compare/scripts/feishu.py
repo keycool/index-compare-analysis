@@ -12,6 +12,7 @@ import logging
 import math
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -20,8 +21,11 @@ logger = logging.getLogger(__name__)
 RETRYABLE_ERROR_CODES = {11232}
 
 TITLE_INDEX_COMPARE = "\u6307\u6570\u6bd4\u4ef7\u5206\u6790"
+TITLE_EQUITY_PREMIUM = "\u80a1\u6743\u6ea2\u4ef7\u6307\u6570"
 TITLE_RELATIVE_SIGNALS = "\u6bd4\u4ef7\u4fe1\u53f7"
 DEFAULT_REC = "\u6807\u914d"
+ENV_ERP_SIGNAL_PATH = "INDEX_COMPARE_ERP_SIGNAL_PATH"
+ENV_HSI_ERP_SIGNAL_PATH = "INDEX_COMPARE_HSI_ERP_SIGNAL_PATH"
 
 KEY_DATE = "\u65e5\u671f"
 KEY_RATIO_500 = "500/300\u6bd4\u4ef7"
@@ -176,6 +180,22 @@ class FeishuWebhook:
         if self.webhook_keyword:
             rows.append([{"tag": "text", "text": self.webhook_keyword}])
 
+        for row in self._build_equity_premium_rows():
+            if row.get("section"):
+                rows.append([{"tag": "text", "text": str(row["section"])}])
+                continue
+            rows.append(
+                [
+                    {
+                        "tag": "text",
+                        "text": (
+                            f"{row['name']} | {row['value']} | "
+                            f"{row['percentile']} | {row['date']}"
+                        ),
+                    }
+                ]
+            )
+
         rows.append([{"tag": "text", "text": TITLE_RELATIVE_SIGNALS}])
         rows.append([{"tag": "text", "text": "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u5bf9\u5206\u5b50\u5efa\u8bae"}])
         for row in self._build_signal_rows(latest_data, conclusions):
@@ -215,7 +235,14 @@ class FeishuWebhook:
         if self.webhook_keyword:
             lines.append(self.webhook_keyword)
 
-        lines.extend([f"{title} ({date_str})", "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u5bf9\u5206\u5b50\u5efa\u8bae"])
+        lines.append(f"{title} ({date_str})")
+        for row in self._build_equity_premium_rows():
+            if row.get("section"):
+                lines.append(str(row["section"]))
+                continue
+            lines.append(f"{row['name']} | {row['value']} | {row['percentile']} | {row['date']}")
+
+        lines.extend([TITLE_RELATIVE_SIGNALS, "\u6307\u6807\u540d\u79f0 | \u6bd4\u4ef7\u503c | \u5206\u4f4d\u6570 | \u5bf9\u5206\u5b50\u5efa\u8bae"])
         for row in self._build_signal_rows(latest_data, conclusions):
             lines.append(
                 f"{row['name']} | {row['ratio']} | {row['percentile']} | {row['recommendation']}"
@@ -225,6 +252,94 @@ class FeishuWebhook:
             "msg_type": "text",
             "content": {"text": "\n".join(lines)},
         }
+
+    def _build_equity_premium_rows(self) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        a_share = self._build_ashare_erp_row()
+        hsi = self._build_hsi_erp_row()
+        if not a_share and not hsi:
+            return rows
+
+        rows.append({"section": TITLE_EQUITY_PREMIUM})
+        rows.append({"section": "\u6307\u6807\u540d\u79f0 | \u6307\u6570\u503c | \u5206\u4f4d\u6570 | \u65e5\u671f"})
+        if a_share:
+            rows.append(a_share)
+        if hsi:
+            rows.append(hsi)
+        return rows
+
+    def _build_ashare_erp_row(self) -> dict[str, str]:
+        payload = self._load_signal(ENV_ERP_SIGNAL_PATH, "erp_signal.json")
+        latest = payload.get("latest_signal") if isinstance(payload.get("latest_signal"), dict) else {}
+        records = payload.get("records") if isinstance(payload.get("records"), list) else []
+        if not latest and records and isinstance(records[-1], dict):
+            latest = records[-1]
+
+        value = self._first_number(latest, ("\u80a1\u6743\u6ea2\u4ef7\u6307\u6570", "equity_premium", "erp", "risk_premium", "latest_value"))
+        if value is None:
+            return {}
+
+        percentile = self._first_number(latest, ("\u5206\u4f4d\u6570", "percentile"))
+        if percentile is None:
+            percentile = self._percentile_from_records(records, value, ("\u80a1\u6743\u6ea2\u4ef7\u6307\u6570", "equity_premium", "erp", "risk_premium"))
+
+        date = self._first_text(latest, (KEY_DATE, "date", "latest_date")) or str(payload.get("latest_date") or "-")
+        return {
+            "name": "\u6caa\u6df1300\u80a1\u6743\u6ea2\u4ef7\u6307\u6570",
+            "value": self._fmt_num(value),
+            "percentile": self._fmt_pct(percentile),
+            "date": date,
+        }
+
+    def _build_hsi_erp_row(self) -> dict[str, str]:
+        payload = self._load_signal(ENV_HSI_ERP_SIGNAL_PATH, "hsi_erp_signal.json")
+        value = self._first_number(payload, ("latest_value", "equity_premium", "hsi_erp", "\u80a1\u6743\u6ea2\u4ef7\u6307\u6570"))
+        if value is None:
+            return {}
+
+        return {
+            "name": "\u6052\u751f\u6307\u6570\u80a1\u6743\u6ea2\u4ef7\u6307\u6570",
+            "value": self._fmt_num(value),
+            "percentile": self._fmt_pct(self._first_number(payload, ("percentile", "\u5206\u4f4d\u6570"))),
+            "date": self._first_text(payload, (KEY_DATE, "date", "latest_date")) or "-",
+        }
+
+    def _load_signal(self, env_name: str, default_name: str) -> dict[str, Any]:
+        path_text = os.environ.get(env_name, "").strip()
+        path = Path(path_text) if path_text else self._default_shared_signal_path(default_name)
+        try:
+            if not path.exists():
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to load %s: %s", path, exc)
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _default_shared_signal_path(name: str) -> Path:
+        try:
+            return Path(__file__).resolve().parents[5] / "shared" / name
+        except IndexError:
+            return Path("shared") / name
+
+    @classmethod
+    def _percentile_from_records(
+        cls,
+        records: list[Any],
+        current_value: float,
+        keys: tuple[str, ...],
+    ) -> float | None:
+        values: list[float] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            value = cls._first_number(record, keys)
+            if value is not None:
+                values.append(value)
+        if not values:
+            return None
+        return sum(1 for value in values if value <= current_value) / len(values) * 100.0
 
     def _build_signal_rows(
         self,

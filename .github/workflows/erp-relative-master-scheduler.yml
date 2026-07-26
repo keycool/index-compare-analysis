@@ -60,14 +60,17 @@ jobs:
           import os
           import urllib.error
           import urllib.request
-          from datetime import datetime
+          from datetime import datetime, timedelta
           from zoneinfo import ZoneInfo
 
           event_name = "${{ github.event_name }}"
+          is_manual = event_name == "workflow_dispatch"
           output_path = os.environ["GITHUB_OUTPUT"]
           summary_path = os.environ["GITHUB_STEP_SUMMARY"]
-          shanghai_today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+          shanghai_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+          shanghai_today = shanghai_now.strftime("%Y%m%d")
           shanghai_today_text = f"{shanghai_today[:4]}-{shanghai_today[4:6]}-{shanghai_today[6:8]}"
+          preflight_window_start = (shanghai_now - timedelta(days=20)).strftime("%Y%m%d")
           min_all_a_rows = int(os.environ.get("MIN_ALL_A_DAILY_ROWS", "5000"))
 
           def write_output(key: str, value: str) -> None:
@@ -110,13 +113,22 @@ jobs:
 
           calendar_payload = tushare_call(
               "trade_cal",
-              {"exchange": "SSE", "start_date": shanghai_today, "end_date": shanghai_today},
+              {
+                  "exchange": "SSE",
+                  "start_date": preflight_window_start if is_manual else shanghai_today,
+                  "end_date": shanghai_today,
+              },
               "cal_date,is_open",
           )
           calendar_items = (((calendar_payload or {}).get("data") or {}).get("items")) or []
-          is_sse_trading_day = bool(calendar_items and str(calendar_items[0][1]) == "1")
+          open_dates = sorted(
+              str(item[0])
+              for item in calendar_items
+              if len(item) > 1 and str(item[1]) == "1"
+          )
+          is_sse_trading_day = shanghai_today in open_dates
 
-          if not is_sse_trading_day:
+          if not is_sse_trading_day and not is_manual:
               write_output("should_run", "false")
               write_output("reason", "not_sse_trading_day")
               write_output("latest_trade_date", "none")
@@ -133,11 +145,47 @@ jobs:
               ])
               raise SystemExit(0)
 
+          target_trade_date = shanghai_today
+          if is_manual:
+              latest_index_payload = tushare_call(
+                  "index_daily",
+                  {
+                      "ts_code": "000300.SH",
+                      "start_date": preflight_window_start,
+                      "end_date": shanghai_today,
+                  },
+                  "trade_date",
+              )
+              latest_index_items = (((latest_index_payload or {}).get("data") or {}).get("items")) or []
+              latest_index_dates = sorted({str(item[0]) for item in latest_index_items if item})
+              if latest_index_dates:
+                  target_trade_date = latest_index_dates[-1]
+              elif open_dates:
+                  target_trade_date = open_dates[-1]
+              else:
+                  write_output("should_run", "false")
+                  write_output("reason", "no_recent_trading_day")
+                  write_output("latest_trade_date", "none")
+                  write_output("deployed_latest_date", "not_checked")
+                  write_summary([
+                      "## Preflight check",
+                      "",
+                      f"- Event: `{event_name}`",
+                      f"- Shanghai date: `{shanghai_today_text}`",
+                      "- Decision: `skip`",
+                      "- Reason: `no_recent_trading_day`",
+                      "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
+                  ])
+                  raise SystemExit(0)
+          target_trade_date_text = (
+              f"{target_trade_date[:4]}-{target_trade_date[4:6]}-{target_trade_date[6:8]}"
+          )
+
           missing_index_codes = []
           for ts_code in required_index_codes:
               index_payload = tushare_call(
                   "index_daily",
-                  {"ts_code": ts_code, "trade_date": shanghai_today},
+                  {"ts_code": ts_code, "trade_date": target_trade_date},
                   "ts_code,trade_date",
               )
               index_items = (((index_payload or {}).get("data") or {}).get("items")) or []
@@ -146,7 +194,7 @@ jobs:
 
           all_a_payload = tushare_call(
               "daily",
-              {"trade_date": shanghai_today},
+              {"trade_date": target_trade_date},
               "ts_code,trade_date",
           )
           all_a_items = (((all_a_payload or {}).get("data") or {}).get("items")) or []
@@ -162,14 +210,15 @@ jobs:
               reason = ",".join(missing_reasons)
               write_output("should_run", "false")
               write_output("reason", reason)
-              write_output("latest_trade_date", shanghai_today_text if not missing_index_codes else "none")
+              write_output("latest_trade_date", target_trade_date_text if not missing_index_codes else "none")
               write_output("deployed_latest_date", "not_checked")
               write_summary([
                   "## Preflight check",
                   "",
                   f"- Event: `{event_name}`",
                   f"- Shanghai date: `{shanghai_today_text}`",
-                  "- SSE trading day: `true`",
+                  f"- SSE trading day: `{'true' if is_sse_trading_day else 'false'}`",
+                  f"- Target trade date: `{target_trade_date_text}`",
                   f"- Required index_daily codes: `{', '.join(required_index_codes)}`",
                   f"- Missing index_daily codes: `{', '.join(missing_index_codes) or '-'}`",
                   f"- All-A daily rows: `{all_a_daily_rows}`",
@@ -180,7 +229,7 @@ jobs:
               ])
               raise SystemExit(0)
 
-          latest_trade_date_raw = shanghai_today
+          latest_trade_date_raw = target_trade_date
           latest_trade_date = f"{latest_trade_date_raw[:4]}-{latest_trade_date_raw[4:6]}-{latest_trade_date_raw[6:8]}"
 
           deployed_latest_date = ""
@@ -203,7 +252,9 @@ jobs:
 
           should_run = True
           reason = "new_data_detected"
-          if deployed_latest_date and deployed_latest_date >= latest_trade_date:
+          if is_manual:
+              reason = "manual_redeploy_existing_data"
+          elif deployed_latest_date and deployed_latest_date >= latest_trade_date:
               should_run = False
               reason = "no_new_tushare_data"
           elif fetch_error:
@@ -219,7 +270,8 @@ jobs:
               "",
               f"- Event: `{event_name}`",
               f"- Shanghai date: `{shanghai_today_text}`",
-              "- SSE trading day: `true`",
+              f"- SSE trading day: `{'true' if is_sse_trading_day else 'false'}`",
+              f"- Target trade date: `{target_trade_date_text}`",
               f"- Required index_daily codes: `{', '.join(required_index_codes)}`",
               "- Missing index_daily codes: `-`",
               f"- All-A daily rows: `{all_a_daily_rows}`",

@@ -34,6 +34,13 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
         self.assertIn('all_a_daily_rows >= min_all_a_rows', self.workflow_text)
         self.assertNotIn('reason", "non_schedule_event"', self.workflow_text)
 
+    def test_manual_dispatch_can_redeploy_latest_complete_trading_day(self):
+        self.assertIn('is_manual = event_name == "workflow_dispatch"', self.workflow_text)
+        self.assertIn('"start_date": preflight_window_start', self.workflow_text)
+        self.assertIn("target_trade_date = latest_index_dates[-1]", self.workflow_text)
+        self.assertIn('reason = "manual_redeploy_existing_data"', self.workflow_text)
+        self.assertIn('f"- Target trade date: `{target_trade_date_text}`"', self.workflow_text)
+
     def test_schedule_skip_blocks_calculation_and_deploy(self):
         self.assertIn('write_output("should_run", "false")', self.workflow_text)
         self.assertIn("formal calculation, web data update, and Vercel deploy are skipped", self.workflow_text)

@@ -60,6 +60,14 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
         self.assertIn("steps.preflight.outputs.should_run == 'true'", self.workflow_text)
         self.assertIn("needs.run-master-orchestrator.outputs.should_run == 'true'", self.workflow_text)
 
+    def test_vercel_deploy_verifies_canonical_domain(self):
+        self.assertIn("VERCEL_CANONICAL_HOST: index-compare-analysis.vercel.app", self.workflow_text)
+        self.assertIn("VERCEL_CANONICAL_URL: https://index-compare-analysis.vercel.app", self.workflow_text)
+        self.assertIn("npm install --global vercel@50.28.0", self.workflow_text)
+        self.assertIn('vercel alias set "$DEPLOY_URL" "$VERCEL_CANONICAL_HOST"', self.workflow_text)
+        self.assertIn('curl -sS -o /tmp/vercel-index.html -w "%{http_code}" "$VERCEL_CANONICAL_URL/"', self.workflow_text)
+        self.assertIn('curl -fsS "$VERCEL_CANONICAL_URL/data/merged_signal.json"', self.workflow_text)
+
     def test_master_orchestrator_step_has_timeout(self):
         self.assertIn("- name: Run master orchestrator", self.workflow_text)
         self.assertIn("timeout-minutes: 20", self.workflow_text)

@@ -850,10 +850,17 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          VERCEL_CANONICAL_HOST: index-compare-analysis.vercel.app
+          VERCEL_CANONICAL_URL: https://index-compare-analysis.vercel.app
         run: |
           set -euo pipefail
 
-          npm install --global vercel@latest
+          if [[ -z "${VERCEL_TOKEN:-}" || -z "${VERCEL_ORG_ID:-}" || -z "${VERCEL_PROJECT_ID:-}" ]]; then
+            echo "::error::VERCEL_TOKEN, VERCEL_ORG_ID, and VERCEL_PROJECT_ID are required"
+            exit 1
+          fi
+
+          npm install --global vercel@50.28.0
 
           mkdir -p site/.vercel
           cat > site/.vercel/project.json <<EOF
@@ -864,12 +871,35 @@ jobs:
           EOF
 
           cd site
-          DEPLOY_URL="$(vercel deploy --prod --yes --token "$VERCEL_TOKEN")"
+          DEPLOY_OUTPUT="$(vercel deploy --prod --yes --token "$VERCEL_TOKEN")"
+          echo "$DEPLOY_OUTPUT"
+          DEPLOY_URL="$(echo "$DEPLOY_OUTPUT" | tail -n 1)"
           echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+
+          vercel alias set "$DEPLOY_URL" "$VERCEL_CANONICAL_HOST" --token "$VERCEL_TOKEN"
+
+          STATUS_CODE=""
+          for attempt in 1 2 3 4 5 6; do
+            STATUS_CODE="$(curl -sS -o /tmp/vercel-index.html -w "%{http_code}" "$VERCEL_CANONICAL_URL/")"
+            if [[ "$STATUS_CODE" = "200" ]]; then
+              break
+            fi
+            echo "[VERCEL] Canonical URL returned $STATUS_CODE; retry $attempt/6"
+            sleep 10
+          done
+          if [[ "$STATUS_CODE" != "200" ]]; then
+            echo "::error::Vercel canonical URL $VERCEL_CANONICAL_URL returned $STATUS_CODE after deploy"
+            exit 1
+          fi
+
+          curl -fsS "$VERCEL_CANONICAL_URL/data/merged_signal.json" -o /tmp/vercel-merged-signal.json
           echo "## Vercel deploy" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Deploy URL: $DEPLOY_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Canonical URL: $VERCEL_CANONICAL_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Canonical status: $STATUS_CODE" >> "$GITHUB_STEP_SUMMARY"
           echo "[VERCEL] Deploy URL: $DEPLOY_URL"
+          echo "[VERCEL] Canonical URL: $VERCEL_CANONICAL_URL"
 
       - name: Upload Pages artifact
         if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'

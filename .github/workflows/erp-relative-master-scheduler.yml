@@ -417,7 +417,8 @@ jobs:
           CSI_FEISHU_APP_TOKEN: ${{ secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
           CSI_FEISHU_TABLE_ID: ${{ secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
 
-          REQUIRE_BITABLE_SYNC: "true"
+          DISABLE_BITABLE_SYNC: "true"
+          REQUIRE_BITABLE_SYNC: "false"
           FORCE_RELATIVE: ${{ github.event.inputs.force_relative || 'false' }}
           ERP_START_DATE: ${{ github.event.inputs.erp_start_date || '2026-02-14' }}
           ERP_END_DATE: ${{ github.event.inputs.erp_end_date || '' }}
@@ -906,6 +907,20 @@ jobs:
         uses: actions/upload-pages-artifact@v4
         with:
           path: site
+
+      - name: Optional archive ERP signal to legacy Feishu table
+        if: always() && steps.preflight.outputs.should_run == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          ERP_LEGACY_FEISHU_APP_TOKEN: ${{ secrets.ERP_LEGACY_FEISHU_APP_TOKEN || 'KfaSbpRdiaYFdWsCTRfcWpocnbd' }}
+          ERP_LEGACY_FEISHU_TABLE_ID: ${{ secrets.ERP_LEGACY_FEISHU_TABLE_ID || 'tblRAs2p4woXE1ig' }}
+          ERP_ARCHIVE_SIGNAL_PATH: shared/erp_signal.json
+          ERP_ARCHIVE_LOOKBACK_DAYS: "120"
+          ERP_ARCHIVE_REQUIRE_SUCCESS: "false"
+        run: python orchestrator/sync_erp_signal_to_feishu.py
 
   deploy-pages:
     if: success() && needs.run-master-orchestrator.result == 'success' && needs.run-master-orchestrator.outputs.should_run == 'true'

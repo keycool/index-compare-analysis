@@ -728,8 +728,14 @@ def run_pipeline(force_update: bool = False) -> Dict[str, Any]:
         "created": 0, "updated": 0, "errors": [],
     }
 
-    if excel_saved:
+    disable_bitable_sync = str(os.environ.get("DISABLE_BITABLE_SYNC", "false")).lower() in {
+        "1", "true", "yes", "y", "on",
+    }
+
+    if excel_saved and not disable_bitable_sync:
         bitable_result = sync_to_feishu_bitable(export_df)
+    elif disable_bitable_sync:
+        bitable_result["message"] = "disabled_by_workflow_final_archive"
 
     print_terminal_summary(latest_row, conclusions, report_file)
 

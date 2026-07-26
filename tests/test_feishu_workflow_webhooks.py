@@ -21,6 +21,18 @@ class FeishuWorkflowWebhookTest(unittest.TestCase):
         self.assertNotIn("CSI_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL", relative_text)
         self.assertNotIn("CSI_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET", relative_text)
 
+    def test_relative_workflow_archives_legacy_erp_table_without_blocking(self):
+        relative_text = RELATIVE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn('DISABLE_BITABLE_SYNC: "true"', relative_text)
+        self.assertIn('REQUIRE_BITABLE_SYNC: "false"', relative_text)
+        self.assertIn("Optional archive ERP signal to legacy Feishu table", relative_text)
+        self.assertIn("continue-on-error: true", relative_text)
+        self.assertIn("ERP_LEGACY_FEISHU_APP_TOKEN: ${{ secrets.ERP_LEGACY_FEISHU_APP_TOKEN || 'KfaSbpRdiaYFdWsCTRfcWpocnbd' }}", relative_text)
+        self.assertIn("ERP_LEGACY_FEISHU_TABLE_ID: ${{ secrets.ERP_LEGACY_FEISHU_TABLE_ID || 'tblRAs2p4woXE1ig' }}", relative_text)
+        self.assertIn("ERP_ARCHIVE_REQUIRE_SUCCESS: \"false\"", relative_text)
+        self.assertIn("python orchestrator/sync_erp_signal_to_feishu.py", relative_text)
+
 
 if __name__ == "__main__":
     unittest.main()

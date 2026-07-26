@@ -22,6 +22,8 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", self.workflow_text)
 
     def test_schedule_preflight_requires_trading_day_and_complete_tushare_data(self):
+        self.assertIn("LATEST_SIGNAL_URL: https://keycool.github.io/index-compare-analysis/data/merged_signal.json", self.workflow_text)
+        self.assertNotIn("LATEST_SIGNAL_URL: https://index-compare-analysis.vercel.app/data/merged_signal.json", self.workflow_text)
         self.assertIn('MIN_ALL_A_DAILY_ROWS: "5000"', self.workflow_text)
         self.assertIn('REQUIRED_INDEX_DAILY_CODES: "000300.SH,000905.SH,000852.SH,399006.SZ,000016.SH,000688.SH,000919.CSI,000918.CSI"', self.workflow_text)
         self.assertIn('REQUIRED_GLOBAL_INDEX_CODES: "HSI,HKTECH"', self.workflow_text)

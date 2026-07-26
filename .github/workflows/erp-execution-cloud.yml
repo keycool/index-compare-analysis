@@ -15,7 +15,7 @@ on:
       merged_signal_url:
         description: "Merged signal JSON URL produced by erp-relative-master-scheduler"
         required: false
-        default: "https://index-compare-analysis.vercel.app/data/merged_signal.json"
+        default: "https://keycool.github.io/index-compare-analysis/data/merged_signal.json"
         type: string
       execution_mode:
         description: "rebalance blocks stale holdings; research keeps stale holdings as warnings"
@@ -80,7 +80,7 @@ jobs:
 
       - name: Download latest merged signal
         env:
-          ERP_MERGED_SIGNAL_URL: ${{ inputs.merged_signal_url || 'https://index-compare-analysis.vercel.app/data/merged_signal.json' }}
+          ERP_MERGED_SIGNAL_URL: ${{ inputs.merged_signal_url || 'https://keycool.github.io/index-compare-analysis/data/merged_signal.json' }}
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           python - <<'PY'

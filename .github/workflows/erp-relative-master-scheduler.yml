@@ -51,7 +51,7 @@ jobs:
         id: preflight
         env:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-          LATEST_SIGNAL_URL: https://index-compare-analysis.vercel.app/data/merged_signal.json
+          LATEST_SIGNAL_URL: https://keycool.github.io/index-compare-analysis/data/merged_signal.json
           MIN_ALL_A_DAILY_ROWS: "5000"
           REQUIRED_INDEX_DAILY_CODES: "000300.SH,000905.SH,000852.SH,399006.SZ,000016.SH,000688.SH,000919.CSI,000918.CSI"
           REQUIRED_GLOBAL_INDEX_CODES: "HSI,HKTECH"

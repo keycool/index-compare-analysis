@@ -30,6 +30,8 @@ class ErpExecutionWorkflowDefaultsTest(unittest.TestCase):
     def test_monthly_draft_requires_previous_trading_day_signal(self):
         text = self.workflow_text
 
+        self.assertIn("https://keycool.github.io/index-compare-analysis/data/merged_signal.json", text)
+        self.assertNotIn("https://index-compare-analysis.vercel.app/data/merged_signal.json", text)
         self.assertIn("TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}", text)
         self.assertIn('"trade_cal"', text)
         self.assertIn("required_signal_date", text)

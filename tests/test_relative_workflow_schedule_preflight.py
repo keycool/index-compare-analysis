@@ -11,20 +11,28 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
     def setUpClass(cls):
         cls.workflow_text = WORKFLOW.read_text(encoding="utf-8")
 
-    def test_schedule_runs_weekdays_at_23_shanghai(self):
-        self.assertIn('# 15:00 UTC = 23:00 Asia/Shanghai, Monday-Friday.', self.workflow_text)
-        self.assertIn('- cron: "0 15 * * 1-5"', self.workflow_text)
+    def test_schedule_runs_weekdays_at_2318_shanghai(self):
+        self.assertIn('# 15:18 UTC = 23:18 Asia/Shanghai, Monday-Friday.', self.workflow_text)
+        self.assertIn('- cron: "18 15 * * 1-5"', self.workflow_text)
         self.assertNotIn('- cron: "0 12 * * *"', self.workflow_text)
+        self.assertNotIn('- cron: "0 15 * * 1-5"', self.workflow_text)
+
+    def test_production_workflow_does_not_run_on_push_or_cancel_schedule(self):
+        self.assertNotIn("push:", self.workflow_text)
+        self.assertIn("cancel-in-progress: false", self.workflow_text)
 
     def test_schedule_preflight_requires_trading_day_and_complete_tushare_data(self):
         self.assertIn('MIN_ALL_A_DAILY_ROWS: "5000"', self.workflow_text)
+        self.assertIn('REQUIRED_INDEX_DAILY_CODES: "000300.SH,000905.SH,000852.SH,399006.SZ,000016.SH,000688.SH,000919.CSI,000918.CSI"', self.workflow_text)
         self.assertIn('"api_name": api_name', self.workflow_text)
         self.assertIn('"trade_cal"', self.workflow_text)
         self.assertIn('"exchange": "SSE"', self.workflow_text)
         self.assertIn('"index_daily"', self.workflow_text)
-        self.assertIn('"ts_code": "000300.SH"', self.workflow_text)
+        self.assertIn('"ts_code": ts_code', self.workflow_text)
+        self.assertIn("missing_index_codes", self.workflow_text)
         self.assertIn('"daily"', self.workflow_text)
         self.assertIn('all_a_daily_rows >= min_all_a_rows', self.workflow_text)
+        self.assertNotIn('reason", "non_schedule_event"', self.workflow_text)
 
     def test_schedule_skip_blocks_calculation_and_deploy(self):
         self.assertIn('write_output("should_run", "false")', self.workflow_text)

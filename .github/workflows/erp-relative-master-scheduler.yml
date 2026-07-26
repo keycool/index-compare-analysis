@@ -1,13 +1,10 @@
 name: erp-relative-master-scheduler
 
 on:
-  push:
-    branches:
-      - master
   schedule:
     # GitHub cron uses UTC:
-    # 15:00 UTC = 23:00 Asia/Shanghai, Monday-Friday.
-    - cron: "0 15 * * 1-5"
+    # 15:18 UTC = 23:18 Asia/Shanghai, Monday-Friday.
+    - cron: "18 15 * * 1-5"
   workflow_dispatch:
     inputs:
       force_relative:
@@ -35,7 +32,7 @@ env:
 
 concurrency:
   group: erp-relative-master-scheduler
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   run-master-orchestrator:
@@ -56,6 +53,7 @@ jobs:
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
           LATEST_SIGNAL_URL: https://index-compare-analysis.vercel.app/data/merged_signal.json
           MIN_ALL_A_DAILY_ROWS: "5000"
+          REQUIRED_INDEX_DAILY_CODES: "000300.SH,000905.SH,000852.SH,399006.SZ,000016.SH,000688.SH,000919.CSI,000918.CSI"
         run: |
           python - << 'PY'
           import json
@@ -80,22 +78,16 @@ jobs:
               with open(summary_path, "a", encoding="utf-8") as f:
                   f.write("\n".join(lines) + "\n")
 
-          if event_name != "schedule":
-              write_output("should_run", "true")
-              write_output("reason", "non_schedule_event")
-              write_summary([
-                  "## Preflight check",
-                  "",
-                  f"- Event: `{event_name}`",
-                  "- Result: bypass freshness check and continue.",
-              ])
-              raise SystemExit(0)
-
           token = os.environ.get("TUSHARE_TOKEN", "").strip()
           if not token:
-              raise SystemExit("TUSHARE_TOKEN is required for schedule freshness check")
+              raise SystemExit("TUSHARE_TOKEN is required for Tushare preflight")
 
           latest_signal_url = os.environ.get("LATEST_SIGNAL_URL", "").strip()
+          required_index_codes = [
+              code.strip()
+              for code in os.environ.get("REQUIRED_INDEX_DAILY_CODES", "").split(",")
+              if code.strip()
+          ]
 
           def tushare_call(api_name: str, params: dict, fields: str) -> dict:
               req_body = json.dumps({
@@ -141,13 +133,16 @@ jobs:
               ])
               raise SystemExit(0)
 
-          index_payload = tushare_call(
-              "index_daily",
-              {"ts_code": "000300.SH", "trade_date": shanghai_today},
-              "trade_date",
-          )
-          index_items = (((index_payload or {}).get("data") or {}).get("items")) or []
-          has_today_index_data = bool(index_items)
+          missing_index_codes = []
+          for ts_code in required_index_codes:
+              index_payload = tushare_call(
+                  "index_daily",
+                  {"ts_code": ts_code, "trade_date": shanghai_today},
+                  "ts_code,trade_date",
+              )
+              index_items = (((index_payload or {}).get("data") or {}).get("items")) or []
+              if not index_items:
+                  missing_index_codes.append(ts_code)
 
           all_a_payload = tushare_call(
               "daily",
@@ -157,17 +152,17 @@ jobs:
           all_a_items = (((all_a_payload or {}).get("data") or {}).get("items")) or []
           all_a_daily_rows = len(all_a_items)
 
-          data_ready = has_today_index_data and all_a_daily_rows >= min_all_a_rows
+          data_ready = not missing_index_codes and all_a_daily_rows >= min_all_a_rows
           if not data_ready:
               missing_reasons = []
-              if not has_today_index_data:
-                  missing_reasons.append("missing_hs300_index_daily")
+              if missing_index_codes:
+                  missing_reasons.append("missing_index_daily:" + ",".join(missing_index_codes))
               if all_a_daily_rows < min_all_a_rows:
                   missing_reasons.append(f"all_a_daily_rows_below_{min_all_a_rows}")
               reason = ",".join(missing_reasons)
               write_output("should_run", "false")
               write_output("reason", reason)
-              write_output("latest_trade_date", shanghai_today_text if has_today_index_data else "none")
+              write_output("latest_trade_date", shanghai_today_text if not missing_index_codes else "none")
               write_output("deployed_latest_date", "not_checked")
               write_summary([
                   "## Preflight check",
@@ -175,7 +170,8 @@ jobs:
                   f"- Event: `{event_name}`",
                   f"- Shanghai date: `{shanghai_today_text}`",
                   "- SSE trading day: `true`",
-                  f"- HS300 index_daily ready: `{has_today_index_data}`",
+                  f"- Required index_daily codes: `{', '.join(required_index_codes)}`",
+                  f"- Missing index_daily codes: `{', '.join(missing_index_codes) or '-'}`",
                   f"- All-A daily rows: `{all_a_daily_rows}`",
                   f"- All-A minimum rows: `{min_all_a_rows}`",
                   "- Decision: `skip`",
@@ -224,7 +220,8 @@ jobs:
               f"- Event: `{event_name}`",
               f"- Shanghai date: `{shanghai_today_text}`",
               "- SSE trading day: `true`",
-              "- HS300 index_daily ready: `true`",
+              f"- Required index_daily codes: `{', '.join(required_index_codes)}`",
+              "- Missing index_daily codes: `-`",
               f"- All-A daily rows: `{all_a_daily_rows}`",
               f"- All-A minimum rows: `{min_all_a_rows}`",
               f"- Tushare latest trade date: `{latest_trade_date}`",

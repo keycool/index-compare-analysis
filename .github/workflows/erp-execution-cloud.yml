@@ -2,9 +2,9 @@ name: erp-execution-cloud
 
 on:
   schedule:
-    # 09:00 Asia/Shanghai on the 13th and 28th of every month.
-    - cron: "0 1 13 * *"
-    - cron: "0 1 28 * *"
+    # 09:13 Asia/Shanghai on the 13th and 28th of every month.
+    - cron: "13 1 13 * *"
+    - cron: "13 1 28 * *"
   workflow_dispatch:
     inputs:
       push_summary:
@@ -81,21 +81,60 @@ jobs:
       - name: Download latest merged signal
         env:
           ERP_MERGED_SIGNAL_URL: ${{ inputs.merged_signal_url || 'https://index-compare-analysis.vercel.app/data/merged_signal.json' }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           python - <<'PY'
           import json
           import os
           import urllib.error
           import urllib.request
+          from datetime import datetime, timedelta
           from pathlib import Path
+          from zoneinfo import ZoneInfo
 
           url = os.environ["ERP_MERGED_SIGNAL_URL"].strip()
           summary_lines = ["## ERP execution signal source", ""]
           if not url:
-              summary_lines.append("- Merged signal URL: `<empty>`")
-              summary_lines.append("- Source: `Feishu OpenAPI fallback`")
-              Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
-              raise SystemExit(0)
+              raise SystemExit("ERP_MERGED_SIGNAL_URL is required; refusing unverified Feishu fallback for pushed ERP summaries")
+
+          def tushare_call(api_name: str, params: dict, fields: str) -> dict:
+              token = os.environ.get("TUSHARE_TOKEN", "").strip()
+              if not token:
+                  raise SystemExit("TUSHARE_TOKEN is required for ERP previous-trading-day gate")
+              req_body = json.dumps({
+                  "api_name": api_name,
+                  "token": token,
+                  "params": params,
+                  "fields": fields,
+              }).encode("utf-8")
+              req = urllib.request.Request(
+                  "https://api.tushare.pro",
+                  data=req_body,
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=45) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+              if payload.get("code") not in (0, None):
+                  raise RuntimeError(f"Tushare {api_name} failed: {payload}")
+              return payload
+
+          today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+          start_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=45)).strftime("%Y%m%d")
+          cal_payload = tushare_call(
+              "trade_cal",
+              {"exchange": "SSE", "start_date": start_date, "end_date": today},
+              "cal_date,is_open",
+          )
+          trade_dates = [
+              str(item[0])
+              for item in (((cal_payload or {}).get("data") or {}).get("items") or [])
+              if str(item[1]) == "1" and str(item[0]) < today
+          ]
+          if not trade_dates:
+              raise SystemExit("Unable to determine previous SSE trading day")
+          required_signal_raw = max(trade_dates)
+          required_signal_date = f"{required_signal_raw[:4]}-{required_signal_raw[4:6]}-{required_signal_raw[6:8]}"
 
           try:
               with urllib.request.urlopen(url, timeout=30) as response:
@@ -108,6 +147,12 @@ jobs:
                   raise ValueError("Merged signal missing ERP records")
               if not relative.get("records"):
                   raise ValueError("Merged signal missing relative records")
+              erp_latest = str(erp.get("latest_date") or "")
+              relative_latest = str(relative.get("latest_date") or "")
+              if erp_latest < required_signal_date:
+                  raise ValueError(f"ERP latest_date {erp_latest or '<missing>'} is before required previous trading day {required_signal_date}")
+              if relative_latest < required_signal_date:
+                  raise ValueError(f"Relative latest_date {relative_latest or '<missing>'} is before required previous trading day {required_signal_date}")
 
               temp_dir = Path(os.environ["RUNNER_TEMP"])
               erp_path = temp_dir / "erp_signal.json"
@@ -122,18 +167,14 @@ jobs:
               summary_lines.extend([
                   f"- Merged signal URL: `{url}`",
                   "- Source: `merged_signal.json`",
+                  f"- Required previous trading day: `{required_signal_date}`",
                   f"- ERP latest date: `{erp.get('latest_date', '-')}`",
                   f"- Relative latest date: `{relative.get('latest_date', '-')}`",
                   f"- ERP records: `{len(erp.get('records', []))}`",
                   f"- Relative records: `{len(relative.get('records', []))}`",
               ])
           except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
-              print(f"::warning::Merged signal unavailable; falling back to Feishu OpenAPI: {exc}")
-              summary_lines.extend([
-                  f"- Merged signal URL: `{url}`",
-                  "- Source: `Feishu OpenAPI fallback`",
-                  f"- Fallback reason: `{exc}`",
-              ])
+              raise SystemExit(f"Merged signal failed ERP previous-trading-day gate; refusing to push ERP draft: {exc}")
 
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
               summary.write("\n".join(summary_lines) + "\n")

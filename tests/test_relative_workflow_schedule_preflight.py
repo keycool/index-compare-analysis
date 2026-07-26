@@ -24,12 +24,15 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
     def test_schedule_preflight_requires_trading_day_and_complete_tushare_data(self):
         self.assertIn('MIN_ALL_A_DAILY_ROWS: "5000"', self.workflow_text)
         self.assertIn('REQUIRED_INDEX_DAILY_CODES: "000300.SH,000905.SH,000852.SH,399006.SZ,000016.SH,000688.SH,000919.CSI,000918.CSI"', self.workflow_text)
+        self.assertIn('REQUIRED_GLOBAL_INDEX_CODES: "HSI,HKTECH"', self.workflow_text)
         self.assertIn('"api_name": api_name', self.workflow_text)
         self.assertIn('"trade_cal"', self.workflow_text)
         self.assertIn('"exchange": "SSE"', self.workflow_text)
         self.assertIn('"index_daily"', self.workflow_text)
+        self.assertIn('"index_global"', self.workflow_text)
         self.assertIn('"ts_code": ts_code', self.workflow_text)
         self.assertIn("missing_index_codes", self.workflow_text)
+        self.assertIn("missing_global_codes", self.workflow_text)
         self.assertIn('"daily"', self.workflow_text)
         self.assertIn('all_a_daily_rows >= min_all_a_rows', self.workflow_text)
         self.assertNotIn('reason", "non_schedule_event"', self.workflow_text)
@@ -40,6 +43,13 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
         self.assertIn("target_trade_date = latest_index_dates[-1]", self.workflow_text)
         self.assertIn('reason = "manual_redeploy_existing_data"', self.workflow_text)
         self.assertIn('f"- Target trade date: `{target_trade_date_text}`"', self.workflow_text)
+
+    def test_schedule_preflight_retries_when_data_is_not_ready(self):
+        self.assertIn('PREFLIGHT_RETRY_ATTEMPTS: "3"', self.workflow_text)
+        self.assertIn('PREFLIGHT_RETRY_SLEEP_SECONDS: "600"', self.workflow_text)
+        self.assertIn("attempts = 1 if is_manual else max(1, retry_attempts)", self.workflow_text)
+        self.assertIn("time.sleep(retry_sleep_seconds)", self.workflow_text)
+        self.assertIn("no_new_tushare_data", self.workflow_text)
 
     def test_schedule_skip_blocks_calculation_and_deploy(self):
         self.assertIn('write_output("should_run", "false")', self.workflow_text)

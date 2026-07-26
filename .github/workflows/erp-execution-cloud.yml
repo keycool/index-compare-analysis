@@ -94,6 +94,9 @@ jobs:
 
           url = os.environ["ERP_MERGED_SIGNAL_URL"].strip()
           summary_lines = ["## ERP execution signal source", ""]
+          event_name = "${{ github.event_name }}"
+          push_summary = os.environ.get("ERP_EXECUTION_PUSH_SUMMARY") == "true"
+          strict_signal_gate = event_name == "schedule" or push_summary
           if not url:
               raise SystemExit("ERP_MERGED_SIGNAL_URL is required; refusing unverified Feishu fallback for pushed ERP summaries")
 
@@ -119,22 +122,54 @@ jobs:
                   raise RuntimeError(f"Tushare {api_name} failed: {payload}")
               return payload
 
-          today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
-          start_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=45)).strftime("%Y%m%d")
-          cal_payload = tushare_call(
-              "trade_cal",
-              {"exchange": "SSE", "start_date": start_date, "end_date": today},
-              "cal_date,is_open",
-          )
-          trade_dates = [
-              str(item[0])
-              for item in (((cal_payload or {}).get("data") or {}).get("items") or [])
-              if str(item[1]) == "1" and str(item[0]) < today
-          ]
-          if not trade_dates:
-              raise SystemExit("Unable to determine previous SSE trading day")
-          required_signal_raw = max(trade_dates)
-          required_signal_date = f"{required_signal_raw[:4]}-{required_signal_raw[4:6]}-{required_signal_raw[6:8]}"
+          shanghai_today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+          required_signal_date = None
+          if strict_signal_gate:
+              today = shanghai_today.strftime("%Y%m%d")
+              start_date = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=45)).strftime("%Y%m%d")
+              cal_payload = tushare_call(
+                  "trade_cal",
+                  {"exchange": "SSE", "start_date": start_date, "end_date": today},
+                  "cal_date,is_open",
+              )
+              trade_dates = [
+                  str(item[0])
+                  for item in (((cal_payload or {}).get("data") or {}).get("items") or [])
+                  if str(item[1]) == "1" and str(item[0]) < today
+              ]
+              if not trade_dates:
+                  raise SystemExit("Unable to determine previous SSE trading day")
+              required_signal_raw = max(trade_dates)
+              required_signal_date = datetime.strptime(required_signal_raw, "%Y%m%d").date()
+
+          def parse_signal_date(value, label: str):
+              raw = str(value or "").strip()
+              if not raw:
+                  raise ValueError(f"{label} is missing")
+              candidate = raw[:10]
+              try:
+                  if len(candidate) >= 10 and candidate[4] == "-" and candidate[7] == "-":
+                      parsed = datetime.strptime(candidate, "%Y-%m-%d").date()
+                  elif len(raw) >= 8 and raw[:8].isdigit():
+                      parsed = datetime.strptime(raw[:8], "%Y%m%d").date()
+                  else:
+                      raise ValueError
+              except ValueError as exc:
+                  raise ValueError(f"{label} {raw!r} is not a valid date") from exc
+              if parsed > shanghai_today:
+                  raise ValueError(f"{label} {parsed.isoformat()} is after today {shanghai_today.isoformat()}")
+              return parsed
+
+          def max_record_date(records: list[dict], label: str):
+              dates = []
+              for record in records:
+                  for key in ("date", "日期", "trade_date"):
+                      if record.get(key):
+                          dates.append(parse_signal_date(record.get(key), f"{label} record {key}"))
+                          break
+              if not dates:
+                  raise ValueError(f"{label} records do not contain parseable dates")
+              return max(dates)
 
           try:
               with urllib.request.urlopen(url, timeout=30) as response:
@@ -147,12 +182,22 @@ jobs:
                   raise ValueError("Merged signal missing ERP records")
               if not relative.get("records"):
                   raise ValueError("Merged signal missing relative records")
-              erp_latest = str(erp.get("latest_date") or "")
-              relative_latest = str(relative.get("latest_date") or "")
-              if erp_latest < required_signal_date:
-                  raise ValueError(f"ERP latest_date {erp_latest or '<missing>'} is before required previous trading day {required_signal_date}")
-              if relative_latest < required_signal_date:
-                  raise ValueError(f"Relative latest_date {relative_latest or '<missing>'} is before required previous trading day {required_signal_date}")
+              erp_latest = parse_signal_date(erp.get("latest_date"), "ERP latest_date")
+              relative_latest = parse_signal_date(relative.get("latest_date"), "Relative latest_date")
+              erp_record_max = max_record_date(erp.get("records", []), "ERP")
+              relative_record_max = max_record_date(relative.get("records", []), "Relative")
+              if erp_latest != erp_record_max:
+                  raise ValueError(f"ERP latest_date {erp_latest.isoformat()} does not match record max date {erp_record_max.isoformat()}")
+              if relative_latest != relative_record_max:
+                  raise ValueError(f"Relative latest_date {relative_latest.isoformat()} does not match record max date {relative_record_max.isoformat()}")
+              if strict_signal_gate and required_signal_date is not None:
+                  erp_age_days = (required_signal_date - erp_record_max).days
+                  if erp_age_days < 0:
+                      raise ValueError(f"ERP record max date {erp_record_max.isoformat()} is after required previous trading day {required_signal_date.isoformat()}")
+                  if erp_age_days > 14:
+                      raise ValueError(f"ERP record max date {erp_record_max.isoformat()} is stale: {erp_age_days} days > 14")
+                  if relative_record_max != required_signal_date:
+                      raise ValueError(f"Relative record max date {relative_record_max.isoformat()} must equal required previous trading day {required_signal_date.isoformat()}")
 
               temp_dir = Path(os.environ["RUNNER_TEMP"])
               erp_path = temp_dir / "erp_signal.json"
@@ -167,9 +212,12 @@ jobs:
               summary_lines.extend([
                   f"- Merged signal URL: `{url}`",
                   "- Source: `merged_signal.json`",
-                  f"- Required previous trading day: `{required_signal_date}`",
-                  f"- ERP latest date: `{erp.get('latest_date', '-')}`",
-                  f"- Relative latest date: `{relative.get('latest_date', '-')}`",
+                  f"- Strict signal gate: `{'true' if strict_signal_gate else 'false'}`",
+                  f"- Required previous trading day: `{required_signal_date.isoformat() if required_signal_date else 'not enforced'}`",
+                  f"- ERP latest date: `{erp_latest.isoformat()}`",
+                  f"- ERP record max date: `{erp_record_max.isoformat()}`",
+                  f"- Relative latest date: `{relative_latest.isoformat()}`",
+                  f"- Relative record max date: `{relative_record_max.isoformat()}`",
                   f"- ERP records: `{len(erp.get('records', []))}`",
                   f"- Relative records: `{len(relative.get('records', []))}`",
               ])

@@ -54,10 +54,14 @@ jobs:
           LATEST_SIGNAL_URL: https://index-compare-analysis.vercel.app/data/merged_signal.json
           MIN_ALL_A_DAILY_ROWS: "5000"
           REQUIRED_INDEX_DAILY_CODES: "000300.SH,000905.SH,000852.SH,399006.SZ,000016.SH,000688.SH,000919.CSI,000918.CSI"
+          REQUIRED_GLOBAL_INDEX_CODES: "HSI,HKTECH"
+          PREFLIGHT_RETRY_ATTEMPTS: "3"
+          PREFLIGHT_RETRY_SLEEP_SECONDS: "600"
         run: |
           python - << 'PY'
           import json
           import os
+          import time
           import urllib.error
           import urllib.request
           from datetime import datetime, timedelta
@@ -91,6 +95,13 @@ jobs:
               for code in os.environ.get("REQUIRED_INDEX_DAILY_CODES", "").split(",")
               if code.strip()
           ]
+          required_global_codes = [
+              code.strip()
+              for code in os.environ.get("REQUIRED_GLOBAL_INDEX_CODES", "").split(",")
+              if code.strip()
+          ]
+          retry_attempts = int(os.environ.get("PREFLIGHT_RETRY_ATTEMPTS", "3"))
+          retry_sleep_seconds = int(os.environ.get("PREFLIGHT_RETRY_SLEEP_SECONDS", "600"))
 
           def tushare_call(api_name: str, params: dict, fields: str) -> dict:
               req_body = json.dumps({
@@ -110,6 +121,66 @@ jobs:
               if payload.get("code") not in (0, None):
                   raise RuntimeError(f"Tushare {api_name} failed: {payload}")
               return payload
+
+          def fetch_deployed_latest_date() -> tuple[str, str]:
+              if not latest_signal_url:
+                  return "", ""
+              try:
+                  with urllib.request.urlopen(latest_signal_url, timeout=30) as resp:
+                      merged_payload = json.loads(resp.read().decode("utf-8"))
+                  components = (merged_payload or {}).get("components") or {}
+                  relative_component = components.get("relative") if isinstance(components, dict) else {}
+                  return str(
+                      (relative_component or {}).get("latest_date")
+                      or (merged_payload or {}).get("latest_date")
+                      or ""
+                  ), ""
+              except urllib.error.URLError as exc:
+                  return "", str(exc)
+              except Exception as exc:
+                  return "", str(exc)
+
+          def check_tushare_ready(trade_date: str) -> dict:
+              missing_index_codes = []
+              for ts_code in required_index_codes:
+                  index_payload = tushare_call(
+                      "index_daily",
+                      {"ts_code": ts_code, "trade_date": trade_date},
+                      "ts_code,trade_date",
+                  )
+                  index_items = (((index_payload or {}).get("data") or {}).get("items")) or []
+                  if not index_items:
+                      missing_index_codes.append(ts_code)
+
+              missing_global_codes = []
+              for ts_code in required_global_codes:
+                  global_payload = tushare_call(
+                      "index_global",
+                      {"ts_code": ts_code, "start_date": trade_date, "end_date": trade_date},
+                      "ts_code,trade_date",
+                  )
+                  global_items = (((global_payload or {}).get("data") or {}).get("items")) or []
+                  if not global_items:
+                      missing_global_codes.append(ts_code)
+
+              all_a_payload = tushare_call(
+                  "daily",
+                  {"trade_date": trade_date},
+                  "ts_code,trade_date",
+              )
+              all_a_items = (((all_a_payload or {}).get("data") or {}).get("items")) or []
+              all_a_daily_rows = len(all_a_items)
+              data_ready = (
+                  not missing_index_codes
+                  and not missing_global_codes
+                  and all_a_daily_rows >= min_all_a_rows
+              )
+              return {
+                  "data_ready": data_ready,
+                  "missing_index_codes": missing_index_codes,
+                  "missing_global_codes": missing_global_codes,
+                  "all_a_daily_rows": all_a_daily_rows,
+              }
 
           calendar_payload = tushare_call(
               "trade_cal",
@@ -181,30 +252,56 @@ jobs:
               f"{target_trade_date[:4]}-{target_trade_date[4:6]}-{target_trade_date[6:8]}"
           )
 
-          missing_index_codes = []
-          for ts_code in required_index_codes:
-              index_payload = tushare_call(
-                  "index_daily",
-                  {"ts_code": ts_code, "trade_date": target_trade_date},
-                  "ts_code,trade_date",
-              )
-              index_items = (((index_payload or {}).get("data") or {}).get("items")) or []
-              if not index_items:
-                  missing_index_codes.append(ts_code)
+          latest_trade_date_raw = target_trade_date
+          latest_trade_date = f"{latest_trade_date_raw[:4]}-{latest_trade_date_raw[4:6]}-{latest_trade_date_raw[6:8]}"
 
-          all_a_payload = tushare_call(
-              "daily",
-              {"trade_date": target_trade_date},
-              "ts_code,trade_date",
-          )
-          all_a_items = (((all_a_payload or {}).get("data") or {}).get("items")) or []
-          all_a_daily_rows = len(all_a_items)
+          attempts = 1 if is_manual else max(1, retry_attempts)
+          readiness = None
+          deployed_latest_date = ""
+          fetch_error = ""
+          should_run = True
+          reason = "new_data_detected"
 
-          data_ready = not missing_index_codes and all_a_daily_rows >= min_all_a_rows
+          for attempt in range(1, attempts + 1):
+              deployed_latest_date, fetch_error = fetch_deployed_latest_date()
+              if not is_manual and deployed_latest_date and deployed_latest_date >= latest_trade_date:
+                  should_run = False
+                  reason = "no_new_tushare_data"
+                  readiness = {
+                      "data_ready": True,
+                      "missing_index_codes": [],
+                      "missing_global_codes": [],
+                      "all_a_daily_rows": "not_checked",
+                  }
+                  break
+
+              readiness = check_tushare_ready(target_trade_date)
+              if readiness["data_ready"]:
+                  break
+
+              if attempt < attempts:
+                  print(
+                      f"Preflight data not ready for {latest_trade_date}; "
+                      f"attempt {attempt}/{attempts}; retrying in {retry_sleep_seconds}s"
+                  )
+                  time.sleep(retry_sleep_seconds)
+
+          if readiness is None:
+              raise SystemExit("Preflight readiness check did not run")
+
+          missing_index_codes = readiness["missing_index_codes"]
+          missing_global_codes = readiness["missing_global_codes"]
+          all_a_daily_rows = readiness["all_a_daily_rows"]
+          data_ready = bool(readiness["data_ready"])
+          if data_ready and should_run and fetch_error:
+              reason = "latest_signal_unavailable_run_anyway"
+
           if not data_ready:
               missing_reasons = []
               if missing_index_codes:
                   missing_reasons.append("missing_index_daily:" + ",".join(missing_index_codes))
+              if missing_global_codes:
+                  missing_reasons.append("missing_index_global:" + ",".join(missing_global_codes))
               if all_a_daily_rows < min_all_a_rows:
                   missing_reasons.append(f"all_a_daily_rows_below_{min_all_a_rows}")
               reason = ",".join(missing_reasons)
@@ -220,45 +317,21 @@ jobs:
                   f"- SSE trading day: `{'true' if is_sse_trading_day else 'false'}`",
                   f"- Target trade date: `{target_trade_date_text}`",
                   f"- Required index_daily codes: `{', '.join(required_index_codes)}`",
+                  f"- Required index_global codes: `{', '.join(required_global_codes)}`",
                   f"- Missing index_daily codes: `{', '.join(missing_index_codes) or '-'}`",
+                  f"- Missing index_global codes: `{', '.join(missing_global_codes) or '-'}`",
                   f"- All-A daily rows: `{all_a_daily_rows}`",
                   f"- All-A minimum rows: `{min_all_a_rows}`",
+                  f"- Attempts: `{attempts}`",
                   "- Decision: `skip`",
                   f"- Reason: `{reason}`",
                   "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
               ])
               raise SystemExit(0)
 
-          latest_trade_date_raw = target_trade_date
-          latest_trade_date = f"{latest_trade_date_raw[:4]}-{latest_trade_date_raw[4:6]}-{latest_trade_date_raw[6:8]}"
-
-          deployed_latest_date = ""
-          fetch_error = ""
-          if latest_signal_url:
-              try:
-                  with urllib.request.urlopen(latest_signal_url, timeout=30) as resp:
-                      merged_payload = json.loads(resp.read().decode("utf-8"))
-                  components = (merged_payload or {}).get("components") or {}
-                  relative_component = components.get("relative") if isinstance(components, dict) else {}
-                  deployed_latest_date = str(
-                      (relative_component or {}).get("latest_date")
-                      or (merged_payload or {}).get("latest_date")
-                      or ""
-                  )
-              except urllib.error.URLError as exc:
-                  fetch_error = str(exc)
-              except Exception as exc:
-                  fetch_error = str(exc)
-
-          should_run = True
-          reason = "new_data_detected"
           if is_manual:
+              should_run = True
               reason = "manual_redeploy_existing_data"
-          elif deployed_latest_date and deployed_latest_date >= latest_trade_date:
-              should_run = False
-              reason = "no_new_tushare_data"
-          elif fetch_error:
-              reason = "latest_signal_unavailable_run_anyway"
 
           write_output("should_run", "true" if should_run else "false")
           write_output("reason", reason)
@@ -273,9 +346,12 @@ jobs:
               f"- SSE trading day: `{'true' if is_sse_trading_day else 'false'}`",
               f"- Target trade date: `{target_trade_date_text}`",
               f"- Required index_daily codes: `{', '.join(required_index_codes)}`",
+              f"- Required index_global codes: `{', '.join(required_global_codes)}`",
               "- Missing index_daily codes: `-`",
+              "- Missing index_global codes: `-`",
               f"- All-A daily rows: `{all_a_daily_rows}`",
               f"- All-A minimum rows: `{min_all_a_rows}`",
+              f"- Attempts: `{attempt}`",
               f"- Tushare latest trade date: `{latest_trade_date}`",
               f"- Deployed relative latest date: `{deployed_latest_date or 'unknown'}`",
               f"- Decision: `{'run' if should_run else 'skip'}`",

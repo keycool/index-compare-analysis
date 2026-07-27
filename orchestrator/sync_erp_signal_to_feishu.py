@@ -21,8 +21,8 @@ import requests
 
 BASE_URL = "https://open.feishu.cn/open-apis"
 DEFAULT_SIGNAL_PATH = Path("shared") / "erp_signal.json"
-DEFAULT_LEGACY_APP_TOKEN = "KfaSbpRdiaYFdWsCTRfcWpocnbd"
-DEFAULT_LEGACY_TABLE_ID = "tblRAs2p4woXE1ig"
+DEFAULT_LEGACY_APP_TOKEN = "O9VFbTbHZafm5psq6ebcGgF7neD"
+DEFAULT_LEGACY_TABLE_ID = "tble1VwP4HNtMNm2"
 SH_TZ = timezone(timedelta(hours=8))
 
 
@@ -60,7 +60,7 @@ def target_config() -> dict[str, str]:
             "FEISHU_BASE_ID",
         ),
         DEFAULT_LEGACY_APP_TOKEN,
-        "default_legacy_app_token",
+        "default_khf_archive_app_token",
     )
     table_id, table_id_source = first_env_value(
         (
@@ -69,7 +69,7 @@ def target_config() -> dict[str, str]:
             "ERP_FEISHU_TABLE_ID",
         ),
         DEFAULT_LEGACY_TABLE_ID,
-        "default_legacy_table_id",
+        "default_khf_archive_table_id",
     )
     return {
         "app_token": app_token,
@@ -309,7 +309,7 @@ def sync() -> dict[str, Any]:
         "target_table_id_source": target["table_id_source"],
         "target_app_token_fingerprint": target["app_token_fingerprint"],
         "target_table_id_fingerprint": target["table_id_fingerprint"],
-        "target_is_default_legacy": target["app_token_source"].startswith("default_")
+        "target_is_default": target["app_token_source"].startswith("default_")
         or target["table_id_source"].startswith("default_"),
         "source_latest_date": payload.get("latest_date"),
         "archive_start_date": os.environ.get("ERP_ARCHIVE_START_DATE", "").strip() or None,
@@ -324,9 +324,8 @@ def sync() -> dict[str, Any]:
     if permission_denied:
         result["permission_hint"] = (
             "Feishu returned 91403 Forbidden while writing records. "
-            "If target_is_default_legacy is true, the GitHub secret was not wired and the old table is still being used. "
-            "Otherwise, add the FEISHU_APP_ID app to the target Base/table with record create/edit permission, "
-            "or use a table created/owned by that same app."
+            "If target_is_default is true, GitHub did not provide archive target secrets and the default KHF archive table was used. "
+            "If target_is_default is false, the configured target was used but the FEISHU_APP_ID app still lacks record create/edit permission on that Base/table."
         )
     return result
 

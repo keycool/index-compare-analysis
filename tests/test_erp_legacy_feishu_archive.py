@@ -9,9 +9,9 @@ from orchestrator import sync_erp_signal_to_feishu as archive
 
 
 class ErpLegacyFeishuArchiveTest(unittest.TestCase):
-    def test_defaults_target_legacy_khf_table(self):
-        self.assertEqual(archive.DEFAULT_LEGACY_APP_TOKEN, "KfaSbpRdiaYFdWsCTRfcWpocnbd")
-        self.assertEqual(archive.DEFAULT_LEGACY_TABLE_ID, "tblRAs2p4woXE1ig")
+    def test_defaults_target_khf_archive_table(self):
+        self.assertEqual(archive.DEFAULT_LEGACY_APP_TOKEN, "O9VFbTbHZafm5psq6ebcGgF7neD")
+        self.assertEqual(archive.DEFAULT_LEGACY_TABLE_ID, "tble1VwP4HNtMNm2")
 
     def test_target_config_prefers_archive_specific_secrets(self):
         env = {
@@ -44,6 +44,15 @@ class ErpLegacyFeishuArchiveTest(unittest.TestCase):
         self.assertEqual(target["table_id"], "erp_table")
         self.assertEqual(target["app_token_source"], "ERP_FEISHU_APP_TOKEN")
         self.assertEqual(target["table_id_source"], "ERP_FEISHU_TABLE_ID")
+
+    def test_target_config_falls_back_to_khf_archive_table(self):
+        with patch.dict(os.environ, {}, clear=True):
+            target = archive.target_config()
+
+        self.assertEqual(target["app_token"], "O9VFbTbHZafm5psq6ebcGgF7neD")
+        self.assertEqual(target["table_id"], "tble1VwP4HNtMNm2")
+        self.assertEqual(target["app_token_source"], "default_khf_archive_app_token")
+        self.assertEqual(target["table_id_source"], "default_khf_archive_table_id")
 
     def test_record_fields_skip_non_finite_numbers(self):
         fields = archive.record_fields(

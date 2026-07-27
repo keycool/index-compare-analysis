@@ -43,6 +43,18 @@ class ErpLegacyFeishuArchiveTest(unittest.TestCase):
 
         self.assertEqual(selected, [{"date": "2026-07-25", "equity_premium": 5.1}])
 
+    def test_select_records_honors_archive_start_date_for_empty_table(self):
+        records = [
+            {"date": "2026-06-30", "equity_premium": 4.9},
+            {"date": "2026-07-01", "equity_premium": 5.0},
+            {"date": "2026-07-02", "equity_premium": 5.1},
+        ]
+
+        with patch.dict(os.environ, {"ERP_ARCHIVE_START_DATE": "2026-07-01"}, clear=True):
+            selected = archive.select_records(records, {})
+
+        self.assertEqual(selected, records[1:])
+
     def test_select_records_can_update_existing_when_opted_in(self):
         records = [
             {"date": "2026-07-24", "equity_premium": 5.0},

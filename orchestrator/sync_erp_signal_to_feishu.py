@@ -11,7 +11,7 @@ import json
 import math
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +74,22 @@ def to_date_key(value: Any) -> str | None:
         except ValueError:
             continue
     return None
+
+
+def archive_start_date() -> date | None:
+    value = os.environ.get("ERP_ARCHIVE_START_DATE", "").strip()
+    if not value:
+        return None
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def on_or_after_start(record: dict[str, Any], start_date: date | None) -> bool:
+    if not start_date:
+        return True
+    date_key = to_date_key(record.get("date"))
+    if not date_key:
+        return False
+    return datetime.strptime(date_key, "%Y-%m-%d").date() >= start_date
 
 
 def get_tenant_token(app_id: str, app_secret: str) -> str:
@@ -145,6 +161,8 @@ def record_fields(record: dict[str, Any]) -> dict[str, Any]:
 def select_records(records: list[dict[str, Any]], existing: dict[str, str]) -> list[dict[str, Any]]:
     update_existing = truthy(os.environ.get("ERP_ARCHIVE_UPDATE_EXISTING"))
     lookback_days = int(os.environ.get("ERP_ARCHIVE_LOOKBACK_DAYS", "120"))
+    start_date = archive_start_date()
+    records = [record for record in records if on_or_after_start(record, start_date)]
     if not existing:
         return records
     if not update_existing:
@@ -243,6 +261,7 @@ def sync() -> dict[str, Any]:
         "app_token": app_token,
         "table_id": table_id,
         "source_latest_date": payload.get("latest_date"),
+        "archive_start_date": os.environ.get("ERP_ARCHIVE_START_DATE", "").strip() or None,
         "existing_dates": len(existing),
         "selected": len(selected),
         "created": created,

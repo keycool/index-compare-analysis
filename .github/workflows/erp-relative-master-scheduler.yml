@@ -918,6 +918,7 @@ jobs:
           ERP_LEGACY_FEISHU_APP_TOKEN: ${{ secrets.ERP_LEGACY_FEISHU_APP_TOKEN || 'KfaSbpRdiaYFdWsCTRfcWpocnbd' }}
           ERP_LEGACY_FEISHU_TABLE_ID: ${{ secrets.ERP_LEGACY_FEISHU_TABLE_ID || 'tblRAs2p4woXE1ig' }}
           ERP_ARCHIVE_SIGNAL_PATH: shared/erp_signal.json
+          ERP_ARCHIVE_START_DATE: "2026-07-01"
           ERP_ARCHIVE_LOOKBACK_DAYS: "120"
           ERP_ARCHIVE_UPDATE_EXISTING: "false"
           ERP_ARCHIVE_REQUIRE_SUCCESS: "false"

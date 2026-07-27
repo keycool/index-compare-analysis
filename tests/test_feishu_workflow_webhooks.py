@@ -30,6 +30,7 @@ class FeishuWorkflowWebhookTest(unittest.TestCase):
         self.assertIn("continue-on-error: true", relative_text)
         self.assertIn("ERP_LEGACY_FEISHU_APP_TOKEN: ${{ secrets.ERP_LEGACY_FEISHU_APP_TOKEN || 'KfaSbpRdiaYFdWsCTRfcWpocnbd' }}", relative_text)
         self.assertIn("ERP_LEGACY_FEISHU_TABLE_ID: ${{ secrets.ERP_LEGACY_FEISHU_TABLE_ID || 'tblRAs2p4woXE1ig' }}", relative_text)
+        self.assertIn("ERP_ARCHIVE_START_DATE: \"2026-07-01\"", relative_text)
         self.assertIn("ERP_ARCHIVE_UPDATE_EXISTING: \"false\"", relative_text)
         self.assertIn("ERP_ARCHIVE_REQUIRE_SUCCESS: \"false\"", relative_text)
         self.assertIn(

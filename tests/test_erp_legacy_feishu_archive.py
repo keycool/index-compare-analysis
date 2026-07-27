@@ -13,6 +13,38 @@ class ErpLegacyFeishuArchiveTest(unittest.TestCase):
         self.assertEqual(archive.DEFAULT_LEGACY_APP_TOKEN, "KfaSbpRdiaYFdWsCTRfcWpocnbd")
         self.assertEqual(archive.DEFAULT_LEGACY_TABLE_ID, "tblRAs2p4woXE1ig")
 
+    def test_target_config_prefers_archive_specific_secrets(self):
+        env = {
+            "ERP_ARCHIVE_FEISHU_APP_TOKEN": "archive_base",
+            "ERP_ARCHIVE_FEISHU_TABLE_ID": "archive_table",
+            "ERP_LEGACY_FEISHU_APP_TOKEN": "legacy_base",
+            "ERP_LEGACY_FEISHU_TABLE_ID": "legacy_table",
+            "ERP_FEISHU_APP_TOKEN": "erp_base",
+            "ERP_FEISHU_TABLE_ID": "erp_table",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            target = archive.target_config()
+
+        self.assertEqual(target["app_token"], "archive_base")
+        self.assertEqual(target["table_id"], "archive_table")
+        self.assertEqual(target["app_token_source"], "ERP_ARCHIVE_FEISHU_APP_TOKEN")
+        self.assertEqual(target["table_id_source"], "ERP_ARCHIVE_FEISHU_TABLE_ID")
+
+    def test_target_config_accepts_existing_erp_feishu_secret_names(self):
+        env = {
+            "ERP_FEISHU_APP_TOKEN": "erp_base",
+            "ERP_FEISHU_TABLE_ID": "erp_table",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            target = archive.target_config()
+
+        self.assertEqual(target["app_token"], "erp_base")
+        self.assertEqual(target["table_id"], "erp_table")
+        self.assertEqual(target["app_token_source"], "ERP_FEISHU_APP_TOKEN")
+        self.assertEqual(target["table_id_source"], "ERP_FEISHU_TABLE_ID")
+
     def test_record_fields_skip_non_finite_numbers(self):
         fields = archive.record_fields(
             {

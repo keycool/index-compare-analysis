@@ -8,6 +8,7 @@ ERP_ARCHIVE_REQUIRE_SUCCESS=true only for one-off smoke tests.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import sys
@@ -36,6 +37,48 @@ FIELD_SOURCE = "数据源"
 
 def truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def first_env_value(names: tuple[str, ...], default: str, default_source: str) -> tuple[str, str]:
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value, name
+    return default, default_source
+
+
+def target_config() -> dict[str, str]:
+    app_token, app_token_source = first_env_value(
+        (
+            "ERP_ARCHIVE_FEISHU_APP_TOKEN",
+            "ERP_LEGACY_FEISHU_APP_TOKEN",
+            "ERP_FEISHU_APP_TOKEN",
+            "FEISHU_BASE_ID",
+        ),
+        DEFAULT_LEGACY_APP_TOKEN,
+        "default_legacy_app_token",
+    )
+    table_id, table_id_source = first_env_value(
+        (
+            "ERP_ARCHIVE_FEISHU_TABLE_ID",
+            "ERP_LEGACY_FEISHU_TABLE_ID",
+            "ERP_FEISHU_TABLE_ID",
+        ),
+        DEFAULT_LEGACY_TABLE_ID,
+        "default_legacy_table_id",
+    )
+    return {
+        "app_token": app_token,
+        "table_id": table_id,
+        "app_token_source": app_token_source,
+        "table_id_source": table_id_source,
+        "app_token_fingerprint": fingerprint(app_token) if app_token else "",
+        "table_id_fingerprint": fingerprint(table_id) if table_id else "",
+    }
 
 
 def finite_number(value: Any) -> float | None:
@@ -189,16 +232,9 @@ def select_records(records: list[dict[str, Any]], existing: dict[str, str]) -> l
 def sync() -> dict[str, Any]:
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-    app_token = (
-        os.environ.get("ERP_LEGACY_FEISHU_APP_TOKEN")
-        or os.environ.get("ERP_ARCHIVE_FEISHU_APP_TOKEN")
-        or DEFAULT_LEGACY_APP_TOKEN
-    ).strip()
-    table_id = (
-        os.environ.get("ERP_LEGACY_FEISHU_TABLE_ID")
-        or os.environ.get("ERP_ARCHIVE_FEISHU_TABLE_ID")
-        or DEFAULT_LEGACY_TABLE_ID
-    ).strip()
+    target = target_config()
+    app_token = target["app_token"]
+    table_id = target["table_id"]
     signal_path = Path(os.environ.get("ERP_ARCHIVE_SIGNAL_PATH", str(DEFAULT_SIGNAL_PATH)))
 
     if not app_id or not app_secret:
@@ -219,12 +255,15 @@ def sync() -> dict[str, Any]:
     created = 0
     updated = 0
     failed = 0
+    attempted = 0
+    permission_denied = False
     errors: list[str] = []
     for record in selected:
         date_key = to_date_key(record.get("date")) or str(record.get("date", ""))
         fields = record_fields(record)
         record_id = existing.get(date_key)
         try:
+            attempted += 1
             if record_id:
                 response = requests.put(
                     f"{records_url}/{record_id}",
@@ -247,28 +286,49 @@ def sync() -> dict[str, Any]:
             elif ok:
                 created += 1
             else:
+                try:
+                    error_payload = response.json()
+                except Exception:
+                    error_payload = {"text": response.text[:180]}
+                if error_payload.get("code") == 91403:
+                    permission_denied = True
                 failed += 1
                 if len(errors) < 5:
                     errors.append(f"{action} {date_key}: {response.status_code} {response.text[:180]}")
+                if permission_denied:
+                    break
         except Exception as exc:
             failed += 1
             if len(errors) < 5:
                 errors.append(f"{date_key}: {exc}")
 
-    return {
+    result = {
         "success": failed == 0,
         "skipped": False,
-        "app_token": app_token,
-        "table_id": table_id,
+        "target_app_token_source": target["app_token_source"],
+        "target_table_id_source": target["table_id_source"],
+        "target_app_token_fingerprint": target["app_token_fingerprint"],
+        "target_table_id_fingerprint": target["table_id_fingerprint"],
+        "target_is_default_legacy": target["app_token_source"].startswith("default_")
+        or target["table_id_source"].startswith("default_"),
         "source_latest_date": payload.get("latest_date"),
         "archive_start_date": os.environ.get("ERP_ARCHIVE_START_DATE", "").strip() or None,
         "existing_dates": len(existing),
         "selected": len(selected),
+        "attempted": attempted,
         "created": created,
         "updated": updated,
         "failed": failed,
         "errors": errors,
     }
+    if permission_denied:
+        result["permission_hint"] = (
+            "Feishu returned 91403 Forbidden while writing records. "
+            "If target_is_default_legacy is true, the GitHub secret was not wired and the old table is still being used. "
+            "Otherwise, add the FEISHU_APP_ID app to the target Base/table with record create/edit permission, "
+            "or use a table created/owned by that same app."
+        )
+    return result
 
 
 def main() -> None:
@@ -277,10 +337,10 @@ def main() -> None:
         result = sync()
     except Exception as exc:
         result = {"success": False, "skipped": False, "message": str(exc)}
-    print("ERP legacy Feishu archive result:")
+    print("ERP Feishu archive result:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result.get("success"):
-        print(f"::warning::ERP legacy Feishu archive did not fully succeed: {result.get('message') or result.get('errors')}")
+        print(f"::warning::ERP Feishu archive did not fully succeed: {result.get('message') or result.get('errors')}")
     if require_success and not result.get("success"):
         sys.exit(1)
 

@@ -920,7 +920,7 @@ jobs:
           ERP_ARCHIVE_SIGNAL_PATH: shared/erp_signal.json
           ERP_ARCHIVE_LOOKBACK_DAYS: "120"
           ERP_ARCHIVE_REQUIRE_SUCCESS: "false"
-        run: python orchestrator/sync_erp_signal_to_feishu.py
+        run: python csi300-relative-index/orchestrator/sync_erp_signal_to_feishu.py
 
   deploy-pages:
     if: success() && needs.run-master-orchestrator.result == 'success' && needs.run-master-orchestrator.outputs.should_run == 'true'

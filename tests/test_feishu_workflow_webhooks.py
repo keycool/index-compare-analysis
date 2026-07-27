@@ -31,7 +31,11 @@ class FeishuWorkflowWebhookTest(unittest.TestCase):
         self.assertIn("ERP_LEGACY_FEISHU_APP_TOKEN: ${{ secrets.ERP_LEGACY_FEISHU_APP_TOKEN || 'KfaSbpRdiaYFdWsCTRfcWpocnbd' }}", relative_text)
         self.assertIn("ERP_LEGACY_FEISHU_TABLE_ID: ${{ secrets.ERP_LEGACY_FEISHU_TABLE_ID || 'tblRAs2p4woXE1ig' }}", relative_text)
         self.assertIn("ERP_ARCHIVE_REQUIRE_SUCCESS: \"false\"", relative_text)
-        self.assertIn("python orchestrator/sync_erp_signal_to_feishu.py", relative_text)
+        self.assertIn(
+            "python csi300-relative-index/orchestrator/sync_erp_signal_to_feishu.py",
+            relative_text,
+        )
+        self.assertNotIn("run: python orchestrator/sync_erp_signal_to_feishu.py", relative_text)
 
 
 if __name__ == "__main__":

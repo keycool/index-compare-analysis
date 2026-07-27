@@ -143,8 +143,17 @@ def record_fields(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def select_records(records: list[dict[str, Any]], existing: dict[str, str]) -> list[dict[str, Any]]:
+    update_existing = truthy(os.environ.get("ERP_ARCHIVE_UPDATE_EXISTING"))
     lookback_days = int(os.environ.get("ERP_ARCHIVE_LOOKBACK_DAYS", "120"))
-    if not existing or lookback_days <= 0:
+    if not existing:
+        return records
+    if not update_existing:
+        return [
+            record
+            for record in records
+            if (to_date_key(record.get("date")) or str(record.get("date", ""))) not in existing
+        ]
+    if lookback_days <= 0:
         return records
     cutoff = datetime.now(SH_TZ).date() - timedelta(days=lookback_days)
     selected = []

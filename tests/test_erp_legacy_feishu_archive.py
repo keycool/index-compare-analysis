@@ -32,6 +32,29 @@ class ErpLegacyFeishuArchiveTest(unittest.TestCase):
         self.assertEqual(fields[archive.FIELD_EARNINGS], 7.5)
         self.assertEqual(fields[archive.FIELD_PREMIUM], 5.1)
 
+    def test_select_records_defaults_to_insert_only(self):
+        records = [
+            {"date": "2026-07-24", "equity_premium": 5.0},
+            {"date": "2026-07-25", "equity_premium": 5.1},
+        ]
+
+        with patch.dict(os.environ, {}, clear=True):
+            selected = archive.select_records(records, {"2026-07-24": "rec1"})
+
+        self.assertEqual(selected, [{"date": "2026-07-25", "equity_premium": 5.1}])
+
+    def test_select_records_can_update_existing_when_opted_in(self):
+        records = [
+            {"date": "2026-07-24", "equity_premium": 5.0},
+            {"date": "2026-07-25", "equity_premium": 5.1},
+        ]
+        env = {"ERP_ARCHIVE_UPDATE_EXISTING": "true", "ERP_ARCHIVE_LOOKBACK_DAYS": "10000"}
+
+        with patch.dict(os.environ, env, clear=True):
+            selected = archive.select_records(records, {"2026-07-24": "rec1"})
+
+        self.assertEqual(selected, records)
+
     def test_missing_credentials_skip_without_exception(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             signal_path = Path(temp_dir) / "erp_signal.json"

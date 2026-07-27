@@ -915,13 +915,8 @@ jobs:
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          ERP_ARCHIVE_FEISHU_APP_TOKEN: ${{ secrets.ERP_ARCHIVE_FEISHU_APP_TOKEN }}
-          ERP_ARCHIVE_FEISHU_TABLE_ID: ${{ secrets.ERP_ARCHIVE_FEISHU_TABLE_ID }}
-          ERP_LEGACY_FEISHU_APP_TOKEN: ${{ secrets.ERP_LEGACY_FEISHU_APP_TOKEN }}
-          ERP_LEGACY_FEISHU_TABLE_ID: ${{ secrets.ERP_LEGACY_FEISHU_TABLE_ID }}
-          ERP_FEISHU_APP_TOKEN: ${{ secrets.ERP_FEISHU_APP_TOKEN }}
-          ERP_FEISHU_TABLE_ID: ${{ secrets.ERP_FEISHU_TABLE_ID }}
-          FEISHU_BASE_ID: ${{ secrets.FEISHU_BASE_ID }}
+          ERP_ARCHIVE_FEISHU_APP_TOKEN: O9VFbTbHZafm5psq6ebcGgF7neD
+          ERP_ARCHIVE_FEISHU_TABLE_ID: tble1VwP4HNtMNm2
           ERP_ARCHIVE_SIGNAL_PATH: shared/erp_signal.json
           ERP_ARCHIVE_START_DATE: "2026-07-01"
           ERP_ARCHIVE_LOOKBACK_DAYS: "120"

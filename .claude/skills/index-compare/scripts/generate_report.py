@@ -805,19 +805,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
             gridcolor=x_grid,
             linecolor=x_line,
             tickfont=dict(color=tick_color),
-            hoverformat='%Y.%m.%d',
-            rangeselector=dict(
-                bgcolor='rgba(255,255,255,0.88)' if light_theme else 'rgba(17,24,39,0.88)',
-                activecolor='rgba(14,165,233,0.22)' if light_theme else 'rgba(62,195,255,0.28)',
-                bordercolor=x_line,
-                font=dict(color=legend_color, size=11),
-                buttons=[
-                    dict(count=5, label='5年', step='year', stepmode='backward'),
-                    dict(count=10, label='10年', step='year', stepmode='backward'),
-                    dict(count=15, label='15年', step='year', stepmode='backward'),
-                    dict(step='all', label='全部'),
-                ],
-            )
+            hoverformat='%Y.%m.%d'
         ),
         yaxis=dict(
             gridcolor=x_grid,
@@ -2265,6 +2253,35 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             border: 1px solid rgba(255,255,255,0.03);
         }}
 
+        .price-range-toolbar {{
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin: -8px 0 12px;
+            flex-wrap: wrap;
+        }}
+
+        .price-range-button {{
+            appearance: none;
+            border: 1px solid rgba(148,163,184,0.35);
+            background: rgba(15,23,42,0.55);
+            color: var(--text-secondary);
+            border-radius: 6px;
+            padding: 6px 12px;
+            min-width: 52px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+
+        .price-range-button:hover,
+        .price-range-button.active {{
+            border-color: rgba(14,165,233,0.65);
+            background: rgba(14,165,233,0.18);
+            color: #e0f2fe;
+        }}
+
         .ratio-charts-grid {{
             display: grid;
             grid-template-columns: 1fr;
@@ -2522,7 +2539,64 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
                     </div>
                 </div>
             </div>
-            <div class="chart-wrapper">{price_chart_html}</div>
+            <div class="price-range-toolbar" data-price-range-toolbar>
+                <button type="button" class="price-range-button" data-range-years="5">5年</button>
+                <button type="button" class="price-range-button" data-range-years="10">10年</button>
+                <button type="button" class="price-range-button" data-range-years="15">15年</button>
+                <button type="button" class="price-range-button active" data-range-all="true">全部</button>
+            </div>
+            <div class="chart-wrapper" data-price-chart-container>{price_chart_html}</div>
+            <script>
+                (function() {{
+                    const section = document.currentScript.closest('.charts-section');
+                    if (!section || !window.Plotly) return;
+
+                    const chart = section.querySelector('[data-price-chart-container] .plotly-graph-div');
+                    const toolbar = section.querySelector('[data-price-range-toolbar]');
+                    if (!chart || !toolbar) return;
+
+                    function setActive(activeButton) {{
+                        toolbar.querySelectorAll('.price-range-button').forEach(function(button) {{
+                            button.classList.toggle('active', button === activeButton);
+                        }});
+                    }}
+
+                    function getLatestDate() {{
+                        const dates = [];
+                        (chart.data || []).forEach(function(trace) {{
+                            (trace.x || []).forEach(function(value) {{
+                                const parsed = new Date(value);
+                                if (!Number.isNaN(parsed.getTime())) {{
+                                    dates.push(parsed);
+                                }}
+                            }});
+                        }});
+                        if (!dates.length) return null;
+                        return new Date(Math.max.apply(null, dates.map(function(date) {{ return date.getTime(); }})));
+                    }}
+
+                    toolbar.querySelectorAll('.price-range-button').forEach(function(button) {{
+                        button.addEventListener('click', function() {{
+                            setActive(button);
+                            if (button.dataset.rangeAll === 'true') {{
+                                Plotly.relayout(chart, {{'xaxis.autorange': true}});
+                                return;
+                            }}
+
+                            const years = Number(button.dataset.rangeYears);
+                            const end = getLatestDate();
+                            if (!years || !end) return;
+
+                            const start = new Date(end);
+                            start.setFullYear(start.getFullYear() - years);
+                            Plotly.relayout(chart, {{
+                                'xaxis.autorange': false,
+                                'xaxis.range': [start.toISOString(), end.toISOString()]
+                            }});
+                        }});
+                    }});
+                }})();
+            </script>
         </div>
 
         <!-- 主要指数对比 -->

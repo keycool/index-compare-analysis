@@ -723,12 +723,12 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
     Args:
         df: 数据DataFrame
         indices_config: 指数配置
-        recent_days: 显示最近多少个交易日
+        recent_days: 保留兼容参数；价格图默认展示传入数据的全部历史
 
     Returns:
         plotly Figure
     """
-    recent_df = df.tail(recent_days)
+    chart_df = df.copy()
 
     fig = go.Figure()
 
@@ -753,8 +753,8 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
     for code, info in indices_config.items():
         if code in {'HSI', 'HKTECH'}:
             continue
-        if code in recent_df.columns:
-            series = pd.to_numeric(recent_df[code], errors='coerce').copy()
+        if code in chart_df.columns:
+            series = pd.to_numeric(chart_df[code], errors='coerce').copy()
 
             # 创业板指数 历史起始阶段存在被固定首值占住的平线，图表中直接隐藏该段。
             if code == 'ZZA500':
@@ -767,7 +767,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
                         series.loc[series.index < first_change_label] = pd.NA
 
             fig.add_trace(go.Scatter(
-                x=recent_df.index,
+                x=chart_df.index,
                 y=series,
                 mode='lines',
                 name=info['name'],
@@ -784,7 +784,7 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
     plot_bg = '#ffffff' if light_theme else 'rgba(17, 24, 39, 0.5)'
 
     fig.update_layout(
-        title=dict(text=f'指数价格走势（近{recent_days}交易日）', x=0.5, font=dict(size=14, color=title_color)),
+        title=dict(text='指数价格走势', x=0.5, font=dict(size=14, color=title_color)),
         xaxis_title='日期',
         yaxis_title='点位',
         hovermode='x unified',
@@ -805,7 +805,19 @@ def create_price_chart(df, indices_config, recent_days=1000, light_theme=False):
             gridcolor=x_grid,
             linecolor=x_line,
             tickfont=dict(color=tick_color),
-            hoverformat='%Y.%m.%d'
+            hoverformat='%Y.%m.%d',
+            rangeselector=dict(
+                bgcolor='rgba(255,255,255,0.88)' if light_theme else 'rgba(17,24,39,0.88)',
+                activecolor='rgba(14,165,233,0.22)' if light_theme else 'rgba(62,195,255,0.28)',
+                bordercolor=x_line,
+                font=dict(color=legend_color, size=11),
+                buttons=[
+                    dict(count=5, label='5年', step='year', stepmode='backward'),
+                    dict(count=10, label='10年', step='year', stepmode='backward'),
+                    dict(count=15, label='15年', step='year', stepmode='backward'),
+                    dict(step='all', label='全部'),
+                ],
+            )
         ),
         yaxis=dict(
             gridcolor=x_grid,

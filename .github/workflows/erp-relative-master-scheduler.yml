@@ -22,6 +22,11 @@ on:
         required: false
         default: ""
         type: string
+      restore_site_on_skip:
+        description: "Manual run only: rebuild and deploy the existing committed site data when preflight skips (true/false)"
+        required: false
+        default: "true"
+        type: string
 permissions:
   contents: read
   pages: write
@@ -40,6 +45,7 @@ jobs:
     timeout-minutes: 120
     outputs:
       should_run: ${{ steps.preflight.outputs.should_run }}
+      restore_site: ${{ steps.preflight.outputs.restore_site }}
 
     steps:
       - name: Setup Python
@@ -57,6 +63,7 @@ jobs:
           REQUIRED_GLOBAL_INDEX_CODES: "HSI,HKTECH"
           PREFLIGHT_RETRY_ATTEMPTS: "3"
           PREFLIGHT_RETRY_SLEEP_SECONDS: "600"
+          RESTORE_SITE_ON_SKIP: ${{ github.event.inputs.restore_site_on_skip || 'true' }}
         run: |
           python - << 'PY'
           import json
@@ -69,6 +76,7 @@ jobs:
 
           event_name = "${{ github.event_name }}"
           is_manual = event_name == "workflow_dispatch"
+          restore_site_on_skip = os.environ.get("RESTORE_SITE_ON_SKIP", "true").strip().lower() == "true"
           output_path = os.environ["GITHUB_OUTPUT"]
           summary_path = os.environ["GITHUB_STEP_SUMMARY"]
           shanghai_now = datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -84,6 +92,8 @@ jobs:
           def write_summary(lines: list[str]) -> None:
               with open(summary_path, "a", encoding="utf-8") as f:
                   f.write("\n".join(lines) + "\n")
+
+          write_output("restore_site", "false")
 
           token = os.environ.get("TUSHARE_TOKEN", "").strip()
           if not token:
@@ -306,6 +316,8 @@ jobs:
                   missing_reasons.append(f"all_a_daily_rows_below_{min_all_a_rows}")
               reason = ",".join(missing_reasons)
               write_output("should_run", "false")
+              if is_manual and restore_site_on_skip:
+                  write_output("restore_site", "true")
               write_output("reason", reason)
               write_output("latest_trade_date", target_trade_date_text if not missing_index_codes else "none")
               write_output("deployed_latest_date", "not_checked")
@@ -323,9 +335,11 @@ jobs:
                   f"- All-A daily rows: `{all_a_daily_rows}`",
                   f"- All-A minimum rows: `{min_all_a_rows}`",
                   f"- Attempts: `{attempts}`",
-                  "- Decision: `skip`",
+                  f"- Decision: `{'restore_site' if is_manual and restore_site_on_skip else 'skip'}`",
                   f"- Reason: `{reason}`",
-                  "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
+                  "- Effect: formal calculation and web data update are skipped; existing committed site data is redeployed."
+                  if is_manual and restore_site_on_skip
+                  else "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
               ])
               raise SystemExit(0)
 
@@ -368,6 +382,12 @@ jobs:
         with:
           path: csi300-relative-index
 
+      - name: Checkout CSI300 Relative Index for site restore
+        if: steps.preflight.outputs.restore_site == 'true'
+        uses: actions/checkout@v6
+        with:
+          path: csi300-relative-index
+
       - name: Checkout Equity Risk Premium
         if: steps.preflight.outputs.should_run == 'true'
         uses: actions/checkout@v6
@@ -377,7 +397,7 @@ jobs:
           path: external/equity-risk-premium
 
       - name: Setup Node
-        if: steps.preflight.outputs.should_run == 'true'
+        if: steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -388,6 +408,52 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r csi300-relative-index/.claude/skills/index-compare/requirements.txt
           pip install -r external/equity-risk-premium/skills/equity-risk-premium/requirements.txt
+
+      - name: Restore site from committed Relative data
+        if: steps.preflight.outputs.restore_site == 'true'
+        working-directory: csi300-relative-index
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          pip install -r .claude/skills/index-compare/requirements.txt
+
+          mkdir -p reports ../shared
+          python .claude/skills/index-compare/scripts/generate_report.py \
+            --output "$PWD/reports" \
+            --mode production
+
+          python - << 'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          import pandas as pd
+
+          data_path = Path(".claude/skills/index-compare/data/processed_data.csv")
+          df = pd.read_csv(data_path, index_col=0)
+          latest_date = str(df.index[-1])[:10] if not df.empty else ""
+          payload = {
+              "version": "restore-site",
+              "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "latest_date": latest_date,
+              "restore_site": True,
+              "components": {
+                  "relative": {
+                      "latest_date": latest_date,
+                      "source": "committed_data",
+                  }
+              },
+          }
+          shared_dir = Path("../shared")
+          shared_dir.mkdir(parents=True, exist_ok=True)
+          (shared_dir / "merged_signal.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(f"[RESTORE] latest_date={latest_date}")
+          print("[RESTORE] wrote ../shared/merged_signal.json")
+          PY
 
       - name: Run Relative signal regression tests
         if: steps.preflight.outputs.should_run == 'true'
@@ -746,7 +812,7 @@ jobs:
           python external/equity-risk-premium/dashboard/generate_dashboard_data.py
 
       - name: Upload master artifacts
-        if: always() && steps.preflight.outputs.should_run == 'true'
+        if: always() && (steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true')
         uses: actions/upload-artifact@v6
         with:
           name: erp-relative-master-${{ github.run_id }}
@@ -766,11 +832,11 @@ jobs:
           retention-days: 7
 
       - name: Setup Pages
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && (steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true')
         uses: actions/configure-pages@v5
 
       - name: Build Pages site
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && (steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true')
         run: |
           python - << 'PY'
           import json
@@ -828,7 +894,7 @@ jobs:
           PY
 
       - name: Inspect built site
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && (steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true')
         run: |
           set -euo pipefail
 
@@ -846,7 +912,7 @@ jobs:
           cat site/site_manifest.json
 
       - name: Deploy to Vercel
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && (steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true')
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -903,7 +969,7 @@ jobs:
           echo "[VERCEL] Canonical URL: $VERCEL_CANONICAL_URL"
 
       - name: Upload Pages artifact
-        if: (success() || steps.optional_erp_sync.outcome == 'failure') && steps.preflight.outputs.should_run == 'true'
+        if: (success() || steps.optional_erp_sync.outcome == 'failure') && (steps.preflight.outputs.should_run == 'true' || steps.preflight.outputs.restore_site == 'true')
         uses: actions/upload-pages-artifact@v4
         with:
           path: site
@@ -925,7 +991,7 @@ jobs:
         run: python csi300-relative-index/orchestrator/sync_erp_signal_to_feishu.py
 
   deploy-pages:
-    if: success() && needs.run-master-orchestrator.result == 'success' && needs.run-master-orchestrator.outputs.should_run == 'true'
+    if: success() && needs.run-master-orchestrator.result == 'success' && (needs.run-master-orchestrator.outputs.should_run == 'true' || needs.run-master-orchestrator.outputs.restore_site == 'true')
     needs: run-master-orchestrator
     runs-on: ubuntu-latest
     environment:

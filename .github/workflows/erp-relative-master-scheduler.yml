@@ -477,6 +477,8 @@ jobs:
           if python -m pip install --upgrade pip \
             && pip install -r .claude/skills/index-compare/requirements.txt \
             && python .claude/skills/index-compare/scripts/generate_report.py \
+              --data "$PWD/.claude/skills/index-compare/data/processed_data.csv" \
+              --conclusions "$PWD/.claude/skills/index-compare/data/conclusions.json" \
               --output "$PWD/reports" \
               --mode production; then
             echo "[RESTORE] Generated report from committed data"

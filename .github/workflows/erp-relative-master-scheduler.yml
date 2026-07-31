@@ -488,6 +488,7 @@ jobs:
             FALLBACK_REPORT="reports/index_compare_$(date -u +%Y%m%d_%H%M%S).html"
             curl -fsSL "$PAGES_CANONICAL_URL/" -o "$FALLBACK_REPORT"
             test -s "$FALLBACK_REPORT"
+            python .github/scripts/inject_price_range_toolbar.py "$FALLBACK_REPORT"
             echo "[RESTORE] Downloaded fallback report to $FALLBACK_REPORT"
           fi
           export RESTORE_SOURCE

@@ -30,6 +30,7 @@ ENV_HSI_ERP_SIGNAL_PATH = "INDEX_COMPARE_HSI_ERP_SIGNAL_PATH"
 KEY_DATE = "\u65e5\u671f"
 KEY_RATIO_500 = "500/300\u6bd4\u4ef7"
 KEY_RATIO_1000 = "1000/300\u6bd4\u4ef7"
+KEY_RATIO_1000_500 = "1000/500\u6bd4\u4ef7"
 KEY_RATIO_CYB = "\u521b\u4e1a\u677f/300\u6bd4\u4ef7"
 KEY_RATIO_SH50 = "50/\u521b\u4e1a\u677f\u6bd4\u4ef7"
 KEY_RATIO_KC50 = "\u79d1\u521b50/\u4e0a\u8bc150\u6bd4\u4ef7"
@@ -39,6 +40,7 @@ KEY_RATIO_HKTECH = "\u6052\u751f\u79d1\u6280/\u6052\u751f\u6bd4\u4ef7"
 RATIO_SIGNAL_ROWS = [
     ("\u4e2d\u8bc1500 / \u6caa\u6df1300", "ZZ500", (KEY_RATIO_500, "ZZ500_ratio"), ("500\u5206\u4f4d",), ("500\u5efa\u8bae",)),
     ("\u4e2d\u8bc11000 / \u6caa\u6df1300", "ZZ1000", (KEY_RATIO_1000, "ZZ1000_ratio"), ("1000\u5206\u4f4d",), ("1000\u5efa\u8bae",)),
+    ("\u4e2d\u8bc11000 / \u4e2d\u8bc1500", "ZZ1000_500", (KEY_RATIO_1000_500, "ZZ1000_500_ratio"), ("1000/500\u5206\u4f4d",), ("1000/500\u5efa\u8bae",)),
     ("\u521b\u4e1a\u677f / \u6caa\u6df1300", "ZZA500", (KEY_RATIO_CYB, "ZZA500_ratio"), ("\u521b\u4e1a\u677f\u5206\u4f4d",), ("\u521b\u4e1a\u677f\u5efa\u8bae",)),
     ("\u4e0a\u8bc150 / \u6caa\u6df1300", "SH50_300", ("\u4e0a\u8bc150/300\u6bd4\u4ef7", "50/300\u6bd4\u4ef7", "SH50_300_ratio"), ("\u4e0a\u8bc150/300\u5206\u4f4d", "50/300\u5206\u4f4d"), ("\u4e0a\u8bc150/300\u5efa\u8bae", "50/300\u5efa\u8bae")),
     ("\u79d1\u521b50 / \u6caa\u6df1300", "KC50_300", ("\u79d1\u521b50/300\u6bd4\u4ef7", "\u79d1\u521b50/\u6caa\u6df1300\u6bd4\u4ef7", "KC50_300_ratio"), ("\u79d1\u521b50/300\u5206\u4f4d", "\u79d1\u521b50/\u6caa\u6df1300\u5206\u4f4d"), ("\u79d1\u521b50/300\u5efa\u8bae", "\u79d1\u521b50/\u6caa\u6df1300\u5efa\u8bae")),

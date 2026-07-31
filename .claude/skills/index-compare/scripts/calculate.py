@@ -205,6 +205,7 @@ def process_data(input_path, output_path):
         ('ZZA500', 'ZZA500', 'HS300'),
         ('SH50_300', 'SH50', 'HS300'),
         ('KC50_300', 'KC50', 'HS300'),
+        ('ZZ1000_500', 'ZZ1000', 'ZZ500'),
         ('SH50', 'ZZA500', 'SH50'),
         ('KC50', 'KC50', 'SH50'),
         ('VAL300', 'GRO300', 'VAL300'),

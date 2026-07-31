@@ -71,6 +71,39 @@ class ValueGrowthDirectionTest(unittest.TestCase):
         self.assertEqual(latest_signal["val300_recommendation"], "强烈超配")
         self.assertEqual(latest_signal["gro300_recommendation"], "强烈低配")
 
+    def test_export_and_shared_signal_include_zz1000_over_zz500(self):
+        dates = pd.date_range("2026-01-01", periods=30, freq="D")
+        ratio = [1.0] * 29 + [1.2]
+        processed = pd.DataFrame(
+            {
+                "trade_date": dates,
+                "ZZ1000_500_ratio": ratio,
+                "ZZ1000_500_MA30": pd.Series(ratio).rolling(30).mean(),
+            }
+        )
+        conclusions = {
+            "ZZ1000_500": {"recommendation": {"action": "超配"}},
+        }
+
+        export = self.relative_main.build_export_dataframe(processed, conclusions)
+        latest = export.iloc[-1]
+        self.assertAlmostEqual(latest["1000/500比价"], 1.2)
+        self.assertEqual(latest["1000/500分位"], 100.0)
+        self.assertGreater(latest["1000/500偏离(%)"], 0)
+        self.assertEqual(latest["1000/500建议"], "超配")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "relative_signal.json"
+            self.assertTrue(self.relative_main.export_shared_signal(export, output))
+            payload = json.loads(output.read_text(encoding="utf-8"))
+
+        latest_record = payload["records"][-1]
+        latest_signal = payload["latest_signal"]
+        self.assertAlmostEqual(latest_record["zz1000_500_ratio"], 1.2)
+        self.assertEqual(latest_record["zz1000_500_percentile"], 100.0)
+        self.assertGreater(latest_record["zz1000_500_deviation"], 0)
+        self.assertEqual(latest_signal["zz1000_500_recommendation"], "超配")
+
     def test_feishu_ratio_row_describes_growth_as_numerator(self):
         from scripts.feishu import FeishuWebhook
 
@@ -90,6 +123,23 @@ class ValueGrowthDirectionTest(unittest.TestCase):
         self.assertEqual(style_row["ratio"], "2.0000")
         self.assertEqual(style_row["percentile"], "100.0%")
         self.assertEqual(style_row["recommendation"], "强烈低配")
+
+    def test_feishu_ratio_rows_include_zz1000_over_zz500(self):
+        from scripts.feishu import FeishuWebhook
+
+        rows = FeishuWebhook()._build_signal_rows(
+            {
+                "1000/500比价": 1.2,
+                "1000/500分位": 88.0,
+                "1000/500建议": "低配",
+            },
+            {},
+        )
+        row = next(row for row in rows if row["name"] == "中证1000 / 中证500")
+
+        self.assertEqual(row["ratio"], "1.2000")
+        self.assertEqual(row["percentile"], "88.0%")
+        self.assertEqual(row["recommendation"], "低配")
 
     def test_feishu_payload_puts_equity_premium_before_relative_signals(self):
         from scripts.feishu import FeishuWebhook

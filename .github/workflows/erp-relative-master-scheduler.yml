@@ -466,42 +466,90 @@ jobs:
       - name: Restore site from committed Relative data
         if: steps.preflight.outputs.restore_site == 'true'
         working-directory: csi300-relative-index
+        env:
+          PAGES_CANONICAL_URL: https://keycool.github.io/index-compare-analysis
         run: |
           set -euo pipefail
 
-          python -m pip install --upgrade pip
-          pip install -r .claude/skills/index-compare/requirements.txt
-
           mkdir -p reports ../shared
-          python .claude/skills/index-compare/scripts/generate_report.py \
-            --output "$PWD/reports" \
-            --mode production
+
+          RESTORE_SOURCE="generated_from_committed_data"
+          if python -m pip install --upgrade pip \
+            && pip install -r .claude/skills/index-compare/requirements.txt \
+            && python .claude/skills/index-compare/scripts/generate_report.py \
+              --output "$PWD/reports" \
+              --mode production; then
+            echo "[RESTORE] Generated report from committed data"
+          else
+            RESTORE_SOURCE="downloaded_from_github_pages"
+            echo "::warning::Failed to generate report from committed data; falling back to current GitHub Pages HTML"
+            FALLBACK_REPORT="reports/index_compare_$(date -u +%Y%m%d_%H%M%S).html"
+            curl -fsSL "$PAGES_CANONICAL_URL/" -o "$FALLBACK_REPORT"
+            test -s "$FALLBACK_REPORT"
+            echo "[RESTORE] Downloaded fallback report to $FALLBACK_REPORT"
+          fi
+          export RESTORE_SOURCE
 
           python - << 'PY'
+          import csv
           import json
+          import os
+          import subprocess
           from datetime import datetime, timezone
           from pathlib import Path
 
-          import pandas as pd
-
           data_path = Path(".claude/skills/index-compare/data/processed_data.csv")
-          df = pd.read_csv(data_path, index_col=0)
-          latest_date = str(df.index[-1])[:10] if not df.empty else ""
+          latest_date = ""
+          if data_path.exists():
+              with data_path.open("r", encoding="utf-8", newline="") as f:
+                  rows = csv.reader(f)
+                  next(rows, None)
+                  for row in rows:
+                      if row:
+                          latest_date = str(row[0])[:10]
+
+          pages_url = os.environ.get("PAGES_CANONICAL_URL", "").rstrip("/")
+          shared_dir = Path("../shared")
+          shared_dir.mkdir(parents=True, exist_ok=True)
+          merged_path = shared_dir / "merged_signal.json"
+          if pages_url:
+              try:
+                  subprocess.run(
+                      ["curl", "-fsSL", f"{pages_url}/data/merged_signal.json", "-o", str(merged_path)],
+                      check=True,
+                      timeout=45,
+                  )
+                  print("[RESTORE] Downloaded merged_signal.json from GitHub Pages")
+              except Exception as exc:
+                  print(f"::warning::Failed to download published merged_signal.json: {exc}")
+
+          if merged_path.exists() and merged_path.stat().st_size > 0:
+              try:
+                  payload = json.loads(merged_path.read_text(encoding="utf-8"))
+                  latest_date = (
+                      ((payload.get("components") or {}).get("relative") or {}).get("latest_date")
+                      or payload.get("latest_date")
+                      or latest_date
+                  )
+              except Exception:
+                  pass
+              print(f"[RESTORE] latest_date={latest_date}")
+              raise SystemExit(0)
+
           payload = {
               "version": "restore-site",
               "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "latest_date": latest_date,
               "restore_site": True,
+              "restore_source": os.environ.get("RESTORE_SOURCE", "unknown"),
               "components": {
                   "relative": {
                       "latest_date": latest_date,
-                      "source": "committed_data",
+                      "source": "committed_data_or_github_pages",
                   }
               },
           }
-          shared_dir = Path("../shared")
-          shared_dir.mkdir(parents=True, exist_ok=True)
-          (shared_dir / "merged_signal.json").write_text(
+          merged_path.write_text(
               json.dumps(payload, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )

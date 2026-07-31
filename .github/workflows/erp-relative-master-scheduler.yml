@@ -1,6 +1,12 @@
 name: erp-relative-master-scheduler
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/erp-relative-master-scheduler.yml"
+      - ".claude/skills/index-compare/**"
   schedule:
     # GitHub cron uses UTC:
     # 15:18 UTC = 23:18 Asia/Shanghai, Monday-Friday.
@@ -64,6 +70,7 @@ jobs:
           PREFLIGHT_RETRY_ATTEMPTS: "3"
           PREFLIGHT_RETRY_SLEEP_SECONDS: "600"
           RESTORE_SITE_ON_SKIP: ${{ github.event.inputs.restore_site_on_skip || 'true' }}
+          VERCEL_CANONICAL_URL: https://index-compare-analysis.vercel.app
         run: |
           python - << 'PY'
           import json
@@ -95,11 +102,28 @@ jobs:
 
           write_output("restore_site", "false")
 
+          if event_name == "push":
+              write_output("should_run", "false")
+              write_output("restore_site", "true")
+              write_output("reason", "push_redeploy_committed_site")
+              write_output("latest_trade_date", "not_checked")
+              write_output("deployed_latest_date", "not_checked")
+              write_summary([
+                  "## Preflight check",
+                  "",
+                  f"- Event: `{event_name}`",
+                  "- Decision: `restore_site`",
+                  "- Reason: `push_redeploy_committed_site`",
+                  "- Effect: formal calculation, Tushare refresh, web data update, and Feishu pushes are skipped; existing committed site data is redeployed.",
+              ])
+              raise SystemExit(0)
+
           token = os.environ.get("TUSHARE_TOKEN", "").strip()
           if not token:
               raise SystemExit("TUSHARE_TOKEN is required for Tushare preflight")
 
           latest_signal_url = os.environ.get("LATEST_SIGNAL_URL", "").strip()
+          vercel_canonical_url = os.environ.get("VERCEL_CANONICAL_URL", "").strip()
           required_index_codes = [
               code.strip()
               for code in os.environ.get("REQUIRED_INDEX_DAILY_CODES", "").split(",")
@@ -145,6 +169,20 @@ jobs:
                       or (merged_payload or {}).get("latest_date")
                       or ""
                   ), ""
+              except urllib.error.URLError as exc:
+                  return "", str(exc)
+              except Exception as exc:
+                  return "", str(exc)
+
+          def fetch_http_status(url: str) -> tuple[str, str]:
+              if not url:
+                  return "", ""
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "erp-relative-preflight"})
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return str(resp.status), ""
+              except urllib.error.HTTPError as exc:
+                  return str(exc.code), str(exc)
               except urllib.error.URLError as exc:
                   return "", str(exc)
               except Exception as exc:
@@ -271,12 +309,20 @@ jobs:
           fetch_error = ""
           should_run = True
           reason = "new_data_detected"
+          restore_site = False
+          vercel_status = ""
+          vercel_error = ""
 
           for attempt in range(1, attempts + 1):
               deployed_latest_date, fetch_error = fetch_deployed_latest_date()
               if not is_manual and deployed_latest_date and deployed_latest_date >= latest_trade_date:
+                  vercel_status, vercel_error = fetch_http_status(vercel_canonical_url)
                   should_run = False
-                  reason = "no_new_tushare_data"
+                  if vercel_status == "200":
+                      reason = "no_new_tushare_data"
+                  else:
+                      restore_site = True
+                      reason = f"vercel_unhealthy_{vercel_status or 'unknown'}_restore_site"
                   readiness = {
                       "data_ready": True,
                       "missing_index_codes": [],
@@ -348,6 +394,7 @@ jobs:
               reason = "manual_redeploy_existing_data"
 
           write_output("should_run", "true" if should_run else "false")
+          write_output("restore_site", "true" if restore_site else "false")
           write_output("reason", reason)
           write_output("latest_trade_date", latest_trade_date)
           write_output("deployed_latest_date", deployed_latest_date or "unknown")
@@ -368,9 +415,15 @@ jobs:
               f"- Attempts: `{attempt}`",
               f"- Tushare latest trade date: `{latest_trade_date}`",
               f"- Deployed relative latest date: `{deployed_latest_date or 'unknown'}`",
+              f"- Vercel canonical status: `{vercel_status or 'not_checked'}`",
               f"- Decision: `{'run' if should_run else 'skip'}`",
               f"- Reason: `{reason}`",
           ]
+          if restore_site:
+              lines[-2] = "- Decision: `restore_site`"
+              lines.append("- Effect: formal calculation and web data update are skipped; existing committed site data is redeployed to recover the site.")
+          if vercel_error:
+              lines.append(f"- Vercel note: `{vercel_error}`")
           if fetch_error:
               lines.append(f"- Note: failed to fetch latest deployed signal, so workflow continues. `{fetch_error}`")
           write_summary(lines)
@@ -940,7 +993,11 @@ jobs:
           cd site
           DEPLOY_OUTPUT="$(vercel deploy --prod --yes --token "$VERCEL_TOKEN")"
           echo "$DEPLOY_OUTPUT"
-          DEPLOY_URL="$(echo "$DEPLOY_OUTPUT" | tail -n 1)"
+          DEPLOY_URL="$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^[:space:]]+\.vercel\.app' | tail -n 1)"
+          if [[ -z "$DEPLOY_URL" ]]; then
+            echo "::error::Unable to parse Vercel deployment URL from deploy output"
+            exit 1
+          fi
           echo "deploy_url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
 
           vercel alias set "$DEPLOY_URL" "$VERCEL_CANONICAL_HOST" --token "$VERCEL_TOKEN"
@@ -956,6 +1013,10 @@ jobs:
           done
           if [[ "$STATUS_CODE" != "200" ]]; then
             echo "::error::Vercel canonical URL $VERCEL_CANONICAL_URL returned $STATUS_CODE after deploy"
+            exit 1
+          fi
+          if ! grep -q "INDEX COMPARE ANALYSIS REPORT" /tmp/vercel-index.html; then
+            echo "::error::Vercel canonical URL returned 200 but did not serve the expected report HTML"
             exit 1
           fi
 

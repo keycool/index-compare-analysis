@@ -1,13 +1,6 @@
 name: erp-relative-master-scheduler
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - ".github/workflows/erp-relative-master-scheduler.yml"
-      - ".claude/skills/index-compare/**"
-      - "vercel.json"
   schedule:
     # GitHub cron uses UTC:
     # 15:18 UTC = 23:18 Asia/Shanghai, Monday-Friday.
@@ -102,22 +95,6 @@ jobs:
                   f.write("\n".join(lines) + "\n")
 
           write_output("restore_site", "false")
-
-          if event_name == "push":
-              write_output("should_run", "false")
-              write_output("restore_site", "true")
-              write_output("reason", "push_redeploy_committed_site")
-              write_output("latest_trade_date", "not_checked")
-              write_output("deployed_latest_date", "not_checked")
-              write_summary([
-                  "## Preflight check",
-                  "",
-                  f"- Event: `{event_name}`",
-                  "- Decision: `restore_site`",
-                  "- Reason: `push_redeploy_committed_site`",
-                  "- Effect: formal calculation, Tushare refresh, web data update, and Feishu pushes are skipped; existing committed site data is redeployed.",
-              ])
-              raise SystemExit(0)
 
           token = os.environ.get("TUSHARE_TOKEN", "").strip()
           if not token:

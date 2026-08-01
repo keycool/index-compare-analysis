@@ -252,6 +252,38 @@ python scripts/main.py --query ZZA500
 
 ## GitHub Actions
 
+### ERP 策略执行工作流
+
+ERP 策略主要由 `.github/workflows/erp-execution-cloud.yml` 运行。它采用两层仓位框架：
+
+1. 沪深300 ERP / 恒生指数 ERP 决定 A 股、港股权益总水位。
+2. 比价系统只在权益水位内部决定具体 ETF 标的分配。
+
+当沪深300 ERP 分位低于 60% 时，默认 A 股权益水位约为半仓；ERP 继续下降时，所有权益标的都会整体下降，资金进入 `cash` 现金/低风险层。沪深300是核心锚，但配置了绝对核心上限，不能再无限吸收残差。
+
+关键配置：
+
+- `orchestrator/erp_execution_config.json`
+  - `portfolio_deployment.ashare.breakpoints`：A 股权益水位。
+  - `portfolio_deployment.hkshare.breakpoints`：港股权益水位。
+  - `portfolio_deployment.core_caps.hs300.breakpoints`：沪深300核心上限。
+  - `cross_market.hk_pool_cap`：港股总上限。
+
+手动运行时可以传入总可投资资金：
+
+```bash
+python orchestrator/run_erp_execution_cloud.py --execution-mode research --total-capital 1000000
+```
+
+GitHub Actions 手动运行时填写 `total_capital` 即可；也可以设置 Repository Variable `ERP_TOTAL_CAPITAL` 作为默认容量。若不填写，系统以当前 ERP 映射持仓金额作为容量。
+
+ERP 工作流还支持一个非阻断监控接口：
+
+- `ERP_MONITOR_WEBHOOK_URL`：监控接口 URL。
+- `ERP_MONITOR_WEBHOOK_TOKEN`：可选 Bearer Token。
+
+每次生成执行计划后会尝试 POST 一份轻量 JSON 快照，包含数据健康状态、A 股/港股/现金水位、主要调仓动作。接口失败只记录 warning，不影响日报和 artifacts。详细 SOP 见 `docs/erp-strategy-sop.md`。
+
 线上调度现已收敛为：
 
 - 主调度 workflow: `.github/workflows/erp-relative-master-scheduler.yml`

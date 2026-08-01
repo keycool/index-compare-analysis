@@ -1269,6 +1269,132 @@ def _balance_target_weights(targets: dict[str, dict[str, Any]], core_bucket: str
     core["target_weight"] = round(max(0.0, float(core.get("target_weight", 0.0)) + diff), 4)
 
 
+def _piecewise_from_points(value: float | None, points: list[dict[str, Any]], default: float) -> float:
+    if value is None or not points:
+        return default
+    clean_points: list[tuple[float, float]] = []
+    for point in points:
+        percentile = safe_float(point.get("percentile"))
+        weight = safe_float(point.get("weight"))
+        if percentile is not None and weight is not None:
+            clean_points.append((float(percentile), float(weight)))
+    if not clean_points:
+        return default
+    clean_points.sort(key=lambda item: item[0])
+    if value <= clean_points[0][0]:
+        return max(0.0, min(clean_points[0][1], 1.0))
+    if value >= clean_points[-1][0]:
+        return max(0.0, min(clean_points[-1][1], 1.0))
+    for (left_pct, left_weight), (right_pct, right_weight) in zip(clean_points, clean_points[1:]):
+        if left_pct <= value <= right_pct:
+            ratio = (value - left_pct) / max(1e-9, right_pct - left_pct)
+            return max(0.0, min(left_weight + (right_weight - left_weight) * ratio, 1.0))
+    return default
+
+
+def _deployment_factor(percentile: float | None, deployment_config: dict[str, Any], market: str) -> float:
+    market_config = deployment_config.get(market, {})
+    if not market_config.get("enabled", deployment_config.get("enabled", False)):
+        return 1.0
+    return _piecewise_from_points(
+        percentile,
+        market_config.get("breakpoints", []),
+        float(market_config.get("default_weight", 1.0)),
+    )
+
+
+def _core_cap(percentile: float | None, deployment_config: dict[str, Any], bucket: str) -> float | None:
+    bucket_config = deployment_config.get("core_caps", {}).get(bucket, {})
+    if not bucket_config.get("enabled", deployment_config.get("enabled", False)):
+        return None
+    return _piecewise_from_points(
+        percentile,
+        bucket_config.get("breakpoints", []),
+        float(bucket_config.get("default_weight", 1.0)),
+    )
+
+
+def _add_cash_target(targets: dict[str, dict[str, Any]], weight: float, reason: str) -> None:
+    if abs(weight) < 0.00005:
+        return
+    existing = targets.get("cash")
+    if existing:
+        existing["target_weight"] = round(float(existing.get("target_weight", 0.0)) + weight, 4)
+        existing["signal"] = reason
+        return
+    targets["cash"] = {
+        "bucket": "cash",
+        "label": "现金/低风险",
+        "sleeve": "reserve",
+        "pool": "reserve",
+        "signal": reason,
+        "target_weight": round(weight, 4),
+    }
+
+
+def apply_portfolio_deployment_layer(
+    targets: dict[str, dict[str, Any]],
+    erp_snapshot: dict[str, Any],
+    hsi_erp_snapshot: dict[str, Any],
+    execution_config: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Scale ETF targets by ERP deployment waterline and send undeployed weight to cash."""
+    deployment_config = execution_config.get("portfolio_deployment", {})
+    if not deployment_config.get("enabled", False):
+        _balance_target_weights(targets)
+        return targets
+
+    legacy_ashare_pool = sum(float(item.get("target_weight", 0.0)) for item in targets.values() if item.get("pool") == "ashare")
+    legacy_hk_pool = sum(float(item.get("target_weight", 0.0)) for item in targets.values() if item.get("pool") == "hkshare")
+
+    ashare_factor = _deployment_factor(safe_float(erp_snapshot.get("percentile")), deployment_config, "ashare")
+    hk_cap = float(execution_config.get("cross_market", {}).get("hk_pool_cap", 0.20))
+    if hsi_erp_snapshot.get("available"):
+        hk_factor = _deployment_factor(safe_float(hsi_erp_snapshot.get("percentile")), deployment_config, "hkshare")
+        hk_deployment = min(hk_cap, legacy_hk_pool) * hk_factor
+    else:
+        hk_deployment = min(hk_cap, legacy_hk_pool)
+    ashare_deployment = max(0.0, 1.0 - hk_deployment) * ashare_factor
+
+    scaled: dict[str, dict[str, Any]] = {}
+    for key, item in targets.items():
+        old_weight = float(item.get("target_weight", 0.0))
+        if item.get("pool") == "ashare":
+            new_weight = old_weight / max(legacy_ashare_pool, 1e-9) * ashare_deployment
+        elif item.get("pool") == "hkshare":
+            new_weight = old_weight / max(legacy_hk_pool, 1e-9) * hk_deployment
+        else:
+            new_weight = old_weight
+        scaled[key] = {**item, "target_weight": round(max(0.0, new_weight), 4)}
+
+    surplus = 0.0
+    hs300_cap = _core_cap(safe_float(erp_snapshot.get("percentile")), deployment_config, "hs300")
+    if hs300_cap is not None and "hs300" in scaled:
+        current = float(scaled["hs300"].get("target_weight", 0.0))
+        if current > hs300_cap:
+            surplus += current - hs300_cap
+            scaled["hs300"]["target_weight"] = round(hs300_cap, 4)
+            scaled["hs300"]["core_cap"] = round(hs300_cap, 4)
+            scaled["hs300"]["cap_released_to_cash"] = round(current - hs300_cap, 4)
+
+    hsi_cap = _core_cap(safe_float(hsi_erp_snapshot.get("percentile")), deployment_config, "hsi")
+    if hsi_cap is not None and "hsi" in scaled:
+        current = float(scaled["hsi"].get("target_weight", 0.0))
+        if current > hsi_cap:
+            surplus += current - hsi_cap
+            scaled["hsi"]["target_weight"] = round(hsi_cap, 4)
+            scaled["hsi"]["core_cap"] = round(hsi_cap, 4)
+            scaled["hsi"]["cap_released_to_cash"] = round(current - hsi_cap, 4)
+
+    non_cash_total = sum(float(item.get("target_weight", 0.0)) for key, item in scaled.items() if key != "cash")
+    _add_cash_target(scaled, max(0.0, 1.0 - non_cash_total) + surplus, "ERP deployment reserve")
+    total = sum(float(item.get("target_weight", 0.0)) for item in scaled.values())
+    _add_cash_target(scaled, 1.0 - total, "rounding reserve")
+    if "cash" in scaled:
+        scaled["cash"]["target_weight"] = round(max(0.0, float(scaled["cash"].get("target_weight", 0.0))), 4)
+    return scaled
+
+
 def build_target_weights(
     erp_snapshot: dict[str, Any],
     hsi_erp_snapshot: dict[str, Any],
@@ -1452,7 +1578,7 @@ def build_target_weights(
             "trajectory_reason": "HSI ERP unavailable; no new HK exposure",
         }
         _balance_target_weights(targets)
-        return targets
+        return apply_portfolio_deployment_layer(targets, erp_snapshot, hsi_erp_snapshot, execution_config)
 
     hk_def_total = hk_pool * (1.0 - hk_aggressive)
     targets["hsi"] = {
@@ -1501,7 +1627,7 @@ def build_target_weights(
     }
 
     _balance_target_weights(targets)
-    return targets
+    return apply_portfolio_deployment_layer(targets, erp_snapshot, hsi_erp_snapshot, execution_config)
 
 
 # ── Rebalance plan ───────────────────────────────────────────
@@ -1511,14 +1637,18 @@ def build_rebalance_plan(
     unmapped_holdings: list[dict[str, Any]],
     targets: dict[str, dict[str, Any]],
     holding_breakdown: dict[str, list[dict[str, Any]]] | None = None,
+    total_capital: float | None = None,
 ) -> dict[str, Any]:
-    managed_total = round(sum(current_holdings.values()), 2)
+    current_equity_total = round(sum(current_holdings.values()), 2)
+    using_total_capital = bool(total_capital and total_capital > 0)
+    managed_total = round(float(total_capital), 2) if using_total_capital else current_equity_total
     unmapped_total = round(sum(item["amount"] for item in unmapped_holdings), 2)
-    total_erp_amount = round(managed_total + unmapped_total, 2)
+    total_erp_amount = managed_total if using_total_capital else round(managed_total + unmapped_total, 2)
+    current_cash_amount = round(max(0.0, managed_total - current_equity_total), 2)
 
     positions: list[dict[str, Any]] = []
     for bucket, target in targets.items():
-        current_amount = round(current_holdings.get(bucket, 0.0), 2)
+        current_amount = current_cash_amount if bucket == "cash" else round(current_holdings.get(bucket, 0.0), 2)
         current_weight = round(current_amount / managed_total, 4) if managed_total > 0 else 0.0
         target_amount = round(managed_total * float(target["target_weight"]), 2)
         delta_amount = round(target_amount - current_amount, 2)
@@ -1539,8 +1669,8 @@ def build_rebalance_plan(
         })
 
     positions.sort(key=lambda item: (
-        {"ashare": 0, "hkshare": 1}.get(item.get("pool", ""), 2),
-        {"defensive": 0, "aggressive": 1}.get(item.get("sleeve", ""), 2),
+        {"ashare": 0, "hkshare": 1, "reserve": 2}.get(item.get("pool", ""), 3),
+        {"defensive": 0, "aggressive": 1, "reserve": 2}.get(item.get("sleeve", ""), 3),
         item.get("bucket", ""),
     ))
     target_weight_sum = sum(float(item.get("target_weight", 0.0)) for item in positions)
@@ -1548,6 +1678,9 @@ def build_rebalance_plan(
     return {
         "total_erp_amount": total_erp_amount,
         "managed_amount": managed_total,
+        "capital_base_source": "total_capital" if using_total_capital else "mapped_erp_holdings",
+        "current_equity_amount": current_equity_total,
+        "current_cash_amount": current_cash_amount,
         "unmapped_amount": unmapped_total,
         "managed_position_count": len(current_holdings),
         "unmapped_position_count": len(unmapped_holdings),
@@ -1559,6 +1692,10 @@ def build_rebalance_plan(
         "hkshare_pool": round(sum(
             float(t.get("target_weight", 0)) for k, t in targets.items()
             if t.get("pool") == "hkshare"
+        ), 4),
+        "reserve_pool": round(sum(
+            float(t.get("target_weight", 0)) for k, t in targets.items()
+            if t.get("pool") == "reserve"
         ), 4),
         "positions": positions,
         "unmapped_holdings": unmapped_holdings,
@@ -1830,7 +1967,8 @@ def print_summary(payload: dict[str, Any]) -> None:
 
     pool_ashare = portfolio.get("ashare_pool", 0)
     pool_hk = portfolio.get("hkshare_pool", 0)
-    print(f"Pool split: A-share={pool_ashare:.2%}  HK={pool_hk:.2%}")
+    pool_reserve = portfolio.get("reserve_pool", 0)
+    print(f"Pool split: A-share={pool_ashare:.2%}  HK={pool_hk:.2%}  Reserve={pool_reserve:.2%}")
     print(f"Managed ERP capital: {portfolio['managed_amount']:,.2f}")
     print()
 
@@ -1871,6 +2009,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
     parser.add_argument("--portfolio-snapshot-as-of", default=os.environ.get("ERP_PORTFOLIO_SNAPSHOT_AS_OF", ""))
+    parser.add_argument("--total-capital", default=os.environ.get("ERP_TOTAL_CAPITAL", ""))
     parser.add_argument(
         "--execution-mode",
         default=os.environ.get("ERP_EXECUTION_MODE", "rebalance"),
@@ -1891,6 +2030,9 @@ def main() -> None:
     portfolio_snapshot_as_of = parse_date(args.portfolio_snapshot_as_of) if args.portfolio_snapshot_as_of else None
     if args.portfolio_snapshot_as_of and portfolio_snapshot_as_of is None:
         raise ValueError(f"Invalid --portfolio-snapshot-as-of date: {args.portfolio_snapshot_as_of}")
+    total_capital = safe_float(args.total_capital) if args.total_capital else None
+    if args.total_capital and (total_capital is None or total_capital <= 0):
+        raise ValueError(f"Invalid --total-capital amount: {args.total_capital}")
 
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
@@ -1933,7 +2075,7 @@ def main() -> None:
     holding_breakdown = build_holding_breakdown(asset_rows, alias_map, ignored_holdings)
 
     targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
-    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown)
+    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown, total_capital)
     strict_mode = args.execution_mode == "rebalance"
     data_health = build_data_health(
         erp_snapshot,
@@ -1962,6 +2104,7 @@ def main() -> None:
             "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
             "as_of": as_of.strftime("%Y-%m-%d"),
             "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
+            "total_capital": total_capital,
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },

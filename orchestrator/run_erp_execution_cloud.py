@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 EXECUTION_SCRIPT = ROOT / "erp_execution_cloud.py"
 PUSH_SCRIPT = ROOT / "push_erp_daily_summary_to_feishu_v3.py"
+MONITOR_SCRIPT = ROOT / "push_erp_monitor_snapshot.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         "--portfolio-snapshot-as-of",
         default="",
         help="Explicit portfolio snapshot date used for holdings freshness checks",
+    )
+    parser.add_argument(
+        "--total-capital",
+        default="",
+        help="Total configurable capital used for equity/cash deployment targets",
     )
     return parser.parse_args()
 
@@ -74,7 +80,13 @@ def main() -> None:
         extra_args.extend(["--as-of", args.as_of])
     if args.portfolio_snapshot_as_of:
         extra_args.extend(["--portfolio-snapshot-as-of", args.portfolio_snapshot_as_of])
+    if args.total_capital:
+        extra_args.extend(["--total-capital", args.total_capital])
     run_python(EXECUTION_SCRIPT, *extra_args)
+    try:
+        run_python(MONITOR_SCRIPT)
+    except RuntimeError as exc:
+        print(f"ERP monitor snapshot skipped as non-blocking: {exc}", file=sys.stderr)
     if args.push_summary:
         run_python(PUSH_SCRIPT)
 

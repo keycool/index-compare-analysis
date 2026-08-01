@@ -4,6 +4,58 @@
     "hk_min_erp_percentile": 30,
     "hk_full_erp_percentile": 50
   },
+  "portfolio_deployment": {
+    "enabled": true,
+    "ashare": {
+      "enabled": true,
+      "default_weight": 0.50,
+      "breakpoints": [
+        {"percentile": 0, "weight": 0.05},
+        {"percentile": 20, "weight": 0.15},
+        {"percentile": 40, "weight": 0.35},
+        {"percentile": 60, "weight": 0.50},
+        {"percentile": 70, "weight": 0.65},
+        {"percentile": 80, "weight": 0.85},
+        {"percentile": 100, "weight": 1.00}
+      ]
+    },
+    "hkshare": {
+      "enabled": true,
+      "default_weight": 0.00,
+      "breakpoints": [
+        {"percentile": 0, "weight": 0.00},
+        {"percentile": 30, "weight": 0.00},
+        {"percentile": 50, "weight": 0.50},
+        {"percentile": 70, "weight": 0.80},
+        {"percentile": 100, "weight": 1.00}
+      ]
+    },
+    "core_caps": {
+      "hs300": {
+        "enabled": true,
+        "default_weight": 0.35,
+        "breakpoints": [
+          {"percentile": 0, "weight": 0.08},
+          {"percentile": 20, "weight": 0.12},
+          {"percentile": 40, "weight": 0.25},
+          {"percentile": 60, "weight": 0.35},
+          {"percentile": 80, "weight": 0.40},
+          {"percentile": 100, "weight": 0.45}
+        ]
+      },
+      "hsi": {
+        "enabled": true,
+        "default_weight": 0.12,
+        "breakpoints": [
+          {"percentile": 0, "weight": 0.00},
+          {"percentile": 30, "weight": 0.05},
+          {"percentile": 50, "weight": 0.10},
+          {"percentile": 70, "weight": 0.14},
+          {"percentile": 100, "weight": 0.18}
+        ]
+      }
+    }
+  },
   "percentile_thresholds": {
     "low": 40.0,
     "high": 60.0

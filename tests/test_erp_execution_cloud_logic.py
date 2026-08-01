@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from orchestrator.erp_execution_cloud import (
     DEFAULT_RELATIVE_ANALYSIS_SETTINGS,
     build_data_health,
+    build_rebalance_plan,
     build_target_weights,
     compute_relative_snapshot,
     filter_signal_rows_as_of,
@@ -99,6 +100,46 @@ def base_config():
             "hstech": {"label": "hstech", "sleeve": "aggressive", "pool": "hkshare"},
         },
     }
+
+
+def deployment_config():
+    config = base_config()
+    config["portfolio_deployment"] = {
+        "enabled": True,
+        "ashare": {
+            "enabled": True,
+            "default_weight": 0.50,
+            "breakpoints": [
+                {"percentile": 0, "weight": 0.05},
+                {"percentile": 40, "weight": 0.35},
+                {"percentile": 60, "weight": 0.50},
+                {"percentile": 80, "weight": 0.85},
+                {"percentile": 100, "weight": 1.00},
+            ],
+        },
+        "hkshare": {
+            "enabled": True,
+            "default_weight": 0.00,
+            "breakpoints": [
+                {"percentile": 0, "weight": 0.00},
+                {"percentile": 50, "weight": 0.50},
+                {"percentile": 100, "weight": 1.00},
+            ],
+        },
+        "core_caps": {
+            "hs300": {
+                "enabled": True,
+                "default_weight": 0.35,
+                "breakpoints": [
+                    {"percentile": 0, "weight": 0.08},
+                    {"percentile": 40, "weight": 0.25},
+                    {"percentile": 60, "weight": 0.35},
+                    {"percentile": 100, "weight": 0.45},
+                ],
+            }
+        },
+    }
+    return config
 
 
 def base_relative_snapshot():
@@ -496,6 +537,38 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         snapshot = compute_relative_snapshot(rows)
 
         self.assertEqual(snapshot["deviations"]["gro300_deviation"], 23.97)
+
+    def test_portfolio_deployment_adds_cash_when_erp_is_below_60th_percentile(self):
+        targets = build_target_weights(
+            {"percentile": 58.0, "aggressive_weight": 0.50},
+            {"available": False, "aggressive_weight": 0.0},
+            base_relative_snapshot(),
+            deployment_config(),
+            {"hs300": 100000.0},
+        )
+
+        total_weight = sum(float(item["target_weight"]) for item in targets.values())
+        self.assertAlmostEqual(total_weight, 1.0, places=4)
+        self.assertIn("cash", targets)
+        self.assertGreater(targets["cash"]["target_weight"], 0.49)
+        self.assertLessEqual(targets["hs300"]["target_weight"], 0.35)
+
+    def test_rebalance_plan_uses_total_capital_for_cash_layer(self):
+        targets = build_target_weights(
+            {"percentile": 58.0, "aggressive_weight": 0.50},
+            {"available": False, "aggressive_weight": 0.0},
+            base_relative_snapshot(),
+            deployment_config(),
+            {"hs300": 300000.0},
+        )
+
+        portfolio = build_rebalance_plan({"hs300": 300000.0}, [], targets, total_capital=1_000_000.0)
+        cash = next(item for item in portfolio["positions"] if item["bucket"] == "cash")
+
+        self.assertEqual(portfolio["managed_amount"], 1_000_000.0)
+        self.assertEqual(portfolio["current_equity_amount"], 300000.0)
+        self.assertEqual(cash["current_amount"], 700000.0)
+        self.assertGreater(cash["target_amount"], 490000.0)
 
 
 if __name__ == "__main__":

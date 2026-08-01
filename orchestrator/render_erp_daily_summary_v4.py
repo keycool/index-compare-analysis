@@ -23,7 +23,7 @@ SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 BUCKET_ORDER = {
     "hs300": 0, "sh50": 1, "val300": 2, "gro300": 3,
     "cyb": 4, "zz500": 5, "zz1000": 6, "kc50": 7,
-    "hsi": 8, "hstech": 9,
+    "hsi": 8, "hstech": 9, "cash": 10,
 }
 
 
@@ -173,7 +173,8 @@ def main() -> None:
 
     pool_ashare = portfolio.get("ashare_pool", 0)
     pool_hk = portfolio.get("hkshare_pool", 0)
-    lines.append(f"- **资金分配**：A股 `{pct(pool_ashare)}` / 港股 `{pct(pool_hk)}`。")
+    pool_reserve = portfolio.get("reserve_pool", 0)
+    lines.append(f"- **资金分配**：A股 `{pct(pool_ashare)}` / 港股 `{pct(pool_hk)}` / 现金低风险 `{pct(pool_reserve)}`。")
     lines.append("")
 
     # ── 比价建议 ──
@@ -194,14 +195,14 @@ def main() -> None:
     lines.append("")
 
     # Group by pool
-    for pool_name, pool_label in [("ashare", "A股"), ("hkshare", "港股")]:
+    for pool_name, pool_label in [("ashare", "A股"), ("hkshare", "港股"), ("reserve", "现金/低风险")]:
         pool_positions = [p for p in positions if p.get("pool") == pool_name]
         if not pool_positions:
             continue
         lines.append(f"### {pool_label}")
         lines.append("")
         for item in pool_positions:
-            sleeve_tag = "🛡" if item.get("sleeve") == "defensive" else "⚔"
+            sleeve_tag = "现金" if item.get("pool") == "reserve" else ("🛡" if item.get("sleeve") == "defensive" else "⚔")
             line = (
                 f"- {sleeve_tag} `{item['label']}`：当前 `{num(item['current_amount'])}`，"
                 f"目标 `{num(item['target_amount'])}`，"
@@ -229,6 +230,12 @@ def main() -> None:
     lines.append("## 组合结构")
     lines.append("")
     lines.append(f"- 可管理 ERP 资金：`{num(portfolio['managed_amount'])}`")
+    if portfolio.get("capital_base_source"):
+        lines.append(f"- 资金容量来源：`{portfolio['capital_base_source']}`")
+    if "current_equity_amount" in portfolio:
+        lines.append(f"- 当前权益持仓合计：`{num(portfolio['current_equity_amount'])}`")
+    if "current_cash_amount" in portfolio:
+        lines.append(f"- 当前现金/低风险估算：`{num(portfolio['current_cash_amount'])}`")
     lines.append(f"- 未映射资金：`{num(portfolio['unmapped_amount'])}`")
     lines.append(f"- 可管理持仓数：`{portfolio['managed_position_count']}`")
     if portfolio["unmapped_holdings"]:

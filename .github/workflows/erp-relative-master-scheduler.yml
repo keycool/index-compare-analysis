@@ -934,6 +934,18 @@ jobs:
 
           site_dir.mkdir(parents=True, exist_ok=True)
           (site_dir / ".nojekyll").write_text("", encoding="utf-8")
+          (site_dir / "vercel.json").write_text(
+              json.dumps(
+                  {
+                      "$schema": "https://openapi.vercel.sh/vercel.json",
+                      "rewrites": [{"source": "/", "destination": "/index.html"}],
+                  },
+                  ensure_ascii=False,
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
 
           prod_reports = sorted(
               p for p in reports_dir.glob("index_compare_*.html")
@@ -982,6 +994,7 @@ jobs:
 
           test -f site/index.html
           test -f site/site_manifest.json
+          test -f site/vercel.json
 
           echo "## Site build" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"

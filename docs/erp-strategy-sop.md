@@ -152,3 +152,20 @@ python orchestrator/run_erp_execution_cloud.py --execution-mode research
 ```powershell
 python -m unittest tests.test_erp_execution_cloud_logic
 ```
+
+## 8. 外部监测端触发策略刷新
+
+外部监测端可以调用 GitHub `repository_dispatch` 事件 `erp_monitor_refresh`，触发一次 ERP 标准配置刷新。该入口固定使用 `research` 模式、严格校验最新市场信号，并且不会推送飞书摘要；它只会生成标准容量计划并回传监控快照。
+
+外部端需要一个仅授权给 `keycool/index-compare-analysis` 的 fine-grained PAT，权限为 `Contents: write`。令牌只保存在监测端，不写入仓库或 workflow。
+
+```bash
+curl -L -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer ${ERP_GITHUB_DISPATCH_TOKEN}" \
+  -H "X-GitHub-Api-Version: 2026-03-10" \
+  https://api.github.com/repos/keycool/index-compare-analysis/dispatches \
+  -d '{"event_type":"erp_monitor_refresh","client_payload":{"request_id":"monitor-20260805-001"}}'
+```
+
+成功时 GitHub 返回 `204 No Content`。监测端随后通过既有 `ERP_MONITOR_WEBHOOK_URL` 接收快照；快照中的 `trigger.request_id` 与请求中的 `request_id` 一致，便于关联本次请求。实际资产金额仍只由监测端控制，不会传入 ERP 策略。

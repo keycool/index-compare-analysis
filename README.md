@@ -312,6 +312,8 @@ ERP 工作流还支持一个非阻断监控接口：
 - `CSI_FEISHU_APP_TOKEN`
 - `CSI_FEISHU_TABLE_ID`
 
+外部监测端还可通过 GitHub `repository_dispatch` 事件 `erp_monitor_refresh` 触发一次只读策略刷新。该入口固定为 `research`、不推送飞书摘要，并把 `client_payload.request_id` 回传到监控快照的 `trigger.request_id`。鉴权与调用示例见 `docs/erp-strategy-sop.md`。
+
 ## GitHub Pages
 
 主调度 workflow 成功后，会自动发布 GitHub Pages 站点：

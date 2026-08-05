@@ -5,6 +5,8 @@ on:
     # 09:13 Asia/Shanghai on the 13th and 28th of every month.
     - cron: "13 1 13 * *"
     - cron: "13 1 28 * *"
+  repository_dispatch:
+    types: [erp_monitor_refresh]
   workflow_dispatch:
     inputs:
       push_summary:
@@ -72,7 +74,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
             echo "ERP_EXECUTION_PUSH_SUMMARY=true" >> "$GITHUB_ENV"
-          elif [ "${{ inputs.push_summary }}" = "true" ]; then
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push_summary }}" = "true" ]; then
             echo "ERP_EXECUTION_PUSH_SUMMARY=true" >> "$GITHUB_ENV"
           else
             echo "ERP_EXECUTION_PUSH_SUMMARY=false" >> "$GITHUB_ENV"
@@ -96,7 +98,7 @@ jobs:
           summary_lines = ["## ERP execution signal source", ""]
           event_name = "${{ github.event_name }}"
           push_summary = os.environ.get("ERP_EXECUTION_PUSH_SUMMARY") == "true"
-          strict_signal_gate = event_name == "schedule" or push_summary
+          strict_signal_gate = event_name in ("schedule", "repository_dispatch") or push_summary
           if not url:
               raise SystemExit("ERP_MERGED_SIGNAL_URL is required; refusing unverified Feishu fallback for pushed ERP summaries")
 
@@ -247,9 +249,11 @@ jobs:
           ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
           ERP_DAILY_FEISHU_WEBHOOK_SECRET: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_SECRET }}
           ERP_EXECUTION_PUSH_SUMMARY: ${{ env.ERP_EXECUTION_PUSH_SUMMARY }}
-          ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'research' }}
+          ERP_EXECUTION_MODE: ${{ github.event_name == 'repository_dispatch' && 'research' || inputs.execution_mode || 'research' }}
           ERP_EXECUTION_AS_OF: ${{ inputs.as_of || '' }}
           ERP_PORTFOLIO_SNAPSHOT_AS_OF: ${{ inputs.portfolio_snapshot_as_of || '' }}
+          ERP_MONITOR_TRIGGER_SOURCE: ${{ github.event_name }}
+          ERP_MONITOR_REQUEST_ID: ${{ github.event.client_payload.request_id || '' }}
           ERP_MONITOR_WEBHOOK_URL: ${{ secrets.ERP_MONITOR_WEBHOOK_URL }}
           ERP_MONITOR_WEBHOOK_TOKEN: ${{ secrets.ERP_MONITOR_WEBHOOK_TOKEN }}
 

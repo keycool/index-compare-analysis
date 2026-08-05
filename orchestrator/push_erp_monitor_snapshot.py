@@ -46,6 +46,10 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
         "version": plan.get("version"),
         "generated_at": plan.get("generated_at"),
         "execution_mode": plan.get("inputs", {}).get("execution_mode"),
+        "trigger": {
+            "source": os.environ.get("ERP_MONITOR_TRIGGER_SOURCE", "local"),
+            "request_id": os.environ.get("ERP_MONITOR_REQUEST_ID", "").strip() or None,
+        },
         "as_of": health.get("as_of"),
         "ok": not health.get("errors"),
         "errors": health.get("errors", []),

@@ -269,20 +269,16 @@ ERP 策略主要由 `.github/workflows/erp-execution-cloud.yml` 运行。它采�
   - `portfolio_deployment.core_caps.hs300.breakpoints`：沪深300核心上限。
   - `cross_market.hk_pool_cap`：港股总上限。
 
-手动运行时可以传入总可投资资金：
+ERP 策略固定使用 `strategy_reference.notional = 1000000 CNY` 作为标准容量，输出每个标的的目标权重和对应的标准金额。它不是实际资金上限，也不会读取或使用实际总资产来限制目标配置。
 
-```bash
-python orchestrator/run_erp_execution_cloud.py --execution-mode research --total-capital 1000000
-```
-
-GitHub Actions 手动运行时填写 `total_capital` 即可；也可以设置 Repository Variable `ERP_TOTAL_CAPITAL` 作为默认容量。若不填写，系统以当前 ERP 映射持仓金额作为容量。
+实际总资产、实际仓位、执行差额和风控上限由外部监测端负责；策略只提供标准化目标，方便监测端按自身资产规模换算和比较。
 
 ERP 工作流还支持一个非阻断监控接口：
 
 - `ERP_MONITOR_WEBHOOK_URL`：监控接口 URL。
 - `ERP_MONITOR_WEBHOOK_TOKEN`：可选 Bearer Token。
 
-每次生成执行计划后会尝试 POST 一份轻量 JSON 快照，包含数据健康状态、A 股/港股/现金水位、主要调仓动作。接口失败只记录 warning，不影响日报和 artifacts。详细 SOP 见 `docs/erp-strategy-sop.md`。
+每次生成执行计划后会尝试 POST 一份轻量 JSON 快照，包含数据健康状态、A 股/港股/现金水位和标准容量下的目标配置。快照明确声明 `actual_allocation_in_strategy = false`，为外部监测端预留实际资产接入位；接口失败只记录 warning，不影响日报和 artifacts。详细 SOP 见 `docs/erp-strategy-sop.md`。
 
 线上调度现已收敛为：
 

@@ -108,8 +108,8 @@ def ordered_positions(positions: list[dict]) -> list[dict]:
 
 def hsi_unavailable_text(message: str) -> str:
     return (
-        f"数据不可用（{message}），禁止新增港股敞口；"
-        "按当前港股比例保留，并受港股总上限约束。"
+        f"数据不可用（{message}），标准模型不配置港股；"
+        "实际港股敞口由外部监测端处理。"
     )
 
 
@@ -202,6 +202,16 @@ def main() -> None:
         lines.append(f"### {pool_label}")
         lines.append("")
         for item in pool_positions:
+            if "reference_amount" in item:
+                line = (
+                    f"- `{item['label']}`\uff1a\u76ee\u6807\u6743\u91cd `{pct(item['target_weight'])}`\uff0c"
+                    f"\u6309\u6807\u51c6\u5bb9\u91cf\u6298\u7b97 `{num(item['reference_amount'])}`\u3002"
+                )
+                tags = [text for text in (forced_exit_text(item), reentry_text(item), trajectory_text(item)) if text]
+                if tags:
+                    line += " " + " | ".join(tags)
+                lines.append(line)
+                continue
             sleeve_tag = "现金" if item.get("pool") == "reserve" else ("🛡" if item.get("sleeve") == "defensive" else "⚔")
             line = (
                 f"- {sleeve_tag} `{item['label']}`：当前 `{num(item['current_amount'])}`，"
@@ -229,7 +239,12 @@ def main() -> None:
     # ── 组合结构 ──
     lines.append("## 组合结构")
     lines.append("")
-    lines.append(f"- 可管理 ERP 资金：`{num(portfolio['managed_amount'])}`")
+    if portfolio.get("reference_notional"):
+        lines.append(f"- 策略标准容量：`{num(portfolio['reference_notional'])}` `{portfolio.get('reference_currency', 'CNY')}`")
+        lines.append(f"- 实际资产配置责任方：`{portfolio.get('actual_allocation_owner', 'external_monitor')}`")
+        lines.append("- 实际持仓金额不参与策略目标、差额或现金层计算。")
+    else:
+        lines.append(f"- 可管理 ERP 资金：`{num(portfolio['managed_amount'])}`")
     if portfolio.get("capital_base_source"):
         lines.append(f"- 资金容量来源：`{portfolio['capital_base_source']}`")
     if "current_equity_amount" in portfolio:

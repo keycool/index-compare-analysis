@@ -139,6 +139,11 @@ def asset_suggestion_rows(portfolio: dict[str, Any], execution_mode: str = "reba
             f"{signal}；目标 {fmt_weight(item.get('target_weight'))}，"
             f"{action_text(str(item.get('action', 'hold')), item.get('delta_amount', 0), execution_mode)}"
         )
+        if "reference_amount" in item:
+            suggestion = (
+                f"{signal}\uff1b\u76ee\u6807 {fmt_weight(item.get('target_weight'))}\uff1b"
+                f"\u6807\u51c6\u91d1\u989d {fmt_amount(item.get('reference_amount'))}"
+            )
         rows.append(
             {
                 "标的": str(item.get("label") or bucket),

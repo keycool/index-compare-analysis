@@ -72,8 +72,8 @@ def mode_label(plan: dict) -> str:
 
 def hsi_unavailable_text(message: str) -> str:
     return (
-        f"港股 ERP 缺失：禁止新增港股敞口；"
-        f"按当前港股比例保留并受港股总上限约束（{message}）"
+        f"港股 ERP 缺失：标准模型不配置港股；"
+        f"实际港股敞口由外部监测端处理（{message}）"
     )
 
 
@@ -195,7 +195,8 @@ def build_payload(plan: dict, summary_text: str) -> dict:
         f" / 港股 {portfolio.get('hkshare_pool', 0):.0%}"
     )
     content.append([{"tag": "text", "text": erp_line + hk_line + pool_line}])
-    content.append([{"tag": "text", "text": f"ERP管理资金: {portfolio['managed_amount']:,.0f}"}])
+    reference_amount = portfolio.get("reference_notional", portfolio["managed_amount"])
+    content.append([{"tag": "text", "text": f"\u7b56\u7565\u6807\u51c6\u5bb9\u91cf: {reference_amount:,.0f} \u3002\u5b9e\u9645\u8d44\u4ea7\u914d\u7f6e\u7531\u5916\u90e8\u76d1\u6d4b\u7aef\u63a7\u5236\u3002"}])
     display_scope = (
         "展示口径: research 仅为研究草案；比价表=对分子建议；标的表=ETF目标差额草案"
         if research_mode
@@ -228,6 +229,17 @@ def build_payload(plan: dict, summary_text: str) -> dict:
             current_pool = pool
             pool_label = "🇭🇰 港股" if pool == "hkshare" else "🇨🇳 A股"
             content.append([{"tag": "text", "text": f"【{pool_label}】"}])
+
+        if "reference_amount" in item:
+            text = (
+                f"{item['label']} | \u76ee\u6807\u6743\u91cd {item['target_weight']:.2%}"
+                f" | \u6807\u51c6\u91d1\u989d {item['reference_amount']:,.0f}"
+            )
+            text += forced_exit_text(item)
+            text += reentry_text(item)
+            text += trajectory_text(item)
+            content.append([{"tag": "text", "text": text}])
+            continue
 
         sleeve_icon = "🛡" if sleeve == "defensive" else "⚔"
 
@@ -279,7 +291,7 @@ def build_fallback_text_payload(plan: dict) -> dict:
         f"{header} ({relative['date']})",
         *health_lines(plan),
         f"A股 ERP {erp['percentile']:.0f}% 进攻{erp['aggressive_weight']:.0%}",
-        f"资金: {portfolio['managed_amount']:,.0f}",
+        f"\u7b56\u7565\u6807\u51c6\u5bb9\u91cf: {portfolio.get('reference_notional', portfolio['managed_amount']):,.0f}",
         "比价信号:",
         *text_relative_signal_table(relative),
         "可配置标的建议:",
@@ -287,6 +299,12 @@ def build_fallback_text_payload(plan: dict) -> dict:
         position_title,
     ]
     for item in positions:
+        if "reference_amount" in item:
+            lines.append(
+                f"{item['label']}: \u76ee\u6807\u6743\u91cd {item['target_weight']:.2%}, "
+                f"\u6807\u51c6\u91d1\u989d {item['reference_amount']:,.0f}"
+            )
+            continue
         line = (
             f"{item['label']}: 当前 {item['current_amount']:,.0f}, "
             f"目标 {item['target_amount']:,.0f}, {direction_text(item, research_mode)}"

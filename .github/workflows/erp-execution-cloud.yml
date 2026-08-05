@@ -18,7 +18,7 @@ on:
         default: "https://keycool.github.io/index-compare-analysis/data/merged_signal.json"
         type: string
       execution_mode:
-        description: "rebalance blocks stale holdings; research keeps stale holdings as warnings"
+        description: "rebalance enforces signal completeness; actual holdings stay outside the strategy model"
         required: false
         default: "research"
         type: choice
@@ -32,11 +32,6 @@ on:
         type: string
       portfolio_snapshot_as_of:
         description: "Optional portfolio snapshot date for strict holdings freshness checks (YYYY-MM-DD)"
-        required: false
-        default: ""
-        type: string
-      total_capital:
-        description: "Optional total configurable capital for equity/cash deployment targets"
         required: false
         default: ""
         type: string
@@ -236,9 +231,9 @@ jobs:
       - name: Run ERP execution workflow
         run: |
           if [ "$ERP_EXECUTION_PUSH_SUMMARY" = "true" ]; then
-            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --as-of "$ERP_EXECUTION_AS_OF" --portfolio-snapshot-as-of "$ERP_PORTFOLIO_SNAPSHOT_AS_OF" --total-capital "$ERP_TOTAL_CAPITAL" --push-summary
+            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --as-of "$ERP_EXECUTION_AS_OF" --portfolio-snapshot-as-of "$ERP_PORTFOLIO_SNAPSHOT_AS_OF" --push-summary
           else
-            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --as-of "$ERP_EXECUTION_AS_OF" --portfolio-snapshot-as-of "$ERP_PORTFOLIO_SNAPSHOT_AS_OF" --total-capital "$ERP_TOTAL_CAPITAL"
+            python orchestrator/run_erp_execution_cloud.py --execution-mode "$ERP_EXECUTION_MODE" --as-of "$ERP_EXECUTION_AS_OF" --portfolio-snapshot-as-of "$ERP_PORTFOLIO_SNAPSHOT_AS_OF"
           fi
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
@@ -255,7 +250,6 @@ jobs:
           ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'research' }}
           ERP_EXECUTION_AS_OF: ${{ inputs.as_of || '' }}
           ERP_PORTFOLIO_SNAPSHOT_AS_OF: ${{ inputs.portfolio_snapshot_as_of || '' }}
-          ERP_TOTAL_CAPITAL: ${{ inputs.total_capital || vars.ERP_TOTAL_CAPITAL || '' }}
           ERP_MONITOR_WEBHOOK_URL: ${{ secrets.ERP_MONITOR_WEBHOOK_URL }}
           ERP_MONITOR_WEBHOOK_TOKEN: ${{ secrets.ERP_MONITOR_WEBHOOK_TOKEN }}
 
@@ -295,7 +289,7 @@ jobs:
               "",
               f"- Generated at: `{plan.get('generated_at', '-')}`",
               f"- As of: `{health.get('as_of', '-')}`",
-              f"- Managed amount: `{portfolio.get('managed_amount', 0):,.2f}`",
+              f"- Strategy reference notional: `{portfolio.get('reference_notional', portfolio.get('managed_amount', 0)):,.2f}`",
               f"- Target weight sum: `{total_weight:.4%}`",
               f"- Data dates: `{health.get('dates', {})}`",
               f"- Defensive value current amount: `{defensive_value.get('current_amount', 0):,.2f}`",

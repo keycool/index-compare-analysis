@@ -27,19 +27,18 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
     portfolio = plan.get("portfolio", {})
     health = plan.get("signals", {}).get("data_health", {})
     positions = portfolio.get("positions", [])
-    top_actions = sorted(
+    reference_allocations = sorted(
         [
             {
                 "bucket": item.get("bucket"),
                 "label": item.get("label"),
-                "action": item.get("action"),
-                "delta_amount": _round(item.get("delta_amount"), 2),
                 "target_weight": _round(item.get("target_weight"), 4),
+                "reference_amount": _round(item.get("reference_amount"), 2),
             }
             for item in positions
             if item.get("bucket") != "cash"
         ],
-        key=lambda item: abs(float(item.get("delta_amount") or 0.0)),
+        key=lambda item: float(item.get("reference_amount") or 0.0),
         reverse=True,
     )[:8]
     return {
@@ -53,10 +52,10 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
         "warnings": health.get("warnings", []),
         "dates": health.get("dates", {}),
         "portfolio": {
-            "managed_amount": _round(portfolio.get("managed_amount"), 2),
-            "capital_base_source": portfolio.get("capital_base_source"),
-            "current_equity_amount": _round(portfolio.get("current_equity_amount"), 2),
-            "current_cash_amount": _round(portfolio.get("current_cash_amount"), 2),
+            "strategy_reference_notional": _round(portfolio.get("reference_notional"), 2),
+            "reference_currency": portfolio.get("reference_currency"),
+            "actual_allocation_owner": portfolio.get("actual_allocation_owner"),
+            "actual_allocation_in_strategy": False,
             "ashare_pool": _round(portfolio.get("ashare_pool"), 4),
             "hkshare_pool": _round(portfolio.get("hkshare_pool"), 4),
             "reserve_pool": _round(portfolio.get("reserve_pool"), 4),
@@ -66,7 +65,12 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
             "erp": plan.get("signals", {}).get("erp", {}),
             "hsi_erp": plan.get("signals", {}).get("hsi_erp", {}),
         },
-        "top_actions": top_actions,
+        "reference_allocations": reference_allocations,
+        "actual_allocation_contract": {
+            "owner": "external_monitor",
+            "strategy_input": "not_used",
+            "expected_fields": ["observed_at", "total_amount", "currency", "positions"],
+        },
     }
 
 

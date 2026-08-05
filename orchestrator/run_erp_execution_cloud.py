@@ -47,11 +47,6 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Explicit portfolio snapshot date used for holdings freshness checks",
     )
-    parser.add_argument(
-        "--total-capital",
-        default="",
-        help="Total configurable capital used for equity/cash deployment targets",
-    )
     return parser.parse_args()
 
 
@@ -80,8 +75,6 @@ def main() -> None:
         extra_args.extend(["--as-of", args.as_of])
     if args.portfolio_snapshot_as_of:
         extra_args.extend(["--portfolio-snapshot-as-of", args.portfolio_snapshot_as_of])
-    if args.total_capital:
-        extra_args.extend(["--total-capital", args.total_capital])
     run_python(EXECUTION_SCRIPT, *extra_args)
     try:
         run_python(MONITOR_SCRIPT)

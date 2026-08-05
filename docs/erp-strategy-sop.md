@@ -54,19 +54,13 @@ A 股默认水位：
 python orchestrator/run_erp_execution_cloud.py --execution-mode research
 ```
 
-按总可投资资金运行，例如 100 万：
+策略固定以 `strategy_reference.notional = 1000000`（CNY）作为标准容量，输出目标权重及对应的标准金额。该 100 万只是统一标尺，不是实际可投资金额，也不会由 GitHub Actions 输入或实际持仓金额覆盖。
 
 ```powershell
-python orchestrator/run_erp_execution_cloud.py --execution-mode research --total-capital 1000000
+python orchestrator/run_erp_execution_cloud.py --execution-mode research
 ```
 
-正式调仓模式：
-
-```powershell
-python orchestrator/run_erp_execution_cloud.py --execution-mode rebalance --total-capital 1000000 --push-summary
-```
-
-GitHub Actions 手动运行时，可以填写 `total_capital`。如果不填写，系统使用当前 ERP 映射持仓金额作为容量。
+实际总资产、实际仓位、实际买卖差额和账户级风控由外部监测端负责。ERP 策略不生成可直接执行的真实金额调仓单。
 
 ## 4. 输出检查
 
@@ -80,17 +74,18 @@ GitHub Actions 手动运行时，可以填写 `total_capital`。如果不填写�
 - `portfolio.ashare_pool`：A 股权益目标占总资金比例。
 - `portfolio.hkshare_pool`：港股权益目标占总资金比例。
 - `portfolio.reserve_pool`：现金/低风险目标占总资金比例。
-- `portfolio.current_equity_amount`：当前已识别 ERP 权益持仓。
-- `portfolio.current_cash_amount`：总资金减去当前权益持仓后的现金/低风险估算。
-- `positions[].bucket == "cash"`：现金/低风险目标仓。
+- `portfolio.reference_notional`：固定的策略标准容量，默认 1,000,000 CNY。
+- `positions[].reference_amount`：按标准容量折算的参考金额。
+- `portfolio.actual_allocation_owner`：实际资产配置责任方，默认 `external_monitor`。
+- `positions[].bucket == "cash"`：现金/低风险目标权重。
 - `signals.data_health.errors`：正式调仓阻断项。
 - `signals.data_health.warnings`：研究模式或非阻断警告。
 
-正式调仓前必须确认：
+策略结果使用前必须确认：
 
 - `target_weight_sum` 接近 1.0。
 - `data_health.errors` 为空。
-- 现金层存在且金额符合总权益水位预期。
+- 现金层权重符合总权益水位预期。
 - 沪深300目标没有超过 `core_caps.hs300` 对应上限。
 
 ## 5. 监控接口
@@ -112,10 +107,21 @@ GitHub Actions 手动运行时，可以填写 `total_capital`。如果不填写�
 - `errors`
 - `warnings`
 - `dates`
+- `portfolio.strategy_reference_notional`
 - `portfolio.ashare_pool`
 - `portfolio.hkshare_pool`
 - `portfolio.reserve_pool`
-- `top_actions`
+- `reference_allocations`
+- `actual_allocation_contract`
+
+外部监测端接入实际资产时，建议使用独立的实际组合消息或数据源，至少包含：
+
+- `observed_at`：实际持仓快照时间。
+- `total_amount`：实际总资产。
+- `currency`：资产计价币种。
+- `positions`：实际标的、金额和权重。
+
+监测端以 `target_weight` 和 `reference_amount` 作为策略目标进行换算、偏离检测和执行控制；不得把 `total_amount` 或实际仓位回写为 ERP 策略的容量约束。
 
 监控接口是非阻断设计：
 

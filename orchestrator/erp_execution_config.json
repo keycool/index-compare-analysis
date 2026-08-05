@@ -4,6 +4,11 @@
     "hk_min_erp_percentile": 30,
     "hk_full_erp_percentile": 50
   },
+  "strategy_reference": {
+    "notional": 1000000,
+    "currency": "CNY",
+    "actual_allocation_owner": "external_monitor"
+  },
   "portfolio_deployment": {
     "enabled": true,
     "ashare": {

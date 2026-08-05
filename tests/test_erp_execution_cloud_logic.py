@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from orchestrator.erp_execution_cloud import (
     DEFAULT_RELATIVE_ANALYSIS_SETTINGS,
     build_data_health,
+    build_reference_allocation_plan,
     build_rebalance_plan,
     build_target_weights,
     compute_relative_snapshot,
@@ -15,6 +16,7 @@ from orchestrator.erp_execution_cloud import (
     _derive_relative_recommendation,
     _fill_derived_relative_recommendations,
 )
+from orchestrator.push_erp_monitor_snapshot import build_snapshot
 
 
 REC = {
@@ -569,6 +571,54 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertEqual(portfolio["current_equity_amount"], 300000.0)
         self.assertEqual(cash["current_amount"], 700000.0)
         self.assertGreater(cash["target_amount"], 490000.0)
+
+    def test_reference_plan_uses_fixed_notional_without_live_holding_deltas(self):
+        targets = build_target_weights(
+            {"percentile": 58.0, "aggressive_weight": 0.50},
+            {"available": False, "aggressive_weight": 0.0},
+            base_relative_snapshot(),
+            deployment_config(),
+            {},
+        )
+
+        portfolio = build_reference_allocation_plan(
+            targets,
+            {"notional": 1_000_000, "currency": "CNY", "actual_allocation_owner": "external_monitor"},
+        )
+        cash = next(item for item in portfolio["positions"] if item["bucket"] == "cash")
+
+        self.assertEqual(portfolio["reference_notional"], 1_000_000.0)
+        self.assertEqual(portfolio["actual_allocation_owner"], "external_monitor")
+        self.assertNotIn("current_equity_amount", portfolio)
+        self.assertNotIn("delta_amount", cash)
+        self.assertAlmostEqual(cash["reference_amount"], cash["target_weight"] * 1_000_000, places=2)
+
+    def test_monitor_snapshot_keeps_actual_allocation_outside_strategy(self):
+        plan = {
+            "version": "3.1",
+            "generated_at": "2026-08-05T00:00:00+08:00",
+            "inputs": {"execution_mode": "research"},
+            "signals": {"data_health": {"errors": [], "warnings": [], "dates": {}}},
+            "portfolio": {
+                "reference_notional": 1_000_000,
+                "reference_currency": "CNY",
+                "actual_allocation_owner": "external_monitor",
+                "ashare_pool": 0.50,
+                "hkshare_pool": 0.10,
+                "reserve_pool": 0.40,
+                "target_weight_sum": 1.0,
+                "positions": [{"bucket": "hs300", "label": "HS300", "target_weight": 0.5, "reference_amount": 500000}],
+            },
+        }
+
+        snapshot = build_snapshot(plan)
+
+        self.assertEqual(snapshot["portfolio"]["strategy_reference_notional"], 1_000_000.0)
+        self.assertNotIn("current_equity_amount", snapshot["portfolio"])
+        self.assertNotIn("top_actions", snapshot)
+        self.assertEqual(snapshot["reference_allocations"][0]["reference_amount"], 500000.0)
+        self.assertEqual(snapshot["actual_allocation_contract"]["strategy_input"], "not_used")
+
 
 
 if __name__ == "__main__":

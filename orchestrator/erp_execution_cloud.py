@@ -1704,6 +1704,58 @@ def build_rebalance_plan(
 
 # ── Output ───────────────────────────────────────────────────
 
+def build_reference_allocation_plan(
+    targets: dict[str, dict[str, Any]],
+    strategy_reference: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a model allocation from a fixed notional, independent of live holdings."""
+    notional = safe_float(strategy_reference.get("notional"))
+    if notional is None or notional <= 0:
+        raise ValueError("strategy_reference.notional must be a positive number")
+    notional = round(notional, 2)
+
+    positions = [
+        {
+            **target,
+            "reference_amount": round(notional * float(target["target_weight"]), 2),
+        }
+        for target in targets.values()
+    ]
+    positions.sort(key=lambda item: (
+        {"ashare": 0, "hkshare": 1, "reserve": 2}.get(item.get("pool", ""), 3),
+        {"defensive": 0, "aggressive": 1, "reserve": 2}.get(item.get("sleeve", ""), 3),
+        item.get("bucket", ""),
+    ))
+    target_weight_sum = sum(float(item.get("target_weight", 0.0)) for item in positions)
+
+    return {
+        "managed_amount": notional,
+        "capital_base_source": "strategy_reference_notional",
+        "reference_notional": notional,
+        "reference_currency": str(strategy_reference.get("currency") or "CNY"),
+        "actual_allocation_owner": str(strategy_reference.get("actual_allocation_owner") or "external_monitor"),
+        "actual_allocation_in_strategy": False,
+        "unmapped_amount": 0.0,
+        "managed_position_count": 0,
+        "unmapped_position_count": 0,
+        "unmapped_holdings": [],
+        "target_weight_sum": round(target_weight_sum, 6),
+        "ashare_pool": round(sum(
+            float(item.get("target_weight", 0.0)) for item in positions
+            if item.get("pool") == "ashare"
+        ), 4),
+        "hkshare_pool": round(sum(
+            float(item.get("target_weight", 0.0)) for item in positions
+            if item.get("pool") == "hkshare"
+        ), 4),
+        "reserve_pool": round(sum(
+            float(item.get("target_weight", 0.0)) for item in positions
+            if item.get("pool") == "reserve"
+        ), 4),
+        "positions": positions,
+    }
+
+
 def erp_asset_update_bounds(rows: list[dict[str, Any]]) -> dict[str, Any]:
     dates: list[datetime] = []
     total = 0
@@ -1812,7 +1864,7 @@ def build_data_health(
                 add_signal_issue(f"hsi_erp data is stale: {age} days > {limits['hsi_erp']}")
     else:
         ages["hsi_erp"] = None
-        warnings.append("HSI ERP unavailable; HK targets are capped at current HK exposure")
+        warnings.append("HSI ERP unavailable; no new HK strategy exposure is added")
 
     required_recommendations = [
         "zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech",
@@ -1957,7 +2009,7 @@ def print_summary(payload: dict[str, Any]) -> None:
     portfolio = payload["portfolio"]
 
     print("=" * 60)
-    print("ERP Execution Cloud Plan v3")
+    print("ERP Execution Cloud Reference Plan v3.1")
     print("=" * 60)
     print(f"A-share ERP: {erp['date']}  premium={erp['equity_premium']:.2f}  pct={erp['percentile']:.2f}%  agg={erp['aggressive_weight']:.2%}")
     if hsi.get("available"):
@@ -1969,7 +2021,8 @@ def print_summary(payload: dict[str, Any]) -> None:
     pool_hk = portfolio.get("hkshare_pool", 0)
     pool_reserve = portfolio.get("reserve_pool", 0)
     print(f"Pool split: A-share={pool_ashare:.2%}  HK={pool_hk:.2%}  Reserve={pool_reserve:.2%}")
-    print(f"Managed ERP capital: {portfolio['managed_amount']:,.2f}")
+    print(f"Strategy reference notional: {portfolio['reference_notional']:,.2f} {portfolio['reference_currency']}")
+    print(f"Actual allocation owner: {portfolio['actual_allocation_owner']}")
     print()
 
     for item in portfolio["positions"]:
@@ -1985,8 +2038,7 @@ def print_summary(payload: dict[str, Any]) -> None:
         extras = " | ".join(extra) if extra else ""
         print(
             f"  {pool_tag} {item['sleeve']:10s} {item['label']:16s} "
-            f"cur={item['current_amount']:>10,.2f}  →  tgt={item['target_amount']:>10,.2f}  "
-            f"({item['action']:4s} {item['delta_amount']:>+10,.2f})"
+            f"weight={item['target_weight']:>7.2%}  reference={item['reference_amount']:>10,.2f}"
             + (f"  [{extras}]" if extras else "")
         )
 
@@ -2009,7 +2061,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=os.environ.get("ERP_EXECUTION_OUTPUT_PATH", str(DEFAULT_OUTPUT)))
     parser.add_argument("--as-of", default=os.environ.get("ERP_EXECUTION_AS_OF", ""))
     parser.add_argument("--portfolio-snapshot-as-of", default=os.environ.get("ERP_PORTFOLIO_SNAPSHOT_AS_OF", ""))
-    parser.add_argument("--total-capital", default=os.environ.get("ERP_TOTAL_CAPITAL", ""))
     parser.add_argument(
         "--execution-mode",
         default=os.environ.get("ERP_EXECUTION_MODE", "rebalance"),
@@ -2030,10 +2081,6 @@ def main() -> None:
     portfolio_snapshot_as_of = parse_date(args.portfolio_snapshot_as_of) if args.portfolio_snapshot_as_of else None
     if args.portfolio_snapshot_as_of and portfolio_snapshot_as_of is None:
         raise ValueError(f"Invalid --portfolio-snapshot-as-of date: {args.portfolio_snapshot_as_of}")
-    total_capital = safe_float(args.total_capital) if args.total_capital else None
-    if args.total_capital and (total_capital is None or total_capital <= 0):
-        raise ValueError(f"Invalid --total-capital amount: {args.total_capital}")
-
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
     reader = FeishuBitableReader(app_id, app_secret)
@@ -2054,7 +2101,11 @@ def main() -> None:
         relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
     relative_rows = filter_signal_rows_as_of(relative_rows, as_of)
 
-    asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
+    try:
+        asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
+    except Exception as exc:
+        asset_rows = []
+        print(f"Asset-table audit skipped: {exc}", file=sys.stderr)
 
     # HSI ERP (optional)
     hsi_rows: list[dict[str, Any]] | None = None
@@ -2069,13 +2120,11 @@ def main() -> None:
     hsi_erp_snapshot = compute_hsi_erp_snapshot(hsi_rows, execution_config.get("hk_erp", {}))
     relative_snapshot = compute_relative_snapshot(relative_rows)
 
-    alias_map = {normalize_text(k): normalize_text(v) for k, v in execution_config.get("holding_alias_map", {}).items()}
-    ignored_holdings = {normalize_text(item) for item in execution_config.get("ignored_erp_holdings", [])}
-    current_holdings, unmapped_holdings = aggregate_current_holdings(asset_rows, alias_map, ignored_holdings)
-    holding_breakdown = build_holding_breakdown(asset_rows, alias_map, ignored_holdings)
-
-    targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, current_holdings)
-    portfolio = build_rebalance_plan(current_holdings, unmapped_holdings, targets, holding_breakdown, total_capital)
+    targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, {})
+    portfolio = build_reference_allocation_plan(
+        targets,
+        execution_config.get("strategy_reference", {}),
+    )
     strict_mode = args.execution_mode == "rebalance"
     data_health = build_data_health(
         erp_snapshot,
@@ -2084,13 +2133,13 @@ def main() -> None:
         asset_rows,
         execution_config,
         as_of,
-        require_asset_timestamp=strict_mode,
+        require_asset_timestamp=False,
         strict_signal_dates=strict_mode,
         portfolio_snapshot_as_of=portfolio_snapshot_as_of,
     )
 
     payload = {
-        "version": "3.0",
+        "version": "3.1",
         "signal_type": "erp_execution_plan",
         "generated_at": datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds"),
         "inputs": {
@@ -2100,11 +2149,12 @@ def main() -> None:
             "relative_table": {"app_token": args.relative_app_token, "table_id": args.relative_table_id},
             "erp_signal_json": str(Path(args.erp_signal_json).resolve()) if args.erp_signal_json else None,
             "relative_signal_json": str(Path(args.relative_signal_json).resolve()) if args.relative_signal_json else None,
-            "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id},
+            "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id, "role": "audit_only"},
             "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
             "as_of": as_of.strftime("%Y-%m-%d"),
             "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
-            "total_capital": total_capital,
+            "strategy_reference_notional": portfolio["reference_notional"],
+            "actual_allocation_owner": portfolio["actual_allocation_owner"],
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },

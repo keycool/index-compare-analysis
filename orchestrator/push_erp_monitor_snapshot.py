@@ -25,24 +25,40 @@ def _round(value: Any, digits: int = 4) -> float | None:
 
 def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
     portfolio = plan.get("portfolio", {})
-    health = plan.get("signals", {}).get("data_health", {})
+    signals = plan.get("signals", {})
+    health = signals.get("data_health", {})
+    relative = signals.get("relative", {})
     positions = portfolio.get("positions", [])
     reference_allocations = sorted(
         [
             {
                 "bucket": item.get("bucket"),
                 "label": item.get("label"),
+                "pool": item.get("pool"),
+                "sleeve": item.get("sleeve"),
                 "target_weight": _round(item.get("target_weight"), 4),
                 "reference_amount": _round(item.get("reference_amount"), 2),
+                "signal": item.get("signal"),
+                "anchor_signal": item.get("anchor_signal"),
+                "anchor_signal_key": item.get("anchor_signal_key"),
+                "anchor_eligible": item.get("anchor_eligible"),
+                "feature_tilt_multiplier": _round(item.get("feature_tilt_multiplier"), 4),
+                "feature_tilts": item.get("feature_tilts", []),
+                "allocation_score": _round(item.get("allocation_score"), 6),
+                "forced_exit": item.get("forced_exit"),
+                "reentry_blocked": item.get("reentry_blocked"),
+                "trajectory_multiplier": _round(item.get("trajectory_multiplier"), 4),
+                "trajectory_reason": item.get("trajectory_reason"),
             }
             for item in positions
             if item.get("bucket") != "cash"
         ],
         key=lambda item: float(item.get("reference_amount") or 0.0),
         reverse=True,
-    )[:8]
+    )
     return {
         "signal_type": "erp_execution_monitor",
+        "monitor_schema_version": 2,
         "version": plan.get("version"),
         "generated_at": plan.get("generated_at"),
         "execution_mode": plan.get("inputs", {}).get("execution_mode"),
@@ -66,8 +82,14 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
             "target_weight_sum": _round(portfolio.get("target_weight_sum"), 6),
         },
         "signals": {
-            "erp": plan.get("signals", {}).get("erp", {}),
-            "hsi_erp": plan.get("signals", {}).get("hsi_erp", {}),
+            "erp": signals.get("erp", {}),
+            "hsi_erp": signals.get("hsi_erp", {}),
+            "relative": {
+                "date": relative.get("date"),
+                "recommendations": relative.get("recommendations", {}),
+                "recommendation_sources": relative.get("recommendation_sources", {}),
+                "percentiles": relative.get("percentiles", {}),
+            },
         },
         "reference_allocations": reference_allocations,
         "actual_allocation_contract": {

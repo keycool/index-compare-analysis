@@ -117,20 +117,51 @@
   },
   "alpha_base_weights": {
     "sh50": 1.00,
-    "zz500": 0.40,
-    "zz1000": 0.30,
-    "cyb": 0.30,
-    "kc50": 0.25
+    "zz500": 0.30,
+    "zz1000": 0.25,
+    "cyb": 0.50,
+    "kc50": 0.45
   },
   "alpha_bucket_caps": {
     "sh50": 0.18,
     "val300": 0.10,
     "gro300": 0.10,
-    "zz500": 0.12,
+    "zz500": 0.10,
     "zz1000": 0.08,
-    "cyb": 0.08,
-    "kc50": 0.06,
+    "cyb": 0.10,
+    "kc50": 0.08,
     "hstech": 0.08
+  },
+  "alpha_group_caps": {
+    "cyb_kc50": {
+      "buckets": ["cyb", "kc50"],
+      "cap": 0.14
+    }
+  },
+  "relative_signal_policy": {
+    "anchor_recommendation_keys": {
+      "sh50": "sh50_300",
+      "zz500": "zz500",
+      "zz1000": "zz1000",
+      "cyb": "cyb",
+      "kc50": "kc50_300",
+      "val300": "val300",
+      "gro300": "gro300",
+      "hstech": "hstech"
+    },
+    "anchor_eligible_recommendations": ["标配", "超配", "强烈超配"],
+    "pairwise_tilt_multipliers": {
+      "强烈超配": {"numerator": 1.10, "denominator": 0.90},
+      "超配": {"numerator": 1.05, "denominator": 0.95},
+      "标配": {"numerator": 1.00, "denominator": 1.00},
+      "低配": {"numerator": 0.95, "denominator": 1.05},
+      "强烈低配": {"numerator": 0.90, "denominator": 1.10}
+    },
+    "pairwise_features": {
+      "cyb_sh50": {"signal_key": "cyb_sh50", "numerator": "cyb", "denominator": "sh50"},
+      "kc50_sh50": {"signal_key": "kc50", "numerator": "kc50", "denominator": "sh50"},
+      "zz1000_500": {"signal_key": "zz1000_500", "numerator": "zz1000", "denominator": "zz500"}
+    }
   },
   "forced_exit_percentiles": {
     "sh50": 95.0,

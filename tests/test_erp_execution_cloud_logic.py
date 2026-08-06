@@ -1,3 +1,4 @@
+import json
 import unittest
 import random
 from datetime import datetime
@@ -50,16 +51,37 @@ def base_config():
             REC["under"]: 0.85,
             REC["strong_under"]: 0.70,
         },
-        "alpha_base_weights": {"sh50": 1.0, "zz500": 0.4, "zz1000": 0.3, "cyb": 0.3, "kc50": 0.25},
+        "alpha_base_weights": {"sh50": 1.0, "zz500": 0.3, "zz1000": 0.25, "cyb": 0.5, "kc50": 0.45},
         "alpha_bucket_caps": {
             "sh50": 0.18,
             "val300": 0.10,
             "gro300": 0.10,
-            "zz500": 0.12,
+            "zz500": 0.10,
             "zz1000": 0.08,
-            "cyb": 0.08,
-            "kc50": 0.06,
+            "cyb": 0.10,
+            "kc50": 0.08,
             "hstech": 0.08,
+        },
+        "alpha_group_caps": {"cyb_kc50": {"buckets": ["cyb", "kc50"], "cap": 0.14}},
+        "relative_signal_policy": {
+            "anchor_recommendation_keys": {
+                "sh50": "sh50_300", "zz500": "zz500", "zz1000": "zz1000",
+                "cyb": "cyb", "kc50": "kc50_300", "val300": "val300",
+                "gro300": "gro300", "hstech": "hstech",
+            },
+            "anchor_eligible_recommendations": [REC["neutral"], REC["over"], REC["strong_over"]],
+            "pairwise_tilt_multipliers": {
+                REC["strong_over"]: {"numerator": 1.10, "denominator": 0.90},
+                REC["over"]: {"numerator": 1.05, "denominator": 0.95},
+                REC["neutral"]: {"numerator": 1.00, "denominator": 1.00},
+                REC["under"]: {"numerator": 0.95, "denominator": 1.05},
+                REC["strong_under"]: {"numerator": 0.90, "denominator": 1.10},
+            },
+            "pairwise_features": {
+                "cyb_sh50": {"signal_key": "cyb_sh50", "numerator": "cyb", "denominator": "sh50"},
+                "kc50_sh50": {"signal_key": "kc50", "numerator": "kc50", "denominator": "sh50"},
+                "zz1000_500": {"signal_key": "zz1000_500", "numerator": "zz1000", "denominator": "zz500"},
+            },
         },
         "forced_exit_percentiles": {
             "sh50": 95.0,
@@ -150,9 +172,13 @@ def base_relative_snapshot():
         "recommendations": {
             "zz500": REC["neutral"],
             "zz1000": REC["neutral"],
+            "zz1000_500": REC["neutral"],
             "cyb": REC["neutral"],
             "sh50": REC["neutral"],
+            "sh50_300": REC["neutral"],
+            "cyb_sh50": REC["neutral"],
             "kc50": REC["strong_over"],
+            "kc50_300": REC["strong_over"],
             "val300": REC["over"],
             "gro300": REC["under"],
             "hstech": REC["neutral"],
@@ -160,9 +186,13 @@ def base_relative_snapshot():
         "percentiles": {
             "zz500_percentile": 50.0,
             "zz1000_percentile": 50.0,
+            "zz1000_500_percentile": 50.0,
             "cyb_percentile": 50.0,
             "sh50_percentile": 50.0,
+            "sh50_300_percentile": 50.0,
+            "cyb_sh50_percentile": 50.0,
             "kc50_percentile": 20.0,
+            "kc50_300_percentile": 20.0,
             "val300_percentile": 10.0,
             "gro300_percentile": 90.0,
             "hstech_percentile": 50.0,
@@ -170,8 +200,10 @@ def base_relative_snapshot():
         "deviations": {
             "zz500_deviation": 0.0,
             "zz1000_deviation": 0.0,
+            "zz1000_500_deviation": 0.0,
             "cyb_deviation": 0.0,
             "kc50_deviation": 0.0,
+            "kc50_300_deviation": 0.0,
             "val300_deviation": 0.0,
             "gro300_deviation": 0.0,
             "hstech_deviation": 0.0,
@@ -179,8 +211,10 @@ def base_relative_snapshot():
         "changes": {
             "zz500_change_5d": 0.0,
             "zz1000_change_5d": 0.0,
+            "zz1000_500_change_5d": 0.0,
             "cyb_change_5d": 0.0,
             "kc50_change_5d": 0.0,
+            "kc50_300_change_5d": 0.0,
             "val300_change_5d": 0.0,
             "gro300_change_5d": 0.0,
             "hstech_change_5d": 0.0,
@@ -209,6 +243,38 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
 
         self.assertEqual(targets["kc50"]["signal"], REC["strong_over"])
 
+    def test_sh50_anchor_blocks_pairwise_signal_from_creating_an_allocation(self):
+        relative = base_relative_snapshot()
+        relative["recommendations"]["sh50_300"] = REC["under"]
+        relative["recommendations"]["cyb_sh50"] = REC["under"]
+
+        targets = self.build_targets(relative=relative)
+
+        self.assertEqual(targets["sh50"]["anchor_signal_key"], "sh50_300")
+        self.assertFalse(targets["sh50"]["anchor_eligible"])
+        self.assertEqual(targets["sh50"]["target_weight"], 0.0)
+
+    def test_kc50_anchor_blocks_pairwise_signal_from_creating_an_allocation(self):
+        relative = base_relative_snapshot()
+        relative["recommendations"]["kc50_300"] = REC["under"]
+        relative["recommendations"]["kc50"] = REC["strong_over"]
+
+        targets = self.build_targets(relative=relative)
+
+        self.assertEqual(targets["kc50"]["anchor_signal_key"], "kc50_300")
+        self.assertFalse(targets["kc50"]["anchor_eligible"])
+        self.assertEqual(targets["kc50"]["target_weight"], 0.0)
+
+    def test_zz1000_over_zz500_feature_only_tilts_eligible_anchor_scores(self):
+        relative = base_relative_snapshot()
+        relative["recommendations"]["zz1000_500"] = REC["strong_over"]
+
+        targets = self.build_targets(relative=relative)
+
+        self.assertEqual(targets["zz1000"]["feature_tilt_multiplier"], 1.10)
+        self.assertEqual(targets["zz500"]["feature_tilt_multiplier"], 0.90)
+        self.assertEqual(targets["zz1000"]["feature_tilts"][0]["feature"], "zz1000_500")
+
     def test_low_value_percentile_allocates_more_to_value_than_growth(self):
         targets = self.build_targets()
 
@@ -220,13 +286,43 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         config = base_config()
         config["alpha_bucket_caps"]["kc50"] = 0.01
         relative = base_relative_snapshot()
-        relative["deviations"]["kc50_deviation"] = -5.0
-        relative["changes"]["kc50_change_5d"] = 0.5
+        relative["deviations"]["kc50_300_deviation"] = -5.0
+        relative["changes"]["kc50_300_change_5d"] = 0.5
 
         targets = self.build_targets(relative=relative, config=config)
 
         self.assertLessEqual(targets["kc50"]["target_weight"], 0.01)
         self.assertEqual(targets["kc50"]["trajectory_multiplier"], 1.15)
+
+    def test_cyb_and_kc50_combined_cap_is_hard(self):
+        config = base_config()
+        config["alpha_budget_weights"] = {"low": 0.45, "neutral": 0.45, "high": 0.45}
+        targets = build_target_weights(
+            {"percentile": 100.0, "aggressive_weight": 0.65},
+            {"available": True, "percentile": 50.0, "aggressive_weight": 0.45},
+            base_relative_snapshot(),
+            config,
+            {"hs300": 100000.0, "hsi": 1.0, "hstech": 1.0},
+        )
+
+        combined = targets["cyb"]["target_weight"] + targets["kc50"]["target_weight"]
+        self.assertLessEqual(combined, 0.14)
+        self.assertEqual(targets["cyb"]["group_cap_name"], "cyb_kc50")
+        self.assertEqual(targets["kc50"]["group_cap"], 0.14)
+
+    def test_payload_validation_rejects_group_cap_breach(self):
+        payload = {
+            "inputs": {"execution_config": {"alpha_group_caps": {"cyb_kc50": {"buckets": ["cyb", "kc50"], "cap": 0.14}}}},
+            "portfolio": {"positions": [
+                {"bucket": "cyb", "target_weight": 0.10},
+                {"bucket": "kc50", "target_weight": 0.08},
+                {"bucket": "cash", "target_weight": 0.82},
+            ]},
+            "signals": {"data_health": {"errors": []}},
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "group cap cyb_kc50 exceeded"):
+            validate_execution_payload(payload)
 
     def test_hstech_cap_is_hard_after_trajectory_overlay(self):
         config = base_config()
@@ -415,6 +511,23 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
             ]
         )
 
+    def test_relative_snapshot_preserves_zz1000_over_zz500_feature_signal(self):
+        snapshot = compute_relative_snapshot([
+            {
+                "日期": "2026-07-21",
+                "1000/500建议": REC["over"],
+                "1000/500比价": 1.2,
+                "1000/500分位": 30.0,
+                "创业板/上证50建议": REC["under"],
+                "创业板/上证50比价": 1.0,
+                "50建议": REC["over"],
+            }
+        ])
+
+        self.assertEqual(snapshot["recommendations"]["zz1000_500"], REC["over"])
+        self.assertEqual(snapshot["recommendation_sources"]["zz1000_500"], "table")
+        self.assertEqual(snapshot["ratios"]["zz1000_500_ratio"], 1.2)
+
     def test_derived_recommendation_uses_5d_10d_20d_trend(self):
         levels = DEFAULT_RELATIVE_ANALYSIS_SETTINGS["percentile_levels"]
 
@@ -598,7 +711,10 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
             "version": "3.1",
             "generated_at": "2026-08-05T00:00:00+08:00",
             "inputs": {"execution_mode": "research"},
-            "signals": {"data_health": {"errors": [], "warnings": [], "dates": {}}},
+            "signals": {
+                "data_health": {"errors": [], "warnings": [], "dates": {}},
+                "relative": {"date": "2026-07-21", "recommendations": {"kc50_300": REC["under"]}},
+            },
             "portfolio": {
                 "reference_notional": 1_000_000,
                 "reference_currency": "CNY",
@@ -607,7 +723,15 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
                 "hkshare_pool": 0.10,
                 "reserve_pool": 0.40,
                 "target_weight_sum": 1.0,
-                "positions": [{"bucket": "hs300", "label": "HS300", "target_weight": 0.5, "reference_amount": 500000}],
+                "positions": [
+                    {"bucket": "hs300", "label": "HS300", "target_weight": 0.5, "reference_amount": 500000},
+                    {
+                        "bucket": "kc50", "label": "KC50", "pool": "ashare", "sleeve": "aggressive",
+                        "target_weight": 0.0, "reference_amount": 0, "anchor_signal": REC["under"],
+                        "anchor_signal_key": "kc50_300", "anchor_eligible": False,
+                        "feature_tilt_multiplier": 1.0, "feature_tilts": [], "allocation_score": 0.0,
+                    },
+                ],
             },
         }
 
@@ -617,7 +741,13 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertNotIn("current_equity_amount", snapshot["portfolio"])
         self.assertNotIn("top_actions", snapshot)
         self.assertEqual(snapshot["reference_allocations"][0]["reference_amount"], 500000.0)
+        self.assertEqual(snapshot["monitor_schema_version"], 2)
+        self.assertEqual(len(snapshot["reference_allocations"]), 2)
+        self.assertEqual(snapshot["reference_allocations"][1]["anchor_signal_key"], "kc50_300")
+        self.assertFalse(snapshot["reference_allocations"][1]["anchor_eligible"])
+        self.assertEqual(snapshot["signals"]["relative"]["recommendations"]["kc50_300"], REC["under"])
         self.assertEqual(snapshot["actual_allocation_contract"]["strategy_input"], "not_used")
+        json.dumps(snapshot, ensure_ascii=False)
 
 
 

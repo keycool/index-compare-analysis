@@ -9,14 +9,15 @@
 
 ## 总体结构
 
-配置分成 6 块:
+配置分成 7 块:
 
 1. `percentile_thresholds`
 2. `aggressive_weights`
 3. `recommendation_multipliers`
 4. `value_style_tilt`
 5. `growth_style_tilt`
-6. `holding_alias_map / ignored_erp_holdings`
+6. `alpha_base_weights / alpha_bucket_caps / alpha_group_caps`
+7. `holding_alias_map / ignored_erp_holdings`
 
 ## 1. Percentile Thresholds
 
@@ -101,7 +102,43 @@
 优先建议:
 - 觉得 `500/1000/创业板/50` 的建议对结果影响不够大，就改这里
 
-## 4. Value Style Tilt
+## 4. Aggressive Opportunity Weights And Caps
+
+```json
+"alpha_base_weights": {
+  "zz500": 0.30,
+  "zz1000": 0.25,
+  "cyb": 0.50,
+  "kc50": 0.45
+},
+"alpha_bucket_caps": {
+  "zz500": 0.10,
+  "zz1000": 0.08,
+  "cyb": 0.10,
+  "kc50": 0.08
+},
+"alpha_group_caps": {
+  "cyb_kc50": {"buckets": ["cyb", "kc50"], "cap": 0.14}
+}
+```
+
+用途:
+- 基础权重只决定通过比价、趋势和重入闸门后的进攻标的之间如何分配机会预算。
+- 单标的硬上限和组合硬上限都以标准单位总额为基准，在轨迹乘数之后再次执行。
+- `cyb_kc50` 限制成长科技两个高相关标的合计不超过 14%；超出的部分会回流现有沪深300残差层，再受核心上限和现金层约束。
+
+当前定位:
+- 创业板和科创50是主进攻方向，因此基础权重高于中证500和中证1000。
+- 中证500保留为宽基中盘进攻仓，中证1000是补充仓；它们不再天然优先于成长科技。
+- 所有上限均不能突破 ERP 决定的总权益水位。
+
+`relative_signal_policy` 规定信号层级：
+- `anchor_recommendation_keys` 将每个标的绑定到相对沪深300的主锚定信号；上证50必须使用 `sh50_300`，科创50必须使用 `kc50_300`。
+- 主锚定为 `低配` 或 `强烈低配` 时，目标权重为零。
+- `pairwise_features` 中的创业板/上证50、科创50/上证50、1000/500只在一对标的均已通过主锚定时生效。
+- `pairwise_tilt_multipliers` 仅作 `0.90` 至 `1.10` 的二次倾斜；同一标的有多个特色信号时取平均，不连乘。
+
+## 5. Value Style Tilt
 
 ```json
 "value_style_tilt": {
@@ -127,7 +164,7 @@
 优先建议:
 - 如果你把 `上证50 + 红利` 视作更纯粹的价值代理，这块可以改得更强一点
 
-## 5. Growth Style Tilt
+## 6. Growth Style Tilt
 
 ```json
 "growth_style_tilt": {
@@ -170,7 +207,7 @@
 - 如果你觉得创业板还是太重，就先改 `cyb`
 - 如果你觉得价值风格应该更多流向 50 而不是 500/1000，就先改 `sh50_bonus`
 
-## 6. Holding Alias Map
+## 7. Holding Alias Map
 
 ```json
 "holding_alias_map": {
@@ -197,7 +234,7 @@
 "某某500ETF": "zz500"
 ```
 
-## 7. Ignored ERP Holdings
+## 8. Ignored ERP Holdings
 
 ```json
 "ignored_erp_holdings": [

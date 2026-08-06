@@ -280,6 +280,10 @@ ERP 工作流还支持一个非阻断监控接口：
 
 每次生成执行计划后会尝试 POST 一份轻量 JSON 快照，包含数据健康状态、A 股/港股/现金水位和标准容量下的目标配置。快照明确声明 `actual_allocation_in_strategy = false`，为外部监测端预留实际资产接入位；接口失败只记录 warning，不影响日报和 artifacts。详细 SOP 见 `docs/erp-strategy-sop.md`。
 
+监测快照当前为 `monitor_schema_version = 2`：`reference_allocations` 会完整列出每个非现金策略桶（包括目标为零的桶），并携带 `anchor_signal_key`、`anchor_signal`、`anchor_eligible`、`feature_tilt_multiplier`、`feature_tilts`、`allocation_score`、退出/重入和轨迹字段。监测端应以这些字段解释策略目标，不应把实际资产金额或账户级限制回写到 ERP 策略。
+
+For manual ERP runs, the current ERP-tagged Feishu holdings can also be archived locally before the run at `orchestrator/output/asset-snapshots/erp-assets-<YYYY-MM-DDTHHmmss+0800>.json`. This Git-ignored JSON is a read-only audit record for a monitor on the same machine; it is not sent to GitHub, not posted to the monitor webhook, and never changes strategy targets. The schema and the off-machine monitor boundary are defined in `docs/erp-strategy-sop.md`.
+
 线上调度现已收敛为：
 
 - 主调度 workflow: `.github/workflows/erp-relative-master-scheduler.yml`

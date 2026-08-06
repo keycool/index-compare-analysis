@@ -308,6 +308,102 @@ _REC_NEUTRAL = "\u6807\u914d"
 _REC_UNDER = "\u4f4e\u914d"
 _REC_STRONG_UNDER = "\u5f3a\u70c8\u4f4e\u914d"
 
+_DEFAULT_RELATIVE_SIGNAL_POLICY = {
+    "anchor_recommendation_keys": {
+        "sh50": "sh50_300",
+        "zz500": "zz500",
+        "zz1000": "zz1000",
+        "cyb": "cyb",
+        "kc50": "kc50_300",
+        "val300": "val300",
+        "gro300": "gro300",
+        "hstech": "hstech",
+    },
+    "anchor_eligible_recommendations": [_REC_NEUTRAL, _REC_OVER, _REC_STRONG_OVER],
+    "pairwise_tilt_multipliers": {
+        _REC_STRONG_OVER: {"numerator": 1.10, "denominator": 0.90},
+        _REC_OVER: {"numerator": 1.05, "denominator": 0.95},
+        _REC_NEUTRAL: {"numerator": 1.00, "denominator": 1.00},
+        _REC_UNDER: {"numerator": 0.95, "denominator": 1.05},
+        _REC_STRONG_UNDER: {"numerator": 0.90, "denominator": 1.10},
+    },
+    "pairwise_features": {
+        "cyb_sh50": {"signal_key": "cyb_sh50", "numerator": "cyb", "denominator": "sh50"},
+        "kc50_sh50": {"signal_key": "kc50", "numerator": "kc50", "denominator": "sh50"},
+        "zz1000_500": {"signal_key": "zz1000_500", "numerator": "zz1000", "denominator": "zz500"},
+    },
+}
+
+
+def _relative_signal_policy(execution_config: dict[str, Any]) -> dict[str, Any]:
+    policy = execution_config.get("relative_signal_policy", {})
+    return policy if isinstance(policy, dict) and policy else _DEFAULT_RELATIVE_SIGNAL_POLICY
+
+
+def _anchor_signal_context(recommendations: dict[str, Any], policy: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    anchor_keys = policy.get("anchor_recommendation_keys", _DEFAULT_RELATIVE_SIGNAL_POLICY["anchor_recommendation_keys"])
+    eligible_recommendations = {
+        normalize_text(value)
+        for value in policy.get("anchor_eligible_recommendations", _DEFAULT_RELATIVE_SIGNAL_POLICY["anchor_eligible_recommendations"])
+    }
+    return {
+        bucket: {
+            "signal_key": signal_key,
+            "recommendation": normalize_text(recommendations.get(signal_key)),
+            "eligible": normalize_text(recommendations.get(signal_key)) in eligible_recommendations,
+        }
+        for bucket, signal_key in anchor_keys.items()
+    }
+
+
+def _feature_tilt_context(
+    recommendations: dict[str, Any],
+    anchors: dict[str, dict[str, Any]],
+    policy: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    raw_tilts: dict[str, list[dict[str, Any]]] = {}
+    tilt_mapping = policy.get("pairwise_tilt_multipliers", _DEFAULT_RELATIVE_SIGNAL_POLICY["pairwise_tilt_multipliers"])
+    for feature_name, feature in policy.get("pairwise_features", {}).items():
+        numerator = feature.get("numerator")
+        denominator = feature.get("denominator")
+        if not numerator or not denominator:
+            continue
+        if not anchors.get(numerator, {}).get("eligible") or not anchors.get(denominator, {}).get("eligible"):
+            continue
+        recommendation = normalize_text(recommendations.get(feature.get("signal_key")))
+        multipliers = tilt_mapping.get(recommendation)
+        if not isinstance(multipliers, dict):
+            continue
+        for bucket, role in ((numerator, "numerator"), (denominator, "denominator")):
+            multiplier = safe_float(multipliers.get(role))
+            if multiplier is None:
+                continue
+            raw_tilts.setdefault(bucket, []).append({
+                "feature": feature_name,
+                "signal_key": feature.get("signal_key"),
+                "recommendation": recommendation,
+                "role": role,
+                "multiplier": round(multiplier, 4),
+            })
+
+    result: dict[str, dict[str, Any]] = {}
+    for bucket in anchors:
+        details = raw_tilts.get(bucket, [])
+        multiplier = sum(item["multiplier"] for item in details) / len(details) if details else 1.0
+        result[bucket] = {"multiplier": round(multiplier, 4), "details": details}
+    return result
+
+
+def _required_relative_recommendation_keys(execution_config: dict[str, Any]) -> list[str]:
+    policy = _relative_signal_policy(execution_config)
+    keys = list(policy.get("anchor_recommendation_keys", {}).values())
+    keys.extend(
+        feature.get("signal_key")
+        for feature in policy.get("pairwise_features", {}).values()
+        if feature.get("signal_key")
+    )
+    return list(dict.fromkeys(keys))
+
 
 def load_relative_analysis_settings() -> dict[str, Any]:
     settings = json.loads(json.dumps(DEFAULT_RELATIVE_ANALYSIS_SETTINGS))
@@ -425,9 +521,13 @@ def _fill_derived_relative_recommendations(snapshot: dict[str, Any]) -> None:
     fields: dict[str, tuple[str, str, str, bool]] = {
         "zz500": ("zz500_percentile", "zz500_zscore", "zz500_change", False),
         "zz1000": ("zz1000_percentile", "zz1000_zscore", "zz1000_change", False),
+        "zz1000_500": ("zz1000_500_percentile", "zz1000_500_zscore", "zz1000_500_change", False),
         "cyb": ("cyb_percentile", "cyb_zscore", "cyb_change", False),
+        "cyb_sh50": ("cyb_sh50_percentile", "cyb_sh50_zscore", "cyb_sh50_change", False),
         "sh50": ("sh50_percentile", "sh50_zscore", "sh50_change", True),
+        "sh50_300": ("sh50_300_percentile", "sh50_300_zscore", "sh50_300_change", False),
         "kc50": ("kc50_percentile", "kc50_zscore", "kc50_change", False),
+        "kc50_300": ("kc50_300_percentile", "kc50_300_zscore", "kc50_300_change", False),
         "gro300": ("gro300_percentile", "gro300_zscore", "gro300_change", False),
         "hstech": ("hstech_percentile", "hstech_zscore", "hstech_change", False),
     }
@@ -739,9 +839,12 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     latest = latest_valid_row(rows, [
         "500建议", "1000建议", "创业板建议", "50建议",
         "科创50建议", "300价值建议", "300成长建议", "恒生科技建议",
+        "1000/500建议", "上证50/300建议", "科创50/300建议", "创业板/上证50建议",
         "500分位", "1000分位", "创业板分位", "50分位", "科创50分位",
+        "1000/500分位", "上证50/300分位", "科创50/300分位",
         "300价值分位", "300成长分位", "恒生科技分位",
         "500/300比价", "1000/300比价", "创业板/300比价",
+        "1000/500比价", "上证50/300比价", "科创50/300比价", "创业板/上证50比价",
         "科创50/上证50比价", "300价值/成长比价", "恒生科技/恒生比价",
     ])
     dt = parse_date(get_first(latest, "日期"))
@@ -917,7 +1020,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
     trend_windows = [int(item) for item in analysis_settings.get("trend_windows", [5, 10, 20])]
     zz500_changes = {window: first_ratio_change(window, "500/300比价") for window in trend_windows}
     zz1000_changes = {window: first_ratio_change(window, "1000/300比价") for window in trend_windows}
+    zz1000_500_changes = {window: first_ratio_change(window, "1000/500比价") for window in trend_windows}
     cyb_changes = {window: first_ratio_change(window, "创业板/300比价") for window in trend_windows}
+    cyb_sh50_changes = {window: first_ratio_change(window, "创业板/上证50比价") for window in trend_windows}
     sh50_300_changes = {
         window: first_ratio_change(window, "上证50/300比价", "50/300比价")
         for window in trend_windows
@@ -927,7 +1032,7 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for window in trend_windows
     }
     sh50_changes = {
-        window: first_ratio_change(window, "创业板/上证50比价", "50/创业板比价", "50/300比价")
+        window: first_ratio_change(window, "创业板/上证50比价", "50/创业板比价")
         for window in trend_windows
     }
     kc50_changes = {window: first_ratio_change(window, "科创50/上证50比价") for window in trend_windows}
@@ -963,6 +1068,7 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "recommendations": {
             "zz500": normalize_text(get_first(latest, "500建议")),
             "zz1000": normalize_text(get_first(latest, "1000建议")),
+            "zz1000_500": normalize_text(get_first(latest, "1000/500建议")),
             "cyb": normalize_text(get_first(latest, "创业板建议")),
             "sh50_300": normalize_text(get_first(latest, "上证50/300建议", "50/300建议")),
             "kc50_300": normalize_text(get_first(latest, "科创50/300建议", "科创50/沪深300建议")),
@@ -976,6 +1082,7 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "ratios": {
             "zz500_ratio": safe_float(get_first(latest, "500/300比价")),
             "zz1000_ratio": safe_float(get_first(latest, "1000/300比价")),
+            "zz1000_500_ratio": safe_float(get_first(latest, "1000/500比价")),
             "cyb_ratio": safe_float(get_first(latest, "创业板/300比价")),
             "sh50_300_ratio": sh50_300_ratio,
             "kc50_300_ratio": kc50_300_ratio,
@@ -987,7 +1094,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "percentiles": {
             "zz500_percentile": safe_float(get_first(latest, "500分位")),
             "zz1000_percentile": safe_float(get_first(latest, "1000分位")),
+            "zz1000_500_percentile": safe_float(get_first(latest, "1000/500分位")),
             "cyb_percentile": safe_float(get_first(latest, "创业板分位")),
+            "cyb_sh50_percentile": safe_float(get_first(latest, "创业板/上证50分位", "50分位")),
             "sh50_300_percentile": sh50_300_percentile,
             "kc50_300_percentile": kc50_300_percentile,
             "sh50_percentile": safe_float(get_first(latest, "50分位")),
@@ -999,7 +1108,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "deviations": {
             "zz500_deviation": safe_float(get_first(latest, "500偏离(%)")),
             "zz1000_deviation": safe_float(get_first(latest, "1000偏离(%)")),
+            "zz1000_500_deviation": safe_float(get_first(latest, "1000/500偏离(%)")),
             "cyb_deviation": safe_float(get_first(latest, "创业板偏离(%)")),
+            "cyb_sh50_deviation": safe_float(get_first(latest, "创业板/上证50偏离(%)", "50偏离(%)")),
             "sh50_300_deviation": safe_float(get_first(latest, "上证50/300偏离(%)", "50/300偏离(%)")),
             "kc50_300_deviation": safe_float(get_first(latest, "科创50/300偏离(%)", "科创50/沪深300偏离(%)")),
             "sh50_deviation": safe_float(get_first(latest, "创业板/上证50偏离(%)", "50偏离(%)")),
@@ -1011,7 +1122,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "zscores": {
             "zz500_zscore": first_ratio_zscore("500/300比价"),
             "zz1000_zscore": first_ratio_zscore("1000/300比价"),
+            "zz1000_500_zscore": first_ratio_zscore("1000/500比价"),
             "cyb_zscore": first_ratio_zscore("创业板/300比价"),
+            "cyb_sh50_zscore": first_ratio_zscore("创业板/上证50比价", "50/创业板比价"),
             "sh50_300_zscore": first_ratio_zscore("上证50/300比价", "50/300比价"),
             "kc50_300_zscore": first_ratio_zscore("科创50/300比价", "科创50/沪深300比价"),
             "sh50_zscore": first_ratio_zscore("创业板/上证50比价", "50/创业板比价", "50/300比价"),
@@ -1023,7 +1136,9 @@ def compute_relative_snapshot(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "changes": {
             **{f"zz500_change_{window}d": value for window, value in zz500_changes.items()},
             **{f"zz1000_change_{window}d": value for window, value in zz1000_changes.items()},
+            **{f"zz1000_500_change_{window}d": value for window, value in zz1000_500_changes.items()},
             **{f"cyb_change_{window}d": value for window, value in cyb_changes.items()},
+            **{f"cyb_sh50_change_{window}d": value for window, value in cyb_sh50_changes.items()},
             **{f"sh50_300_change_{window}d": value for window, value in sh50_300_changes.items()},
             **{f"kc50_300_change_{window}d": value for window, value in kc50_300_changes.items()},
             **{f"sh50_change_{window}d": value for window, value in sh50_changes.items()},
@@ -1166,9 +1281,10 @@ def _build_pool_aggressive_buckets(
     current_holdings: dict[str, float],
     aggressive_alpha_total: float,
     bucket_metadata: dict[str, dict[str, Any]],
+    anchor_context: dict[str, dict[str, Any]],
+    feature_tilts: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Build aggressive bucket targets for a pool."""
-    recs = relative_snapshot["recommendations"]
     base_weights = execution_config["alpha_base_weights"]
     caps = execution_config["alpha_bucket_caps"]
     multipliers = execution_config["recommendation_multipliers"]
@@ -1180,16 +1296,24 @@ def _build_pool_aggressive_buckets(
     scores: dict[str, float] = {}
     for bucket in bucket_keys:
         base = float(base_weights.get(bucket, 0.3))
-        rec = _rec_for_bucket(bucket, recs)
-        scores[bucket] = base * recommendation_multiplier(rec, multipliers)
+        anchor = anchor_context.get(bucket, {})
+        feature_tilt = feature_tilts.get(bucket, {})
+        rec = normalize_text(anchor.get("recommendation"))
+        scores[bucket] = (
+            base * recommendation_multiplier(rec, multipliers) * float(feature_tilt.get("multiplier", 1.0))
+            if anchor.get("eligible") else 0.0
+        )
 
     local_weights = normalize_to_weights(scores)
 
     targets: dict[str, dict[str, Any]] = {}
     for bucket, local_w in local_weights.items():
-        percentile = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
-        deviation = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
-        change_5d = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
+        anchor = anchor_context.get(bucket, {})
+        anchor_key = anchor.get("signal_key", bucket)
+        feature_tilt = feature_tilts.get(bucket, {})
+        percentile = relative_snapshot["percentiles"].get(f"{anchor_key}_percentile")
+        deviation = relative_snapshot.get("deviations", {}).get(f"{anchor_key}_deviation")
+        change_5d = relative_snapshot.get("changes", {}).get(f"{anchor_key}_change_5d")
         cur_amount = float(current_holdings.get(bucket, 0.0))
 
         force_threshold = forced_exit_thresholds.get(bucket)
@@ -1207,7 +1331,9 @@ def _build_pool_aggressive_buckets(
 
         tw = aggressive_alpha_total * local_w
         tw = min(tw, float(caps.get(bucket, 1.0)))
-        if forced_exit:
+        if not anchor.get("eligible"):
+            tw = 0.0
+        elif forced_exit:
             tw = 0.0
         elif reentry_blocked:
             tw = 0.0
@@ -1221,7 +1347,13 @@ def _build_pool_aggressive_buckets(
             "label": meta.get("label", bucket),
             "sleeve": meta.get("sleeve", "aggressive"),
             "pool": meta.get("pool", "ashare"),
-            "signal": _rec_for_bucket(bucket, recs),
+            "signal": normalize_text(anchor.get("recommendation")),
+            "anchor_signal": normalize_text(anchor.get("recommendation")),
+            "anchor_signal_key": anchor_key,
+            "anchor_eligible": bool(anchor.get("eligible")),
+            "feature_tilt_multiplier": round(float(feature_tilt.get("multiplier", 1.0)), 4),
+            "feature_tilts": feature_tilt.get("details", []),
+            "allocation_score": round(scores[bucket], 6),
             "current_percentile": round(float(percentile), 2) if percentile is not None else None,
             "current_deviation": round(float(deviation), 2) if deviation is not None else None,
             "change_5d": round(float(change_5d), 2) if change_5d is not None else None,
@@ -1234,6 +1366,38 @@ def _build_pool_aggressive_buckets(
             "target_weight": round(tw, 4),
         }
     return targets
+
+
+def _apply_bucket_group_caps(
+    targets: dict[str, dict[str, Any]], group_caps: dict[str, Any]
+) -> None:
+    """Proportionally trim configured bucket groups to their hard caps."""
+    for group_name, group_config in group_caps.items():
+        buckets = [bucket for bucket in group_config.get("buckets", []) if bucket in targets]
+        cap = safe_float(group_config.get("cap"))
+        if cap is None or cap < 0 or not buckets:
+            continue
+
+        active_buckets = [
+            bucket for bucket in buckets if float(targets[bucket].get("target_weight", 0.0)) > 0
+        ]
+        group_total = sum(float(targets[bucket].get("target_weight", 0.0)) for bucket in active_buckets)
+        if group_total <= cap or not active_buckets:
+            continue
+
+        scale = cap / group_total
+        allocated = 0.0
+        for index, bucket in enumerate(active_buckets):
+            previous = float(targets[bucket]["target_weight"])
+            if index == len(active_buckets) - 1:
+                capped_weight = round(max(0.0, cap - allocated), 4)
+            else:
+                capped_weight = round(previous * scale, 4)
+                allocated += capped_weight
+            targets[bucket]["target_weight"] = capped_weight
+            targets[bucket]["group_cap_name"] = group_name
+            targets[bucket]["group_cap"] = round(cap, 4)
+            targets[bucket]["group_cap_released"] = round(previous - capped_weight, 4)
 
 
 def _rec_for_bucket(bucket: str, recs: dict[str, str]) -> str:
@@ -1415,6 +1579,9 @@ def build_target_weights(
     reentry_min = float(execution_config.get("reentry_min_current_amount", 1000.0))
     trajectory_config = execution_config.get("trajectory_overlay", {})
     bucket_meta = execution_config.get("bucket_metadata", {})
+    signal_policy = _relative_signal_policy(execution_config)
+    anchor_context = _anchor_signal_context(recs, signal_policy)
+    feature_tilts = _feature_tilt_context(recs, anchor_context, signal_policy)
 
     # ── Cross-market ──
     cross_config = execution_config.get("cross_market", {})
@@ -1496,19 +1663,23 @@ def build_target_weights(
     targets["gro300"] = _style_bucket("gro300", gro300_tw, "gro300")
 
     # -- SH50 (defensive alpha) --
-    sh50_percentile = relative_snapshot["percentiles"].get("sh50_percentile")
+    sh50_anchor = anchor_context.get("sh50", {})
+    sh50_anchor_key = sh50_anchor.get("signal_key", "sh50_300")
+    sh50_percentile = relative_snapshot["percentiles"].get(f"{sh50_anchor_key}_percentile")
     sh50_ft = forced_exit_thresholds.get("sh50")
-    sh50_exit_threshold = 100.0 - float(sh50_ft) if sh50_ft is not None else None
+    sh50_exit_threshold = float(sh50_ft) if sh50_ft is not None else None
     sh50_fe = (
         sh50_exit_threshold is not None and sh50_percentile is not None
-        and float(sh50_percentile) <= sh50_exit_threshold
+        and float(sh50_percentile) >= sh50_exit_threshold
     )
 
     sh50_tw = def_alpha_total * (1.0 - style_budget_ratio)
-    sh50_signal = recs.get("sh50") or "标配"
+    sh50_signal = normalize_text(sh50_anchor.get("recommendation"))
+    sh50_feature_tilt = feature_tilts.get("sh50", {})
     sh50_tw *= recommendation_multiplier(sh50_signal, multipliers)
+    sh50_tw *= float(sh50_feature_tilt.get("multiplier", 1.0))
     sh50_tw = min(sh50_tw, float(caps.get("sh50", 0.18)))
-    if sh50_fe:
+    if not sh50_anchor.get("eligible") or sh50_fe:
         sh50_tw = 0.0
 
     meta_sh50 = bucket_meta.get("sh50", {})
@@ -1516,6 +1687,14 @@ def build_target_weights(
         "bucket": "sh50", "label": meta_sh50.get("label", "防守价值"),
         "sleeve": "defensive", "pool": "ashare",
         "signal": sh50_signal,
+        "anchor_signal": sh50_signal,
+        "anchor_signal_key": sh50_anchor_key,
+        "anchor_eligible": bool(sh50_anchor.get("eligible")),
+        "feature_tilt_multiplier": round(float(sh50_feature_tilt.get("multiplier", 1.0)), 4),
+        "feature_tilts": sh50_feature_tilt.get("details", []),
+        "allocation_score": round(
+            recommendation_multiplier(sh50_signal, multipliers) * float(sh50_feature_tilt.get("multiplier", 1.0)), 6
+        ) if sh50_anchor.get("eligible") else 0.0,
         "current_percentile": round(float(sh50_percentile), 2) if sh50_percentile is not None else None,
         "forced_exit_threshold": sh50_exit_threshold,
         "forced_exit_operator": "<=",
@@ -1529,8 +1708,9 @@ def build_target_weights(
     agg_buckets = _build_pool_aggressive_buckets(
         ["cyb", "zz500", "zz1000", "kc50"],
         relative_snapshot, execution_config, current_holdings,
-        agg_alpha_total, bucket_meta,
+        agg_alpha_total, bucket_meta, anchor_context, feature_tilts,
     )
+    _apply_bucket_group_caps(agg_buckets, execution_config.get("alpha_group_caps", {}))
     targets.update(agg_buckets)
 
     # -- HS300 core (defensive residual + aggressive passive) --
@@ -1866,9 +2046,7 @@ def build_data_health(
         ages["hsi_erp"] = None
         warnings.append("HSI ERP unavailable; no new HK strategy exposure is added")
 
-    required_recommendations = [
-        "zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech",
-    ]
+    required_recommendations = _required_relative_recommendation_keys(execution_config)
     recommendations = relative_snapshot.get("recommendations", {})
     missing_recommendations = [
         key for key in required_recommendations
@@ -1956,11 +2134,25 @@ def validate_execution_payload(payload: dict[str, Any]) -> None:
     errors: list[str] = []
     if abs(total_weight - 1.0) > tolerance:
         errors.append(f"target weights must sum to 1.0, got {total_weight:.6f}")
+    execution_config = payload.get("inputs", {}).get("execution_config", {})
+    positions_by_bucket = {item.get("bucket"): item for item in positions}
+    for group_name, group_config in execution_config.get("alpha_group_caps", {}).items():
+        cap = safe_float(group_config.get("cap"))
+        if cap is None:
+            continue
+        group_weight = sum(
+            float(positions_by_bucket.get(bucket, {}).get("target_weight", 0.0))
+            for bucket in group_config.get("buckets", [])
+        )
+        if group_weight > cap + tolerance:
+            errors.append(
+                f"group cap {group_name} exceeded: {group_weight:.6f} > {cap:.6f}"
+            )
     errors.extend(payload.get("signals", {}).get("data_health", {}).get("errors", []))
     if payload.get("inputs", {}).get("execution_mode") == "rebalance":
-        required_recommendations = [
-            "zz500", "zz1000", "cyb", "sh50", "kc50", "val300", "gro300", "hstech",
-        ]
+        required_recommendations = _required_relative_recommendation_keys(
+            payload.get("inputs", {}).get("execution_config", {})
+        )
         recommendations = (
             payload.get("signals", {})
             .get("relative", {})

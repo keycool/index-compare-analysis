@@ -65,7 +65,7 @@
 | HKTECH 同上 | 无 `恒生科技建议` |
 | VAL300 的结论仅作为 style overlay 乘数 | 不产生实际仓位 |
 | GRO300 从 conclusions.json 中完全缺失 | 只在 calculate.py 中作为分母参与，analyze.py 不输出 |
-| HSI ERP 仅在 generate_report.py 中用于图表展示 | 执行层无法访问 |
+| HSI ERP 仅在 `generate_report.py` 中用于图表展示 | 已修复：生成完整月频历史到 `shared/hsi_erp_signal.json`，执行层优先读取该接口 |
 | resolve_holding_bucket() 硬编码 `"科创50" → __IGNORE__` | 无法持有科创50 |
 
 ---
@@ -395,7 +395,6 @@ HS300 仓位 = max(0, 上述值)
     "val300": 50.0,
     "gro300": 50.0
   },
-  "reentry_min_current_amount": 1000.0,
 
   // === 轨迹叠加 ===
   "trajectory_overlay": { /* 不变, 同现有 */ },
@@ -458,20 +457,11 @@ HS300 仓位 = max(0, 上述值)
 
 #### 5.2.2 erp_execution_cloud.py: HSI ERP 数据源
 
-新增 `compute_hsi_erp_snapshot()` 函数，从飞书表格读取恒生 ERP 历史：
+`compute_hsi_erp_snapshot()` 保留飞书表读取兼容性；生产路径已改为优先读取共享 HSI ERP 历史。
 
-**方案 A（推荐）**：新增飞书表格 `HSI ERP 表`，由 master scheduler 在运行 report generation 后自动填充。
+`generate_report.py` 在 `build_hsi_erp_history()` 后生成 `shared/hsi_erp_signal.json`（版本 `1.1`），其中包含全量月频 `records`，而不只是最新一条摘要。`erp-relative-master-scheduler` 将该文件发布到 GitHub Pages；`erp-execution-cloud` 下载后按本次 `as_of` 过滤并重算分位。这条链路不需要 HSI ERP 飞书表或额外的飞书权限。
 
-```
-ERP 表     (HS300)  — 已有, 外部 ERP 项目维护
-Relative 表         — 已有, CSI300 Relative 项目维护
-Asset 表            — 已有, 手工维护持仓
-HSI ERP 表          — 新增, CSI300 Relative 项目 report generation 自动填充
-```
-
-**方案 B（备选）**：如果不想新开表，在 `generate_report.py` 的 `build_hsi_erp_history()` 完成后，将 HSI ERP 快照写入 `shared/hsi_erp_signal.json`，执行层从 shared 目录读取。
-
-> 推荐方案 A，与其他两个 ERP 表保持一致。方案 B 要求 GitHub Actions 有文件系统读写权限且 artifact 传递。
+飞书 HSI ERP 表可以继续作为旧环境的回退数据源，但不再是生产前提。共享文件不可得、日期无效或信号过期时，执行层会保守地禁止新增港股敞口。
 
 #### 5.2.3 compute_relative_snapshot() 扩展
 
@@ -634,9 +624,9 @@ HSI ERP = 62% ≥ 60% → 进攻 = 0.60 (high weight)
 
 | 步骤 | 改动文件 | 内容 |
 |---|---|---|
-| 2.1 | 飞书新建 HSI ERP 表 | 字段: 日期, 恒生ERP, HSI PE, 盈利收益率, 10Y美债 |
-| 2.2 | `generate_report.py` | `build_hsi_erp_history()` 完成后写入飞书 HSI ERP 表 |
-| 2.3 | master scheduler workflow | 新增步骤: 调用 report generation → 自动填充 HSI ERP 表 |
+| 2.1 | `generate_report.py` | 已完成：`build_hsi_erp_history()` 后写入全量月频 `shared/hsi_erp_signal.json` |
+| 2.2 | `erp-relative-master-scheduler` | 已完成：该共享文件随比价数据发布到 GitHub Pages |
+| 2.3 | `erp-execution-cloud` | 已完成：下载共享历史、按 `as_of` 重算分位；飞书 HSI ERP 表仅作兼容回退 |
 
 ### Phase 3: 执行层扩展
 

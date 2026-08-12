@@ -2979,14 +2979,30 @@ def _export_hsi_erp_signal(index_df: pd.DataFrame) -> None:
         hsi_result = build_hsi_erp_history(index_df)
         if not hsi_result:
             return
-        _, summary = hsi_result
+        history, summary = hsi_result
         shared_dir = Path(__file__).resolve().parents[5] / "shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
         signal_path = shared_dir / "hsi_erp_signal.json"
+        records = []
+        for _, row in history.iterrows():
+            record = {
+                "date": row["date"].strftime("%Y-%m-%d"),
+                "hsi_erp": float(row["hsi_erp"]),
+                "hsi_pe": float(row["hsi_pe"]),
+                "earnings_yield": float(row["earnings_yield"]),
+                "us10y": float(row["us10y"]),
+            }
+            if "HSI" in row and pd.notna(row["HSI"]):
+                record["hsi_index"] = float(row["HSI"])
+            records.append(record)
         payload = {
-            "version": "1.0",
+            "version": "1.1",
             "signal_type": "hsi_erp",
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "latest_date": summary["date"],
+            "record_count": len(records),
+            "records": records,
+            "latest_signal": records[-1],
             **summary,
         }
         signal_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

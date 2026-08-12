@@ -32,4 +32,5 @@ Thumbs.db
 
 # 保留运行必需配置
 !/.claude/skills/index-compare/config.json
+!orchestrator/erp_parameter_registry.json
 

@@ -47,6 +47,9 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
                 "allocation_score": _round(item.get("allocation_score"), 6),
                 "forced_exit": item.get("forced_exit"),
                 "reentry_blocked": item.get("reentry_blocked"),
+                "reentry_threshold": _round(item.get("reentry_threshold"), 2),
+                "reentry_waiting_before": item.get("reentry_waiting_before"),
+                "reentry_waiting_after": item.get("reentry_waiting_after"),
                 "trajectory_multiplier": _round(item.get("trajectory_multiplier"), 4),
                 "trajectory_reason": item.get("trajectory_reason"),
             }
@@ -58,7 +61,7 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "signal_type": "erp_execution_monitor",
-        "monitor_schema_version": 2,
+        "monitor_schema_version": 3,
         "version": plan.get("version"),
         "generated_at": plan.get("generated_at"),
         "execution_mode": plan.get("inputs", {}).get("execution_mode"),
@@ -91,6 +94,7 @@ def build_snapshot(plan: dict[str, Any]) -> dict[str, Any]:
                 "percentiles": relative.get("percentiles", {}),
             },
         },
+        "strategy_state": plan.get("strategy_state", {}),
         "reference_allocations": reference_allocations,
         "actual_allocation_contract": {
             "owner": "external_monitor",

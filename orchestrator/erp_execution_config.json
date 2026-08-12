@@ -43,9 +43,9 @@
           {"percentile": 0, "weight": 0.08},
           {"percentile": 20, "weight": 0.12},
           {"percentile": 40, "weight": 0.25},
-          {"percentile": 60, "weight": 0.35},
-          {"percentile": 80, "weight": 0.40},
-          {"percentile": 100, "weight": 0.45}
+          {"percentile": 60, "weight": 0.30},
+          {"percentile": 80, "weight": 0.35},
+          {"percentile": 100, "weight": 0.40}
         ]
       },
       "hsi": {
@@ -57,6 +57,18 @@
           {"percentile": 50, "weight": 0.10},
           {"percentile": 70, "weight": 0.14},
           {"percentile": 100, "weight": 0.18}
+        ]
+      }
+    },
+    "core_rotation": {
+      "hs300": {
+        "enabled": true,
+        "default_weight": 0.0,
+        "breakpoints": [
+          {"percentile": 0, "weight": 0.0},
+          {"percentile": 40, "weight": 0.0},
+          {"percentile": 60, "weight": 0.05},
+          {"percentile": 100, "weight": 0.05}
         ]
       }
     }
@@ -182,7 +194,6 @@
     "val300": 50.0,
     "gro300": 50.0
   },
-  "reentry_min_current_amount": 1000.0,
   "trajectory_overlay": {
     "enabled": true,
     "hot": {

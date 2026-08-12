@@ -140,13 +140,14 @@ GitHub Actions artifact 中应包含：
 执行层现在额外支持：
 
 - `aggressive_reentry_percentiles`
-- `reentry_min_current_amount`
 
 含义是：
 
-- 如果某个进攻桶当前已经基本空仓
+- 如果某个进攻桶曾经触发强制退出，策略状态会进入等待重入
 - 且它的 Relative 历史分位仍高于再入场阈值
 - 那本轮执行计划不会重新加仓
+
+首次启动或账户空仓本身不会触发重入闸门。生产计划从完整 Relative 历史重建状态，回测逐期维护相同状态，因此真实账户金额不参与这个判断。
 
 默认是：
 

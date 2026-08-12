@@ -15,7 +15,10 @@ class ErpExecutionWorkflowDefaultsTest(unittest.TestCase):
         text = self.workflow_text
 
         self.assertIn('default: "research"', text)
-        self.assertIn("ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'research' }}", text)
+        self.assertIn(
+            "ERP_EXECUTION_MODE: ${{ github.event_name == 'repository_dispatch' && 'research' || inputs.execution_mode || 'research' }}",
+            text,
+        )
         self.assertNotIn("ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'rebalance' }}", text)
 
     def test_monthly_schedule_avoids_top_of_hour(self):
@@ -35,7 +38,7 @@ class ErpExecutionWorkflowDefaultsTest(unittest.TestCase):
         self.assertIn("TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}", text)
         self.assertIn('"trade_cal"', text)
         self.assertIn("required_signal_date", text)
-        self.assertIn("strict_signal_gate = event_name == \"schedule\" or push_summary", text)
+        self.assertIn('strict_signal_gate = event_name in ("schedule", "repository_dispatch") or push_summary', text)
         self.assertIn("parse_signal_date", text)
         self.assertIn("max_record_date", text)
         self.assertIn("ERP record max date", text)
@@ -44,6 +47,8 @@ class ErpExecutionWorkflowDefaultsTest(unittest.TestCase):
         self.assertIn("must equal required previous trading day", text)
         self.assertIn("refusing to push ERP draft", text)
         self.assertIn("refusing unverified Feishu fallback", text)
+        self.assertIn('strategy_state.get("schema_version") != 1', text)
+        self.assertIn('derived_from_relative_history', text)
 
 
 if __name__ == "__main__":

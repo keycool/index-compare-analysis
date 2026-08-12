@@ -1192,6 +1192,53 @@ def compute_hsi_erp_snapshot(
         "defensive_weight": round(1.0 - aggressive_weight, 4),
         "history_points": len(history),
         "available": True,
+        "source": "feishu_hsi_erp_table",
+    }
+
+
+def compute_hsi_erp_snapshot_from_shared_signal(
+    payload: dict[str, Any],
+    hk_config: dict[str, Any],
+    as_of: datetime,
+) -> dict[str, Any]:
+    """Load the scheduler-published HSI ERP interface without requiring a Feishu archive table."""
+    records = payload.get("records")
+    if isinstance(records, list):
+        rows = [
+            {"日期": record.get("date"), "恒生ERP": record.get("hsi_erp")}
+            for record in records
+            if isinstance(record, dict)
+        ]
+        snapshot = compute_hsi_erp_snapshot(filter_signal_rows_as_of(rows, as_of), hk_config)
+        if snapshot.get("available"):
+            snapshot["source"] = "shared_hsi_erp_history"
+            return snapshot
+
+    signal_date = parse_date(payload.get("latest_date") or payload.get("date"))
+    latest_value = safe_float(payload.get("latest_value") or payload.get("equity_premium") or payload.get("hsi_erp"))
+    percentile = safe_float(payload.get("percentile"))
+    sample_count = safe_float(payload.get("sample_count"))
+    if signal_date is None or latest_value is None or percentile is None or not sample_count:
+        return _hsi_erp_neutral(hk_config)
+    if signal_date.date() > as_of.date():
+        return _hsi_erp_neutral(hk_config)
+
+    thresholds = hk_config.get("percentile_thresholds", {"low": 40.0, "high": 60.0})
+    weights = hk_config.get("aggressive_weights", {"low": 0.30, "neutral": 0.45, "high": 0.60})
+    aggressive_weight = piecewise_linear_weight(
+        percentile,
+        float(thresholds["low"]), float(thresholds["high"]),
+        float(weights["low"]), float(weights["neutral"]), float(weights["high"]),
+    )
+    return {
+        "date": signal_date.strftime("%Y-%m-%d"),
+        "equity_premium": round(latest_value, 4),
+        "percentile": round(percentile, 2),
+        "aggressive_weight": round(aggressive_weight, 4),
+        "defensive_weight": round(1.0 - aggressive_weight, 4),
+        "history_points": int(sample_count),
+        "available": True,
+        "source": "shared_hsi_erp_summary",
     }
 
 
@@ -1204,6 +1251,7 @@ def _hsi_erp_neutral(hk_config: dict[str, Any]) -> dict[str, Any]:
         "defensive_weight": 1.0,
         "history_points": 0,
         "available": False,
+        "source": None,
         "message": "HSI ERP table unavailable; HK targets are capped at current HK exposure",
     }
 
@@ -1274,15 +1322,116 @@ def compute_cross_market_allocation(
 #  TARGET WEIGHT BUILDER (v3 — dual-pool)
 # ═══════════════════════════════════════════════════════════════
 
+def _reentry_gate(
+    bucket: str,
+    percentile: float | None,
+    forced_exit: bool,
+    threshold: float | None,
+    reentry_state: dict[str, bool],
+) -> tuple[bool, bool, bool]:
+    """Apply a stateful reentry gate that starts only after a forced exit."""
+    waiting_before = bool(reentry_state.get(bucket, False))
+    if threshold is None:
+        return False, waiting_before, False
+    if forced_exit:
+        return False, waiting_before, True
+    if not waiting_before:
+        return False, False, False
+    if percentile is not None and float(percentile) <= float(threshold):
+        return False, True, False
+    return True, True, True
+
+
+_REENTRY_PERCENTILE_FIELDS = {
+    "zz500": ("500分位",),
+    "zz1000": ("1000分位",),
+    "cyb": ("创业板分位",),
+    "val300": ("300价值分位",),
+    "gro300": ("300成长分位",),
+    "hstech": ("恒生科技分位",),
+}
+
+
+def derive_reentry_state_from_history(
+    rows: list[dict[str, Any]],
+    execution_config: dict[str, Any],
+    before_date: datetime | None = None,
+) -> dict[str, bool]:
+    """Rebuild strategy reentry state from signal history before the current decision date."""
+    dated_rows = sorted(
+        (
+            (dt, row)
+            for row in rows
+            if (dt := parse_date(get_first(row, "日期", "date", "trade_date"))) is not None
+            and (before_date is None or dt.date() < before_date.date())
+        ),
+        key=lambda item: item[0],
+    )
+    thresholds = execution_config.get("aggressive_reentry_percentiles", {})
+    forced_thresholds = execution_config.get("forced_exit_percentiles", {})
+    anchor_keys = (
+        execution_config.get("relative_signal_policy", {})
+        .get("anchor_recommendation_keys", {})
+    )
+    state = {bucket: False for bucket in thresholds}
+    kc50_300_history: list[float] = []
+
+    for _, row in dated_rows:
+        numerator = safe_float(get_first(row, "科创50指数"))
+        denominator = safe_float(get_first(row, "沪深300"))
+        if numerator is not None and denominator not in (None, 0):
+            kc50_300_history.append(numerator / denominator)
+        kc50_300_percentile = None
+        if kc50_300_history:
+            latest = kc50_300_history[-1]
+            kc50_300_percentile = round(
+                sum(value <= latest for value in kc50_300_history) / len(kc50_300_history) * 100.0,
+                1,
+            )
+
+        for bucket, threshold in thresholds.items():
+            signal_key = anchor_keys.get(bucket, bucket)
+            if signal_key == "kc50_300":
+                percentile = kc50_300_percentile
+            else:
+                fields = _REENTRY_PERCENTILE_FIELDS.get(bucket)
+                percentile = safe_float(get_first(row, *fields)) if fields else None
+            if percentile is None:
+                continue
+            forced_threshold = safe_float(forced_thresholds.get(bucket))
+            if forced_threshold is not None and percentile >= forced_threshold:
+                state[bucket] = True
+            elif state.get(bucket, False) and percentile <= float(threshold):
+                state[bucket] = False
+    return state
+
+
+def build_strategy_state(
+    targets: dict[str, dict[str, Any]],
+    as_of: str,
+    source: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "as_of": as_of,
+        "source": source,
+        "bootstrap_policy": "unblocked_until_forced_exit",
+        "reentry_waiting": {
+            bucket: bool(target.get("reentry_waiting_after", False))
+            for bucket, target in targets.items()
+            if "reentry_waiting_after" in target
+        },
+    }
+
 def _build_pool_aggressive_buckets(
     bucket_keys: list[str],
     relative_snapshot: dict[str, Any],
     execution_config: dict[str, Any],
-    current_holdings: dict[str, float],
     aggressive_alpha_total: float,
     bucket_metadata: dict[str, dict[str, Any]],
     anchor_context: dict[str, dict[str, Any]],
     feature_tilts: dict[str, dict[str, Any]],
+    reentry_state: dict[str, bool],
 ) -> dict[str, dict[str, Any]]:
     """Build aggressive bucket targets for a pool."""
     base_weights = execution_config["alpha_base_weights"]
@@ -1290,7 +1439,6 @@ def _build_pool_aggressive_buckets(
     multipliers = execution_config["recommendation_multipliers"]
     forced_exit_thresholds = execution_config.get("forced_exit_percentiles", {})
     reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
-    reentry_min = float(execution_config.get("reentry_min_current_amount", 1000.0))
     trajectory_config = execution_config.get("trajectory_overlay", {})
 
     scores: dict[str, float] = {}
@@ -1314,18 +1462,18 @@ def _build_pool_aggressive_buckets(
         percentile = relative_snapshot["percentiles"].get(f"{anchor_key}_percentile")
         deviation = relative_snapshot.get("deviations", {}).get(f"{anchor_key}_deviation")
         change_5d = relative_snapshot.get("changes", {}).get(f"{anchor_key}_change_5d")
-        cur_amount = float(current_holdings.get(bucket, 0.0))
-
         force_threshold = forced_exit_thresholds.get(bucket)
         forced_exit = (
             force_threshold is not None and percentile is not None
             and float(percentile) >= float(force_threshold)
         )
         reentry_threshold = reentry_thresholds.get(bucket)
-        reentry_blocked = (
-            reentry_threshold is not None and percentile is not None
-            and cur_amount <= reentry_min
-            and float(percentile) > float(reentry_threshold)
+        reentry_blocked, waiting_before, waiting_after = _reentry_gate(
+            bucket,
+            percentile,
+            forced_exit,
+            reentry_threshold,
+            reentry_state,
         )
         traj_mult, traj_reason = trajectory_multiplier(deviation, change_5d, trajectory_config)
 
@@ -1361,6 +1509,8 @@ def _build_pool_aggressive_buckets(
             "forced_exit": forced_exit,
             "reentry_threshold": float(reentry_threshold) if reentry_threshold is not None else None,
             "reentry_blocked": reentry_blocked,
+            "reentry_waiting_before": waiting_before,
+            "reentry_waiting_after": waiting_after,
             "trajectory_multiplier": round(float(traj_mult), 2),
             "trajectory_reason": traj_reason,
             "target_weight": round(tw, 4),
@@ -1398,6 +1548,28 @@ def _apply_bucket_group_caps(
             targets[bucket]["group_cap_name"] = group_name
             targets[bucket]["group_cap"] = round(cap, 4)
             targets[bucket]["group_cap_released"] = round(previous - capped_weight, 4)
+
+
+def _apply_bucket_caps(
+    targets: dict[str, dict[str, Any]], bucket_caps: dict[str, Any]
+) -> None:
+    """Trim individual buckets after deployment scaling or internal rotation."""
+    for bucket, raw_cap in bucket_caps.items():
+        if bucket not in targets:
+            continue
+        cap = safe_float(raw_cap)
+        if cap is None or cap < 0:
+            continue
+        previous = float(targets[bucket].get("target_weight", 0.0))
+        if previous <= cap:
+            continue
+        capped_weight = round(cap, 4)
+        targets[bucket]["target_weight"] = capped_weight
+        targets[bucket]["bucket_cap"] = capped_weight
+        targets[bucket]["bucket_cap_released"] = round(
+            float(targets[bucket].get("bucket_cap_released", 0.0)) + previous - capped_weight,
+            4,
+        )
 
 
 def _rec_for_bucket(bucket: str, recs: dict[str, str]) -> str:
@@ -1496,6 +1668,87 @@ def _add_cash_target(targets: dict[str, dict[str, Any]], weight: float, reason: 
     }
 
 
+def _hs300_rotation_budget(percentile: float | None, deployment_config: dict[str, Any]) -> float:
+    rotation_config = deployment_config.get("core_rotation", {}).get("hs300", {})
+    if not rotation_config.get("enabled", False):
+        return 0.0
+    return _piecewise_from_points(
+        percentile,
+        rotation_config.get("breakpoints", []),
+        float(rotation_config.get("default_weight", 0.0)),
+    )
+
+
+def _rotate_hs300_release(
+    targets: dict[str, dict[str, Any]],
+    released_weight: float,
+    percentile: float | None,
+    deployment_config: dict[str, Any],
+    execution_config: dict[str, Any],
+) -> float:
+    """Move capped HS300 weight only to signal-qualified A-share satellite targets."""
+    raw_budget = min(max(0.0, released_weight), _hs300_rotation_budget(percentile, deployment_config))
+    budget = math.floor((raw_budget + 1e-12) * 10000) / 10000
+    if budget <= 0:
+        return 0.0
+
+    eligible_signals = {
+        normalize_text(value)
+        for value in execution_config.get("relative_signal_policy", {}).get("anchor_eligible_recommendations", [])
+    }
+    caps = execution_config.get("alpha_bucket_caps", {})
+    candidates = [
+        key for key, target in targets.items()
+        if key != "hs300"
+        and target.get("pool") == "ashare"
+        and float(target.get("target_weight", 0.0)) > 0
+        and normalize_text(target.get("signal")) in eligible_signals
+        and not target.get("forced_exit", False)
+        and not target.get("reentry_blocked", False)
+        and float(caps.get(key, 1.0)) > float(target.get("target_weight", 0.0))
+    ]
+    if not candidates:
+        return 0.0
+
+    remaining = budget
+    allocated = 0.0
+    for _ in range(len(candidates)):
+        active = [
+            key for key in candidates
+            if float(caps.get(key, 1.0)) - float(targets[key].get("target_weight", 0.0)) > 0.00005
+        ]
+        if not active or remaining <= 0.00005:
+            break
+        score_total = sum(float(targets[key]["target_weight"]) for key in active)
+        if score_total <= 0:
+            break
+        used_this_round = 0.0
+        for key in active:
+            current = float(targets[key]["target_weight"])
+            room = max(0.0, float(caps.get(key, 1.0)) - current)
+            available_budget = max(0.0, budget - allocated - used_this_round)
+            allocation = min(remaining * current / score_total, room, available_budget)
+            if allocation <= 0:
+                continue
+            new_weight = min(float(caps.get(key, 1.0)), round(current + allocation, 4))
+            actual_added = max(0.0, new_weight - current)
+            if actual_added > available_budget:
+                actual_added = math.floor((available_budget + 1e-12) * 10000) / 10000
+                new_weight = round(current + actual_added, 4)
+            if actual_added <= 0:
+                continue
+            targets[key]["target_weight"] = new_weight
+            targets[key]["core_rotation_added"] = round(
+                float(targets[key].get("core_rotation_added", 0.0)) + actual_added, 4
+            )
+            used_this_round += actual_added
+        if used_this_round <= 0.00005:
+            break
+        allocated += used_this_round
+        remaining = max(0.0, budget - allocated)
+    return round(min(allocated, budget), 4)
+
+
 def apply_portfolio_deployment_layer(
     targets: dict[str, dict[str, Any]],
     erp_snapshot: dict[str, Any],
@@ -1531,15 +1784,42 @@ def apply_portfolio_deployment_layer(
             new_weight = old_weight
         scaled[key] = {**item, "target_weight": round(max(0.0, new_weight), 4)}
 
-    surplus = 0.0
+    hs300_released = 0.0
     hs300_cap = _core_cap(safe_float(erp_snapshot.get("percentile")), deployment_config, "hs300")
     if hs300_cap is not None and "hs300" in scaled:
         current = float(scaled["hs300"].get("target_weight", 0.0))
         if current > hs300_cap:
-            surplus += current - hs300_cap
+            hs300_released = current - hs300_cap
             scaled["hs300"]["target_weight"] = round(hs300_cap, 4)
             scaled["hs300"]["core_cap"] = round(hs300_cap, 4)
-            scaled["hs300"]["cap_released_to_cash"] = round(current - hs300_cap, 4)
+            scaled["hs300"]["cap_released_to_cash"] = round(hs300_released, 4)
+
+    _apply_bucket_caps(scaled, execution_config.get("alpha_bucket_caps", {}))
+    _apply_bucket_group_caps(scaled, execution_config.get("alpha_group_caps", {}))
+    rotation_before = sum(
+        float(item.get("target_weight", 0.0))
+        for key, item in scaled.items()
+        if key != "hs300" and item.get("pool") == "ashare"
+    )
+    _rotate_hs300_release(
+        scaled,
+        hs300_released,
+        safe_float(erp_snapshot.get("percentile")),
+        deployment_config,
+        execution_config,
+    )
+    _apply_bucket_caps(scaled, execution_config.get("alpha_bucket_caps", {}))
+    _apply_bucket_group_caps(scaled, execution_config.get("alpha_group_caps", {}))
+    rotation_added = max(0.0, sum(
+        float(item.get("target_weight", 0.0))
+        for key, item in scaled.items()
+        if key != "hs300" and item.get("pool") == "ashare"
+    ) - rotation_before)
+    if hs300_released > 0:
+        scaled["hs300"]["cap_released_to_rotation"] = round(rotation_added, 4)
+        scaled["hs300"]["cap_released_to_cash"] = round(max(0.0, hs300_released - rotation_added), 4)
+
+    surplus = max(0.0, hs300_released - rotation_added)
 
     hsi_cap = _core_cap(safe_float(hsi_erp_snapshot.get("percentile")), deployment_config, "hsi")
     if hsi_cap is not None and "hsi" in scaled:
@@ -1565,6 +1845,7 @@ def build_target_weights(
     relative_snapshot: dict[str, Any],
     execution_config: dict[str, Any],
     current_holdings: dict[str, float],
+    reentry_state: dict[str, bool] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build all target weights for both pools (v3 expanded)."""
     thresholds = execution_config["percentile_thresholds"]
@@ -1576,7 +1857,7 @@ def build_target_weights(
     style_config = execution_config.get("style_pair", {})
     forced_exit_thresholds = execution_config.get("forced_exit_percentiles", {})
     reentry_thresholds = execution_config.get("aggressive_reentry_percentiles", {})
-    reentry_min = float(execution_config.get("reentry_min_current_amount", 1000.0))
+    reentry_state = dict(reentry_state or {})
     trajectory_config = execution_config.get("trajectory_overlay", {})
     bucket_meta = execution_config.get("bucket_metadata", {})
     signal_policy = _relative_signal_policy(execution_config)
@@ -1626,11 +1907,12 @@ def build_target_weights(
         pct = relative_snapshot["percentiles"].get(f"{bucket}_percentile")
         dev = relative_snapshot.get("deviations", {}).get(f"{bucket}_deviation")
         chg = relative_snapshot.get("changes", {}).get(f"{bucket}_change_5d")
-        cur_amt = float(current_holdings.get(bucket, 0.0))
         ft = forced_exit_thresholds.get(bucket)
         fe = ft is not None and pct is not None and float(pct) >= float(ft)
         rt = reentry_thresholds.get(bucket)
-        rb = rt is not None and pct is not None and cur_amt <= reentry_min and float(pct) > float(rt)
+        rb, waiting_before, waiting_after = _reentry_gate(
+            bucket, pct, fe, rt, reentry_state
+        )
         tm, tr = trajectory_multiplier(dev, chg, trajectory_config)
         tw = min(tw, float(caps.get(bucket, 1.0)))
         if fe:
@@ -1652,6 +1934,8 @@ def build_target_weights(
             "forced_exit": fe,
             "reentry_threshold": float(rt) if rt is not None else None,
             "reentry_blocked": rb,
+            "reentry_waiting_before": waiting_before,
+            "reentry_waiting_after": waiting_after,
             "trajectory_multiplier": round(float(tm), 2),
             "trajectory_reason": tr,
             "target_weight": round(tw, 4),
@@ -1707,8 +1991,8 @@ def build_target_weights(
     agg_alpha_total = ashare_agg_total * ashare_alpha_budget
     agg_buckets = _build_pool_aggressive_buckets(
         ["cyb", "zz500", "zz1000", "kc50"],
-        relative_snapshot, execution_config, current_holdings,
-        agg_alpha_total, bucket_meta, anchor_context, feature_tilts,
+        relative_snapshot, execution_config, agg_alpha_total,
+        bucket_meta, anchor_context, feature_tilts, reentry_state,
     )
     _apply_bucket_group_caps(agg_buckets, execution_config.get("alpha_group_caps", {}))
     targets.update(agg_buckets)
@@ -1756,6 +2040,9 @@ def build_target_weights(
             "target_weight": round(hstech_tw, 4),
             "trajectory_multiplier": 1.0,
             "trajectory_reason": "HSI ERP unavailable; no new HK exposure",
+            "reentry_waiting_before": bool(reentry_state.get("hstech", False)),
+            "reentry_waiting_after": bool(reentry_state.get("hstech", False)),
+            "reentry_blocked": False,
         }
         _balance_target_weights(targets)
         return apply_portfolio_deployment_layer(targets, erp_snapshot, hsi_erp_snapshot, execution_config)
@@ -1773,11 +2060,12 @@ def build_target_weights(
     hstech_pct = relative_snapshot["percentiles"].get("hstech_percentile")
     hstech_dev = relative_snapshot.get("deviations", {}).get("hstech_deviation")
     hstech_chg = relative_snapshot.get("changes", {}).get("hstech_change_5d")
-    hstech_cur = float(current_holdings.get("hstech", 0.0))
     hstech_ft = forced_exit_thresholds.get("hstech")
     hstech_fe = hstech_ft is not None and hstech_pct is not None and float(hstech_pct) >= float(hstech_ft)
     hstech_rt = reentry_thresholds.get("hstech")
-    hstech_rb = hstech_rt is not None and hstech_pct is not None and hstech_cur <= reentry_min and float(hstech_pct) > float(hstech_rt)
+    hstech_rb, hstech_waiting_before, hstech_waiting_after = _reentry_gate(
+        "hstech", hstech_pct, hstech_fe, hstech_rt, reentry_state
+    )
     hstech_tm, hstech_tr = trajectory_multiplier(hstech_dev, hstech_chg, trajectory_config)
 
     hstech_tw = hk_agg_total
@@ -1801,6 +2089,8 @@ def build_target_weights(
         "forced_exit": hstech_fe,
         "reentry_threshold": float(hstech_rt) if hstech_rt is not None else None,
         "reentry_blocked": hstech_rb,
+        "reentry_waiting_before": hstech_waiting_before,
+        "reentry_waiting_after": hstech_waiting_after,
         "trajectory_multiplier": round(float(hstech_tm), 2),
         "trajectory_reason": hstech_tr,
         "target_weight": round(hstech_tw, 4),
@@ -2136,6 +2426,15 @@ def validate_execution_payload(payload: dict[str, Any]) -> None:
         errors.append(f"target weights must sum to 1.0, got {total_weight:.6f}")
     execution_config = payload.get("inputs", {}).get("execution_config", {})
     positions_by_bucket = {item.get("bucket"): item for item in positions}
+    for bucket, raw_cap in execution_config.get("alpha_bucket_caps", {}).items():
+        cap = safe_float(raw_cap)
+        if cap is None:
+            continue
+        bucket_weight = float(positions_by_bucket.get(bucket, {}).get("target_weight", 0.0))
+        if bucket_weight > cap + tolerance:
+            errors.append(
+                f"bucket cap {bucket} exceeded: {bucket_weight:.6f} > {cap:.6f}"
+            )
     for group_name, group_config in execution_config.get("alpha_group_caps", {}).items():
         cap = safe_float(group_config.get("cap"))
         if cap is None:
@@ -2148,6 +2447,20 @@ def validate_execution_payload(payload: dict[str, Any]) -> None:
             errors.append(
                 f"group cap {group_name} exceeded: {group_weight:.6f} > {cap:.6f}"
             )
+    strategy_state = payload.get("strategy_state", {})
+    if strategy_state.get("schema_version") != 1:
+        errors.append("strategy_state schema_version must be 1")
+    if strategy_state.get("source") != "derived_from_relative_history":
+        errors.append("strategy_state source must be derived_from_relative_history")
+    waiting = strategy_state.get("reentry_waiting")
+    if not isinstance(waiting, dict):
+        errors.append("strategy_state reentry_waiting must be an object")
+    else:
+        for bucket, position in positions_by_bucket.items():
+            if "reentry_waiting_after" not in position:
+                continue
+            if waiting.get(bucket) is not bool(position.get("reentry_waiting_after")):
+                errors.append(f"strategy_state reentry_waiting mismatch for {bucket}")
     errors.extend(payload.get("signals", {}).get("data_health", {}).get("errors", []))
     if payload.get("inputs", {}).get("execution_mode") == "rebalance":
         required_recommendations = _required_relative_recommendation_keys(
@@ -2201,7 +2514,7 @@ def print_summary(payload: dict[str, Any]) -> None:
     portfolio = payload["portfolio"]
 
     print("=" * 60)
-    print("ERP Execution Cloud Reference Plan v3.1")
+    print("ERP Execution Cloud Reference Plan v3.2")
     print("=" * 60)
     print(f"A-share ERP: {erp['date']}  premium={erp['equity_premium']:.2f}  pct={erp['percentile']:.2f}%  agg={erp['aggressive_weight']:.2%}")
     if hsi.get("available"):
@@ -2247,6 +2560,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--asset-table-id", default=os.environ.get("ERP_EXEC_ASSET_TABLE_ID", DEFAULT_ASSET_TABLE_ID))
     parser.add_argument("--hsi-erp-app-token", default=os.environ.get("ERP_EXEC_HSI_ERP_APP_TOKEN", DEFAULT_HSI_ERP_APP_TOKEN))
     parser.add_argument("--hsi-erp-table-id", default=os.environ.get("ERP_EXEC_HSI_ERP_TABLE_ID", DEFAULT_HSI_ERP_TABLE_ID))
+    parser.add_argument("--hsi-erp-signal-json", default=os.environ.get("ERP_EXEC_HSI_ERP_SIGNAL_JSON", ""))
     parser.add_argument("--erp-signal-json", default=os.environ.get("ERP_EXEC_ERP_SIGNAL_JSON", ""))
     parser.add_argument("--relative-signal-json", default=os.environ.get("ERP_EXEC_RELATIVE_SIGNAL_JSON", ""))
     parser.add_argument("--execution-config-path", default=os.environ.get("ERP_EXECUTION_CONFIG_PATH", str(DEFAULT_EXECUTION_CONFIG_PATH)))
@@ -2275,7 +2589,9 @@ def main() -> None:
         raise ValueError(f"Invalid --portfolio-snapshot-as-of date: {args.portfolio_snapshot_as_of}")
     app_id = os.environ.get("FEISHU_APP_ID", "").strip()
     app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-    reader = FeishuBitableReader(app_id, app_secret)
+    reader = FeishuBitableReader(app_id, app_secret) if app_id and app_secret else None
+    if reader is None and (not args.erp_signal_json or not args.relative_signal_json):
+        raise ValueError("Missing FEISHU_APP_ID / FEISHU_APP_SECRET for Feishu ERP or Relative signal reads")
 
     execution_config = sanitize_structure(json.loads(Path(args.execution_config_path).read_text(encoding="utf-8")))
 
@@ -2283,6 +2599,7 @@ def main() -> None:
         erp_rows = load_shared_erp_rows(args.erp_signal_json)
         print(f"Loaded ERP shared signal JSON: {args.erp_signal_json} ({len(erp_rows)} rows)")
     else:
+        assert reader is not None
         erp_rows = reader.list_all_records(args.erp_app_token, args.erp_table_id, args.page_size)
     erp_rows = filter_signal_rows_as_of(erp_rows, as_of)
 
@@ -2290,29 +2607,63 @@ def main() -> None:
         relative_rows = load_shared_relative_rows(args.relative_signal_json)
         print(f"Loaded Relative shared signal JSON: {args.relative_signal_json} ({len(relative_rows)} rows)")
     else:
+        assert reader is not None
         relative_rows = reader.list_all_records(args.relative_app_token, args.relative_table_id, args.page_size)
     relative_rows = filter_signal_rows_as_of(relative_rows, as_of)
 
     try:
+        if reader is None:
+            raise RuntimeError("Feishu credentials are not configured")
         asset_rows = reader.list_all_records(args.asset_app_token, args.asset_table_id, args.page_size)
     except Exception as exc:
         asset_rows = []
         print(f"Asset-table audit skipped: {exc}", file=sys.stderr)
 
-    # HSI ERP (optional)
+    # HSI ERP: prefer the scheduler-published shared signal; Feishu is a legacy fallback.
     hsi_rows: list[dict[str, Any]] | None = None
-    if args.hsi_erp_app_token and args.hsi_erp_table_id:
+    hsi_erp_payload: dict[str, Any] | None = None
+    if args.hsi_erp_signal_json:
         try:
+            candidate = json.loads(Path(args.hsi_erp_signal_json).read_text(encoding="utf-8"))
+            hsi_erp_payload = candidate if isinstance(candidate, dict) else None
+        except Exception as exc:
+            print(f"HSI ERP shared signal unavailable: {exc}", file=sys.stderr)
+    if hsi_erp_payload is None and args.hsi_erp_app_token and args.hsi_erp_table_id:
+        try:
+            if reader is None:
+                raise RuntimeError("Feishu credentials are not configured")
             hsi_rows = reader.list_all_records(args.hsi_erp_app_token, args.hsi_erp_table_id, args.page_size)
             hsi_rows = filter_signal_rows_as_of(hsi_rows, as_of)
         except Exception:
             hsi_rows = None
 
     erp_snapshot = compute_erp_snapshot(erp_rows, execution_config["percentile_thresholds"], execution_config["aggressive_weights"])
-    hsi_erp_snapshot = compute_hsi_erp_snapshot(hsi_rows, execution_config.get("hk_erp", {}))
+    hsi_erp_snapshot = (
+        compute_hsi_erp_snapshot_from_shared_signal(hsi_erp_payload, execution_config.get("hk_erp", {}), as_of)
+        if hsi_erp_payload is not None
+        else compute_hsi_erp_snapshot(hsi_rows, execution_config.get("hk_erp", {}))
+    )
     relative_snapshot = compute_relative_snapshot(relative_rows)
 
-    targets = build_target_weights(erp_snapshot, hsi_erp_snapshot, relative_snapshot, execution_config, {})
+    relative_decision_date = parse_date(relative_snapshot.get("date"))
+    prior_reentry_state = derive_reentry_state_from_history(
+        relative_rows,
+        execution_config,
+        before_date=relative_decision_date,
+    )
+    targets = build_target_weights(
+        erp_snapshot,
+        hsi_erp_snapshot,
+        relative_snapshot,
+        execution_config,
+        {},
+        reentry_state=prior_reentry_state,
+    )
+    strategy_state = build_strategy_state(
+        targets,
+        relative_snapshot["date"],
+        "derived_from_relative_history",
+    )
     portfolio = build_reference_allocation_plan(
         targets,
         execution_config.get("strategy_reference", {}),
@@ -2331,7 +2682,7 @@ def main() -> None:
     )
 
     payload = {
-        "version": "3.1",
+        "version": "3.2",
         "signal_type": "erp_execution_plan",
         "generated_at": datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds"),
         "inputs": {
@@ -2341,12 +2692,14 @@ def main() -> None:
             "relative_table": {"app_token": args.relative_app_token, "table_id": args.relative_table_id},
             "erp_signal_json": str(Path(args.erp_signal_json).resolve()) if args.erp_signal_json else None,
             "relative_signal_json": str(Path(args.relative_signal_json).resolve()) if args.relative_signal_json else None,
+            "hsi_erp_signal_json": str(Path(args.hsi_erp_signal_json).resolve()) if args.hsi_erp_signal_json else None,
             "asset_table": {"app_token": args.asset_app_token, "table_id": args.asset_table_id, "role": "audit_only"},
             "hsi_erp_table": {"app_token": args.hsi_erp_app_token, "table_id": args.hsi_erp_table_id} if args.hsi_erp_app_token else None,
             "as_of": as_of.strftime("%Y-%m-%d"),
             "portfolio_snapshot_as_of": portfolio_snapshot_as_of.strftime("%Y-%m-%d") if portfolio_snapshot_as_of else None,
             "strategy_reference_notional": portfolio["reference_notional"],
             "actual_allocation_owner": portfolio["actual_allocation_owner"],
+            "strategy_state_source": strategy_state["source"],
             "execution_config_path": str(Path(args.execution_config_path).resolve()),
             "execution_config": execution_config,
         },
@@ -2356,6 +2709,7 @@ def main() -> None:
             "relative": relative_snapshot,
             "data_health": data_health,
         },
+        "strategy_state": strategy_state,
         "portfolio": portfolio,
     }
 

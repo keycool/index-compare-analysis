@@ -1,0 +1,119 @@
+{
+  "version": "1.0",
+  "purpose": "ERP strategy parameter governance. This registry documents parameter families; it does not approve or optimize values.",
+  "evidence_status_values": ["unvalidated", "risk_constraint", "data_quality"],
+  "entries": [
+    {
+      "path": "portfolio_deployment.ashare.breakpoints[*].weight",
+      "classification": "investment_assumption",
+      "effect": "Maps CSI300 ERP percentile to the total A-share equity waterline.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Walk-forward comparison of waterline curves, drawdown and turnover."
+    },
+    {
+      "path": "portfolio_deployment.hkshare.breakpoints[*].weight",
+      "classification": "investment_assumption",
+      "effect": "Maps HSI ERP percentile to Hong Kong equity deployment when HSI ERP is available.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Separate Hong Kong ERP history and walk-forward evaluation."
+    },
+    {
+      "path": "portfolio_deployment.core_caps.*.breakpoints[*].weight",
+      "classification": "risk_constraint",
+      "effect": "Caps core index exposure after all allocation logic has run.",
+      "evidence_status": "risk_constraint",
+      "required_evidence": "Concentration limit approved by the portfolio owner."
+    },
+    {
+      "path": "portfolio_deployment.core_rotation.hs300.*",
+      "classification": "investment_assumption",
+      "effect": "Moves a bounded portion of HS300 core-cap release to already-qualified A-share satellite targets; any unused amount remains cash.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Walk-forward comparison against cash release, including turnover, concentration and satellite-entry diagnostics."
+    },
+    {
+      "path": "percentile_thresholds.* / aggressive_weights.* / alpha_budget_weights.*",
+      "classification": "investment_assumption",
+      "effect": "Controls ERP regime boundaries, aggressive sleeve share and alpha opportunity budget.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Joint walk-forward sensitivity with cash weight, drawdown and turnover."
+    },
+    {
+      "path": "recommendation_multipliers.*",
+      "classification": "investment_assumption",
+      "effect": "Converts relative-value recommendation grades to cross-bucket allocation scores.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Monotonicity and spread sensitivity; no grade-specific curve fitting."
+    },
+    {
+      "path": "alpha_base_weights.*",
+      "classification": "investment_assumption",
+      "effect": "Sets the relative priority of eligible A-share satellite buckets before normalization.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Role-based rationale plus out-of-sample comparison."
+    },
+    {
+      "path": "alpha_bucket_caps.* / alpha_group_caps.*",
+      "classification": "risk_constraint",
+      "effect": "Limits single-bucket and correlated growth-bucket exposure.",
+      "evidence_status": "risk_constraint",
+      "required_evidence": "Concentration and correlation budget approved by the portfolio owner."
+    },
+    {
+      "path": "relative_signal_policy.anchor_eligible_recommendations / pairwise_tilt_multipliers.*",
+      "classification": "investment_assumption",
+      "effect": "Gates a bucket on its primary anchor and applies small pairwise tilts only after both anchors qualify.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Ablation test against an anchor-only strategy."
+    },
+    {
+      "path": "forced_exit_percentiles.* / aggressive_reentry_percentiles.*",
+      "classification": "investment_assumption",
+      "effect": "Introduces an explicit strategy-state cycle: forced exit starts waiting, and the configured percentile clears it.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Threshold sensitivity, hit-rate and turnover analysis by bucket."
+    },
+    {
+      "path": "trajectory_overlay.*",
+      "classification": "investment_assumption",
+      "effect": "Temporarily scales an otherwise eligible bucket from short-term deviation and five-day change.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Ablation against overlay-disabled strategy and one-variable multiplier sensitivity."
+    },
+    {
+      "path": "style_pair.*",
+      "classification": "investment_assumption",
+      "effect": "Allocates the defensive style budget between 300 value and 300 growth.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Value-growth pair history with rolling out-of-sample checks."
+    },
+    {
+      "path": "cross_market.* / hk_erp.*",
+      "classification": "investment_assumption",
+      "effect": "Sets Hong Kong pool size and HSI ERP regime behavior.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Validated HSI ERP data and cross-market allocation study."
+    },
+    {
+      "path": "data_quality.*",
+      "classification": "data_quality",
+      "effect": "Blocks or warns on stale, inconsistent or non-conserving inputs and outputs.",
+      "evidence_status": "data_quality",
+      "required_evidence": "Operational reliability tests, not return optimization."
+    },
+    {
+      "path": "holding_alias_map.* / ignored_erp_holdings.*",
+      "classification": "data_quality",
+      "effect": "Maps observed holdings into strategy buckets; it must not change the model's standard reference allocation.",
+      "evidence_status": "data_quality",
+      "required_evidence": "Feishu holdings mapping review."
+    },
+    {
+      "path": "index-compare analysis.ma_window / trend_windows / percentile_levels / score weights",
+      "classification": "investment_assumption",
+      "effect": "Generates the primary relative-value recommendations consumed by ERP execution.",
+      "evidence_status": "unvalidated",
+      "required_evidence": "Causal recomputation and walk-forward validation; all-history percentiles are not valid historical inputs."
+    }
+  ]
+}

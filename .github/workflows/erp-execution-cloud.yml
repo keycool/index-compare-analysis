@@ -19,6 +19,11 @@ on:
         required: false
         default: "https://keycool.github.io/index-compare-analysis/data/merged_signal.json"
         type: string
+      hsi_erp_signal_url:
+        description: "HSI ERP shared signal URL produced by erp-relative-master-scheduler"
+        required: false
+        default: "https://keycool.github.io/index-compare-analysis/data/hsi_erp_signal.json"
+        type: string
       execution_mode:
         description: "rebalance enforces signal completeness; actual holdings stay outside the strategy model"
         required: false
@@ -83,6 +88,7 @@ jobs:
       - name: Download latest merged signal
         env:
           ERP_MERGED_SIGNAL_URL: ${{ inputs.merged_signal_url || 'https://keycool.github.io/index-compare-analysis/data/merged_signal.json' }}
+          ERP_HSI_ERP_SIGNAL_URL: ${{ inputs.hsi_erp_signal_url || 'https://keycool.github.io/index-compare-analysis/data/hsi_erp_signal.json' }}
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
         run: |
           python - <<'PY'
@@ -211,6 +217,21 @@ jobs:
                   env_file.write(f"ERP_EXEC_ERP_SIGNAL_JSON={erp_path}\n")
                   env_file.write(f"ERP_EXEC_RELATIVE_SIGNAL_JSON={relative_path}\n")
 
+              hsi_url = os.environ.get("ERP_HSI_ERP_SIGNAL_URL", "").strip()
+              if hsi_url:
+                  try:
+                      with urllib.request.urlopen(hsi_url, timeout=30) as response:
+                          hsi_payload = json.loads(response.read().decode("utf-8"))
+                      if not isinstance(hsi_payload, dict):
+                          raise ValueError("HSI ERP shared signal is not an object")
+                      hsi_path = temp_dir / "hsi_erp_signal.json"
+                      hsi_path.write_text(json.dumps(hsi_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                      with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env_file:
+                          env_file.write(f"ERP_EXEC_HSI_ERP_SIGNAL_JSON={hsi_path}\n")
+                      summary_lines.append(f"- HSI ERP shared signal: `{hsi_url}`")
+                  except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+                      summary_lines.append(f"- HSI ERP shared signal: unavailable (`{exc}`); no new HK exposure will be added")
+
               summary_lines.extend([
                   f"- Merged signal URL: `{url}`",
                   "- Source: `merged_signal.json`",
@@ -244,6 +265,7 @@ jobs:
           ERP_EXEC_ERP_TABLE_ID: ${{ secrets.ERP_EXEC_ERP_TABLE_ID || secrets.ERP_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
           ERP_EXEC_RELATIVE_APP_TOKEN: ${{ secrets.ERP_EXEC_RELATIVE_APP_TOKEN || secrets.CSI_FEISHU_APP_TOKEN || secrets.FEISHU_APP_TOKEN }}
           ERP_EXEC_RELATIVE_TABLE_ID: ${{ secrets.ERP_EXEC_RELATIVE_TABLE_ID || secrets.CSI_FEISHU_TABLE_ID || secrets.FEISHU_TABLE_ID }}
+          ERP_EXEC_HSI_ERP_SIGNAL_JSON: ${{ env.ERP_EXEC_HSI_ERP_SIGNAL_JSON }}
           ERP_EXEC_ASSET_APP_TOKEN: ${{ secrets.ERP_EXEC_ASSET_APP_TOKEN }}
           ERP_EXEC_ASSET_TABLE_ID: ${{ secrets.ERP_EXEC_ASSET_TABLE_ID }}
           ERP_DAILY_FEISHU_WEBHOOK_URL: ${{ secrets.ERP_DAILY_FEISHU_WEBHOOK_URL }}
@@ -281,6 +303,14 @@ jobs:
           if health.get("errors"):
               raise SystemExit("Data health check failed: " + "; ".join(health["errors"]))
 
+          strategy_state = plan.get("strategy_state", {})
+          if strategy_state.get("schema_version") != 1:
+              raise SystemExit("Missing ERP strategy_state schema v1")
+          if strategy_state.get("source") != "derived_from_relative_history":
+              raise SystemExit(f"Unexpected ERP strategy state source: {strategy_state.get('source')}")
+          if not isinstance(strategy_state.get("reentry_waiting"), dict):
+              raise SystemExit("ERP strategy_state.reentry_waiting must be an object")
+
           defensive_value = next((item for item in positions if item.get("bucket") == "sh50"), None)
           if defensive_value is None:
               raise SystemExit("Missing defensive value bucket sh50 in ERP execution plan")
@@ -296,6 +326,7 @@ jobs:
               f"- Strategy reference notional: `{portfolio.get('reference_notional', portfolio.get('managed_amount', 0)):,.2f}`",
               f"- Target weight sum: `{total_weight:.4%}`",
               f"- Data dates: `{health.get('dates', {})}`",
+              f"- Strategy state: `{strategy_state.get('reentry_waiting', {})}`",
               f"- Defensive value current amount: `{defensive_value.get('current_amount', 0):,.2f}`",
               f"- Defensive value target amount: `{defensive_value.get('target_amount', 0):,.2f}`",
           ]

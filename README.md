@@ -250,6 +250,22 @@ python scripts/main.py --query ZZA500
 
 这样 `CSI300 Relative Index` 不再依赖 `Equity Risk Premium` 的内部 dashboard 文件结构，而是依赖正式发布的共享接口。
 
+GitHub Actions 生成的 `shared/` 位于 Runner 临时目录，不会自动回写到本机。需要在本地运行或复核 ERP 策略前，先同步已发布的生产信号：
+
+```powershell
+python orchestrator/sync_production_signals.py
+```
+
+该命令默认从 GitHub Pages 的 `data/merged_signal.json` 下载完整生产数据，校验 ERP/Relative 的 `latest_date`、实际记录最大日期和记录数，然后更新：
+
+```text
+../shared/erp_signal.json
+../shared/relative_signal.json
+../shared/merged_signal.json
+```
+
+被替换的本地文件会保存到 `../shared/backups/production-signals/<timestamp>/`。脚本默认拒绝日期回退；只检查不落盘时使用 `--dry-run`。完整操作口径见 `docs/erp-strategy-sop.md`。
+
 ## GitHub Actions
 
 ### ERP 策略执行工作流
@@ -267,6 +283,7 @@ ERP 策略主要由 `.github/workflows/erp-execution-cloud.yml` 运行。它采�
   - `portfolio_deployment.ashare.breakpoints`：A 股权益水位。
   - `portfolio_deployment.hkshare.breakpoints`：港股权益水位。
   - `portfolio_deployment.core_caps.hs300.breakpoints`：沪深300核心上限。
+  - `portfolio_deployment.core_rotation.hs300`：核心上限释放后，按合格卫星标的比例轮动的上限；未满足准入条件的额度保留为现金。
   - `cross_market.hk_pool_cap`：港股总上限。
 
 ERP 策略固定使用 `strategy_reference.notional = 1000000 CNY` 作为标准容量，输出每个标的的目标权重和对应的标准金额。它不是实际资金上限，也不会读取或使用实际总资产来限制目标配置。
@@ -280,7 +297,7 @@ ERP 工作流还支持一个非阻断监控接口：
 
 每次生成执行计划后会尝试 POST 一份轻量 JSON 快照，包含数据健康状态、A 股/港股/现金水位和标准容量下的目标配置。快照明确声明 `actual_allocation_in_strategy = false`，为外部监测端预留实际资产接入位；接口失败只记录 warning，不影响日报和 artifacts。详细 SOP 见 `docs/erp-strategy-sop.md`。
 
-监测快照当前为 `monitor_schema_version = 2`：`reference_allocations` 会完整列出每个非现金策略桶（包括目标为零的桶），并携带 `anchor_signal_key`、`anchor_signal`、`anchor_eligible`、`feature_tilt_multiplier`、`feature_tilts`、`allocation_score`、退出/重入和轨迹字段。监测端应以这些字段解释策略目标，不应把实际资产金额或账户级限制回写到 ERP 策略。
+监测快照当前为 `monitor_schema_version = 3`：`reference_allocations` 会完整列出每个非现金策略桶（包括目标为零的桶），并携带 `anchor_signal_key`、`anchor_signal`、`anchor_eligible`、`feature_tilt_multiplier`、`feature_tilts`、`allocation_score`、退出/重入和轨迹字段。顶层 `strategy_state` 给出由完整 Relative 历史重建的 `reentry_waiting` 状态；首次启动不因账户空仓而阻断，只有策略实际触发强制退出后才等待达到重入分位。监测端应记录并展示这些字段，但不需要回传或自行修改策略状态，也不得把实际资产金额或账户级限制回写到 ERP 策略。
 
 For manual ERP runs, the current ERP-tagged Feishu holdings can also be archived locally before the run at `orchestrator/output/asset-snapshots/erp-assets-<YYYY-MM-DDTHHmmss+0800>.json`. This Git-ignored JSON is a read-only audit record for a monitor on the same machine; it is not sent to GitHub, not posted to the monitor webhook, and never changes strategy targets. The schema and the off-machine monitor boundary are defined in `docs/erp-strategy-sop.md`.
 

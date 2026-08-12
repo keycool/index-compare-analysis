@@ -10,10 +10,14 @@ from orchestrator.erp_execution_cloud import (
     build_reference_allocation_plan,
     build_rebalance_plan,
     build_target_weights,
+    compute_hsi_erp_snapshot_from_shared_signal,
     compute_relative_snapshot,
+    derive_reentry_state_from_history,
     filter_signal_rows_as_of,
     validate_execution_payload,
     _REVERSE_REC,
+    apply_portfolio_deployment_layer,
+    _rotate_hs300_release,
     _derive_relative_recommendation,
     _fill_derived_relative_recommendations,
 )
@@ -102,7 +106,6 @@ def base_config():
             "val300": 100.0,
             "gro300": 100.0,
         },
-        "reentry_min_current_amount": -1.0,
         "trajectory_overlay": {
             "enabled": True,
             "hot": {"deviation_min": 4.0, "change_5d_min": 3.0, "multiplier": 0.6},
@@ -229,6 +232,93 @@ def health_relative_snapshot(date: str = "2026-07-21"):
 
 
 class ErpExecutionCloudLogicTest(unittest.TestCase):
+    def test_hsi_erp_shared_history_is_available_without_feishu_table(self):
+        snapshot = compute_hsi_erp_snapshot_from_shared_signal(
+            {
+                "records": [
+                    {"date": "2026-06-30", "hsi_erp": 2.0},
+                    {"date": "2026-07-31", "hsi_erp": 4.0},
+                ]
+            },
+            base_config()["hk_erp"],
+            datetime(2026, 8, 1, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(snapshot["date"], "2026-07-31")
+        self.assertEqual(snapshot["percentile"], 100.0)
+        self.assertEqual(snapshot["source"], "shared_hsi_erp_history")
+
+    def test_initial_empty_holdings_do_not_activate_reentry_gate(self):
+        targets = build_target_weights(
+            {"percentile": 50.0, "aggressive_weight": 0.50},
+            {"available": True, "percentile": 50.0, "aggressive_weight": 0.45},
+            base_relative_snapshot(),
+            base_config(),
+            {},
+            reentry_state={},
+        )
+
+        self.assertFalse(targets["hstech"]["reentry_blocked"])
+        self.assertFalse(targets["hstech"]["reentry_waiting_after"])
+        self.assertGreater(targets["hstech"]["target_weight"], 0.0)
+
+    def test_reentry_gate_starts_after_forced_exit_and_clears_at_threshold(self):
+        config = base_config()
+        config["aggressive_reentry_percentiles"]["hstech"] = 30.0
+        forced = base_relative_snapshot()
+        forced["percentiles"]["hstech_percentile"] = 96.0
+        first = build_target_weights(
+            {"percentile": 50.0, "aggressive_weight": 0.50},
+            {"available": True, "percentile": 50.0, "aggressive_weight": 0.45},
+            forced,
+            config,
+            {},
+            reentry_state={},
+        )
+        self.assertTrue(first["hstech"]["forced_exit"])
+        self.assertTrue(first["hstech"]["reentry_waiting_after"])
+
+        blocked = base_relative_snapshot()
+        blocked["percentiles"]["hstech_percentile"] = 50.0
+        second = build_target_weights(
+            {"percentile": 50.0, "aggressive_weight": 0.50},
+            {"available": True, "percentile": 50.0, "aggressive_weight": 0.45},
+            blocked,
+            config,
+            {},
+            reentry_state={"hstech": True},
+        )
+        self.assertTrue(second["hstech"]["reentry_blocked"])
+        self.assertEqual(second["hstech"]["target_weight"], 0.0)
+
+        eligible = base_relative_snapshot()
+        eligible["percentiles"]["hstech_percentile"] = 20.0
+        third = build_target_weights(
+            {"percentile": 50.0, "aggressive_weight": 0.50},
+            {"available": True, "percentile": 50.0, "aggressive_weight": 0.45},
+            eligible,
+            config,
+            {},
+            reentry_state={"hstech": True},
+        )
+        self.assertFalse(third["hstech"]["reentry_blocked"])
+        self.assertFalse(third["hstech"]["reentry_waiting_after"])
+        self.assertGreater(third["hstech"]["target_weight"], 0.0)
+
+    def test_reentry_state_can_be_rebuilt_from_signal_history(self):
+        config = base_config()
+        config["aggressive_reentry_percentiles"]["hstech"] = 30.0
+        rows = [
+            {"日期": "2026-01-01", "恒生科技分位": 96.0},
+            {"日期": "2026-01-02", "恒生科技分位": 50.0},
+        ]
+        state = derive_reentry_state_from_history(rows, config)
+        self.assertTrue(state["hstech"])
+
+        rows.append({"日期": "2026-01-03", "恒生科技分位": 20.0})
+        state = derive_reentry_state_from_history(rows, config)
+        self.assertFalse(state["hstech"])
+
     def build_targets(self, relative=None, config=None):
         return build_target_weights(
             {"percentile": 50.0, "aggressive_weight": 0.50},
@@ -293,6 +383,124 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
 
         self.assertLessEqual(targets["kc50"]["target_weight"], 0.01)
         self.assertEqual(targets["kc50"]["trajectory_multiplier"], 1.15)
+
+    def test_hs300_cap_release_rotates_only_to_qualified_satellites(self):
+        config = deployment_config()
+        config["portfolio_deployment"]["core_caps"]["hs300"]["breakpoints"] = [
+            {"percentile": 0, "weight": 0.10},
+            {"percentile": 100, "weight": 0.10},
+        ]
+        config["portfolio_deployment"]["core_rotation"] = {
+            "hs300": {
+                "enabled": True,
+                "default_weight": 0.05,
+                "breakpoints": [{"percentile": 0, "weight": 0.05}, {"percentile": 100, "weight": 0.05}],
+            }
+        }
+        relative = base_relative_snapshot()
+        relative["recommendations"]["zz500"] = REC["under"]
+        relative["recommendations"]["zz1000"] = REC["under"]
+        relative["recommendations"]["cyb"] = REC["under"]
+        relative["recommendations"]["kc50_300"] = REC["under"]
+        targets = build_target_weights(
+            {"percentile": 60.0, "aggressive_weight": 0.50},
+            {"available": False, "aggressive_weight": 0.0},
+            relative,
+            config,
+            {},
+        )
+
+        self.assertEqual(targets["hs300"]["core_cap"], 0.10)
+        self.assertGreater(targets["hs300"]["cap_released_to_rotation"], 0.0)
+        self.assertGreater(targets["sh50"].get("core_rotation_added", 0.0), 0.0)
+        self.assertEqual(targets["zz500"].get("core_rotation_added", 0.0), 0.0)
+        self.assertLessEqual(targets["sh50"]["target_weight"], config["alpha_bucket_caps"]["sh50"])
+        self.assertLessEqual(
+            sum(float(item.get("core_rotation_added", 0.0)) for item in targets.values()),
+            0.05,
+        )
+        self.assertAlmostEqual(sum(item["target_weight"] for item in targets.values()), 1.0, places=3)
+
+    def test_hs300_cap_release_stays_cash_without_qualified_satellites(self):
+        config = deployment_config()
+        config["portfolio_deployment"]["core_caps"]["hs300"]["breakpoints"] = [
+            {"percentile": 0, "weight": 0.10},
+            {"percentile": 100, "weight": 0.10},
+        ]
+        config["portfolio_deployment"]["core_rotation"] = {
+            "hs300": {
+                "enabled": True,
+                "default_weight": 0.05,
+                "breakpoints": [{"percentile": 0, "weight": 0.05}, {"percentile": 100, "weight": 0.05}],
+            }
+        }
+        relative = base_relative_snapshot()
+        for key in ("sh50_300", "val300", "gro300", "zz500", "zz1000", "cyb", "kc50_300"):
+            relative["recommendations"][key] = REC["under"]
+        targets = build_target_weights(
+            {"percentile": 60.0, "aggressive_weight": 0.50},
+            {"available": False, "aggressive_weight": 0.0},
+            relative,
+            config,
+            {},
+        )
+
+        self.assertEqual(targets["hs300"]["cap_released_to_rotation"], 0.0)
+        self.assertGreater(targets["hs300"]["cap_released_to_cash"], 0.0)
+        self.assertGreater(targets["cash"]["target_weight"], 0.5)
+
+    def test_deployment_scaling_reapplies_individual_bucket_caps(self):
+        config = deployment_config()
+        targets = {
+            "hs300": {"bucket": "hs300", "pool": "ashare", "target_weight": 0.40},
+            "sh50": {
+                "bucket": "sh50",
+                "pool": "ashare",
+                "signal": REC["neutral"],
+                "target_weight": 0.15,
+            },
+        }
+
+        scaled = apply_portfolio_deployment_layer(
+            targets,
+            {"percentile": 100.0},
+            {"available": False},
+            config,
+        )
+
+        self.assertLessEqual(scaled["sh50"]["target_weight"], 0.18)
+        self.assertGreater(scaled["sh50"]["bucket_cap_released"], 0.0)
+        self.assertAlmostEqual(sum(item["target_weight"] for item in scaled.values()), 1.0, places=3)
+
+    def test_core_rotation_rounding_never_exceeds_configured_budget(self):
+        config = deployment_config()
+        config["portfolio_deployment"]["core_rotation"] = {
+            "hs300": {
+                "enabled": True,
+                "default_weight": 0.05,
+                "breakpoints": [{"percentile": 0, "weight": 0.05}, {"percentile": 100, "weight": 0.05}],
+            }
+        }
+        targets = {
+            "val300": {"pool": "ashare", "signal": REC["neutral"], "target_weight": 0.0210},
+            "sh50": {"pool": "ashare", "signal": REC["neutral"], "target_weight": 0.1251},
+            "zz1000": {"pool": "ashare", "signal": REC["neutral"], "target_weight": 0.0161},
+            "kc50": {"pool": "ashare", "signal": REC["neutral"], "target_weight": 0.0267},
+        }
+
+        allocated = _rotate_hs300_release(
+            targets,
+            released_weight=0.20,
+            percentile=100.0,
+            deployment_config=config["portfolio_deployment"],
+            execution_config=config,
+        )
+
+        self.assertLessEqual(allocated, 0.05)
+        self.assertLessEqual(
+            round(sum(float(item.get("core_rotation_added", 0.0)) for item in targets.values()), 4),
+            0.05,
+        )
 
     def test_cyb_and_kc50_combined_cap_is_hard(self):
         config = base_config()
@@ -715,6 +923,13 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
                 "data_health": {"errors": [], "warnings": [], "dates": {}},
                 "relative": {"date": "2026-07-21", "recommendations": {"kc50_300": REC["under"]}},
             },
+            "strategy_state": {
+                "schema_version": 1,
+                "as_of": "2026-07-21",
+                "source": "derived_from_relative_history",
+                "bootstrap_policy": "unblocked_until_forced_exit",
+                "reentry_waiting": {"kc50": True},
+            },
             "portfolio": {
                 "reference_notional": 1_000_000,
                 "reference_currency": "CNY",
@@ -741,13 +956,37 @@ class ErpExecutionCloudLogicTest(unittest.TestCase):
         self.assertNotIn("current_equity_amount", snapshot["portfolio"])
         self.assertNotIn("top_actions", snapshot)
         self.assertEqual(snapshot["reference_allocations"][0]["reference_amount"], 500000.0)
-        self.assertEqual(snapshot["monitor_schema_version"], 2)
+        self.assertEqual(snapshot["monitor_schema_version"], 3)
         self.assertEqual(len(snapshot["reference_allocations"]), 2)
         self.assertEqual(snapshot["reference_allocations"][1]["anchor_signal_key"], "kc50_300")
         self.assertFalse(snapshot["reference_allocations"][1]["anchor_eligible"])
         self.assertEqual(snapshot["signals"]["relative"]["recommendations"]["kc50_300"], REC["under"])
+        self.assertTrue(snapshot["strategy_state"]["reentry_waiting"]["kc50"])
         self.assertEqual(snapshot["actual_allocation_contract"]["strategy_input"], "not_used")
         json.dumps(snapshot, ensure_ascii=False)
+
+    def test_validation_rejects_strategy_state_mismatch(self):
+        payload = {
+            "inputs": {
+                "execution_mode": "research",
+                "execution_config": {"data_quality": {"target_weight_tolerance": 0.0015}},
+            },
+            "signals": {"data_health": {"errors": []}},
+            "strategy_state": {
+                "schema_version": 1,
+                "source": "derived_from_relative_history",
+                "reentry_waiting": {"hstech": False},
+            },
+            "portfolio": {
+                "positions": [
+                    {"bucket": "hstech", "target_weight": 0.0, "reentry_waiting_after": True},
+                    {"bucket": "cash", "target_weight": 1.0},
+                ]
+            },
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "strategy_state reentry_waiting mismatch for hstech"):
+            validate_execution_payload(payload)
 
 
 

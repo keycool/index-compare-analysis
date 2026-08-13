@@ -333,7 +333,7 @@ For manual ERP runs, the current ERP-tagged Feishu holdings can also be archived
 - `CSI_FEISHU_APP_TOKEN`
 - `CSI_FEISHU_TABLE_ID`
 
-外部监测端还可通过 GitHub `repository_dispatch` 事件 `erp_monitor_refresh` 触发一次只读策略刷新。该入口固定为 `research`、不推送飞书摘要，并把 `client_payload.request_id` 回传到监控快照的 `trigger.request_id`。鉴权与调用示例见 `docs/erp-strategy-sop.md`。
+ERP workflow 不再独立按月定时运行。外部监测端应在确认比价系统已经发布最新 `merged_signal.json` 后，通过 GitHub `repository_dispatch` 事件 `erp_monitor_refresh` 触发一次只读策略刷新。该入口固定为 `research`、不推送飞书摘要，并把 `client_payload.request_id` 回传到监控快照的 `trigger.request_id`；日期门禁失败时会拒绝生成过期快照。鉴权与调用示例见 `docs/erp-strategy-sop.md`。
 
 ## GitHub Pages
 

@@ -6,7 +6,7 @@
 
 ## 作用
 
-这条 workflow 是独立于 `erp-relative-master-scheduler` 的月度执行流。
+这条 workflow 是由外部监测端按需触发的 ERP 执行流，独立于 `erp-relative-master-scheduler` 的网页生产流。
 
 它的职责只有 4 件事：
 
@@ -21,12 +21,11 @@
 - 更新 Relative 主报告
 - 部署 Vercel / Pages
 
-## 运行时间
+## 运行方式
 
-自动运行：
+当前不保留 ERP 自己的 `schedule`。推荐由外部监测端在确认 `merged_signal.json` 已更新到目标交易日后，调用 `repository_dispatch` 事件 `erp_monitor_refresh`。
 
-- 每月 13 号上午 09:00（Asia/Shanghai）
-- 每月 28 号上午 09:00（Asia/Shanghai）
+监测端触发不会推送飞书摘要，只生成标准容量计划和监控快照；严格日期门禁仍然有效。若共享 Relative 信号没有更新，workflow 会失败并拒绝生成过期的 ERP 草案。
 
 手动运行：
 
@@ -56,7 +55,7 @@ Relative 表：
 - `ERP_EXEC_ASSET_APP_TOKEN`
 - `ERP_EXEC_ASSET_TABLE_ID`
 
-月度日报专用 webhook：
+ERP 日报专用 webhook：
 
 - `ERP_DAILY_FEISHU_WEBHOOK_URL`
 - `ERP_DAILY_FEISHU_WEBHOOK_SECRET`

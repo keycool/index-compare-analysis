@@ -1,6 +1,6 @@
 # ERP 策略执行 SOP
 
-本文档说明 ERP 策略在 `erp-execution-cloud` 工作流中的运行口径、手动运行方式、监控接口配置和故障处理顺序。
+本文档说明 ERP 策略在 `erp-execution-cloud` 工作流中的运行口径、手动运行方式、监控接口配置和故障处理顺序。ERP workflow 不再独立定时运行，由外部监测端在共享比价信号更新后触发。
 
 ## 1. 策略定位
 
@@ -337,7 +337,9 @@ orchestrator/output/research/erp_strategy_attribution.md
 
 ## 10. 外部监测端触发策略刷新
 
-外部监测端可以调用 GitHub `repository_dispatch` 事件 `erp_monitor_refresh`，触发一次 ERP 标准配置刷新。该入口固定使用 `research` 模式、严格校验最新市场信号，并且不会推送飞书摘要；它只会生成标准容量计划并回传监控快照。
+ERP workflow 不再保留每月 13、28 日的独立 `schedule`。外部监测端应在确认 `erp-relative-master-scheduler` 已发布最新共享信号后，调用 GitHub `repository_dispatch` 事件 `erp_monitor_refresh`，触发一次 ERP 标准配置刷新。该入口固定使用 `research` 模式、严格校验最新市场信号，并且不会推送飞书摘要；它只会生成标准容量计划并回传监控快照。
+
+如果 `merged_signal.json` 的 Relative 最大记录日期仍早于上一交易日，workflow 会按设计失败，不会使用旧信号生成新的监控快照。此时应先恢复或重跑比价系统，再重新触发监测端入口。
 
 外部端需要一个仅授权给 `keycool/index-compare-analysis` 的 fine-grained PAT，权限为 `Contents: write`。令牌只保存在监测端，不写入仓库或 workflow。
 

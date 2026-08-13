@@ -19,8 +19,8 @@ class ErpExecutionWorkflowDispatchTest(unittest.TestCase):
         self.assertIn("ERP_MONITOR_REQUEST_ID: ${{ github.event.client_payload.request_id || '' }}", self.workflow_text)
 
     def test_external_monitor_dispatch_does_not_push_feishu_summary(self):
-        self.assertIn('elif [ "${{ github.event_name }}" = "workflow_dispatch" ]', self.workflow_text)
-        self.assertIn('event_name in ("schedule", "repository_dispatch") or push_summary', self.workflow_text)
+        self.assertIn('if [ "${{ github.event_name }}" = "workflow_dispatch" ]', self.workflow_text)
+        self.assertIn('strict_signal_gate = event_name == "repository_dispatch" or push_summary', self.workflow_text)
 
 
 if __name__ == "__main__":

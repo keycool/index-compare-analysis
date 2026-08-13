@@ -21,14 +21,12 @@ class ErpExecutionWorkflowDefaultsTest(unittest.TestCase):
         )
         self.assertNotIn("ERP_EXECUTION_MODE: ${{ inputs.execution_mode || 'rebalance' }}", text)
 
-    def test_monthly_schedule_avoids_top_of_hour(self):
+    def test_workflow_has_no_independent_schedule(self):
         text = self.workflow_text
 
-        self.assertIn("# 09:13 Asia/Shanghai on the 13th and 28th of every month.", text)
-        self.assertIn('- cron: "13 1 13 * *"', text)
-        self.assertIn('- cron: "13 1 28 * *"', text)
-        self.assertNotIn('- cron: "0 1 13 * *"', text)
-        self.assertNotIn('- cron: "0 1 28 * *"', text)
+        self.assertNotIn("  schedule:", text)
+        self.assertIn("repository_dispatch:", text)
+        self.assertIn("Manual dispatch remains available", text)
 
     def test_monthly_draft_requires_previous_trading_day_signal(self):
         text = self.workflow_text
@@ -38,7 +36,7 @@ class ErpExecutionWorkflowDefaultsTest(unittest.TestCase):
         self.assertIn("TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}", text)
         self.assertIn('"trade_cal"', text)
         self.assertIn("required_signal_date", text)
-        self.assertIn('strict_signal_gate = event_name in ("schedule", "repository_dispatch") or push_summary', text)
+        self.assertIn('strict_signal_gate = event_name == "repository_dispatch" or push_summary', text)
         self.assertIn("parse_signal_date", text)
         self.assertIn("max_record_date", text)
         self.assertIn("ERP record max date", text)

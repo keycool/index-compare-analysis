@@ -1,10 +1,8 @@
 name: erp-execution-cloud
 
 on:
-  schedule:
-    # 09:13 Asia/Shanghai on the 13th and 28th of every month.
-    - cron: "13 1 13 * *"
-    - cron: "13 1 28 * *"
+  # ERP is refreshed by the external monitor after it verifies the published
+  # Relative signal. Manual dispatch remains available for research/recovery.
   repository_dispatch:
     types: [erp_monitor_refresh]
   workflow_dispatch:
@@ -77,9 +75,7 @@ jobs:
 
       - name: Resolve push mode
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            echo "ERP_EXECUTION_PUSH_SUMMARY=true" >> "$GITHUB_ENV"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push_summary }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.push_summary }}" = "true" ]; then
             echo "ERP_EXECUTION_PUSH_SUMMARY=true" >> "$GITHUB_ENV"
           else
             echo "ERP_EXECUTION_PUSH_SUMMARY=false" >> "$GITHUB_ENV"
@@ -104,7 +100,7 @@ jobs:
           summary_lines = ["## ERP execution signal source", ""]
           event_name = "${{ github.event_name }}"
           push_summary = os.environ.get("ERP_EXECUTION_PUSH_SUMMARY") == "true"
-          strict_signal_gate = event_name in ("schedule", "repository_dispatch") or push_summary
+          strict_signal_gate = event_name == "repository_dispatch" or push_summary
           if not url:
               raise SystemExit("ERP_MERGED_SIGNAL_URL is required; refusing unverified Feishu fallback for pushed ERP summaries")
 

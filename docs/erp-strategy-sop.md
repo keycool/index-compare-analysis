@@ -339,7 +339,7 @@ orchestrator/output/research/erp_strategy_attribution.md
 
 ERP workflow 不再保留每月 13、28 日的独立 `schedule`。外部监测端应在确认 `erp-relative-master-scheduler` 已发布最新共享信号后，调用 GitHub `repository_dispatch` 事件 `erp_monitor_refresh`，触发一次 ERP 标准配置刷新。该入口固定使用 `research` 模式、严格校验最新市场信号，并且不会推送飞书摘要；它只会生成标准容量计划并回传监控快照。
 
-如果 `merged_signal.json` 的 Relative 最大记录日期仍早于上一交易日，workflow 会按设计失败，不会使用旧信号生成新的监控快照。此时应先恢复或重跑比价系统，再重新触发监测端入口。
+如果 `merged_signal.json` 的 Relative 最大记录日期仍早于上一交易日，ERP workflow 会按设计拒绝生成新的监控快照。比价 workflow 的预检会单独检查 Vercel；若 Vercel 返回非 `200`，即使当天没有新数据，也会复用已提交的报告恢复网页。若共享信号本身需要更新，则应先恢复或重跑比价系统，再重新触发监测端入口。
 
 外部端需要一个仅授权给 `keycool/index-compare-analysis` 的 fine-grained PAT，权限为 `Contents: write`。令牌只保存在监测端，不写入仓库或 workflow。
 

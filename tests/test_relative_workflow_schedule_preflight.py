@@ -53,6 +53,11 @@ class RelativeWorkflowSchedulePreflightTest(unittest.TestCase):
         self.assertIn("time.sleep(retry_sleep_seconds)", self.workflow_text)
         self.assertIn("no_new_tushare_data", self.workflow_text)
 
+    def test_unhealthy_vercel_can_restore_committed_site_without_new_data(self):
+        self.assertIn('vercel_status, vercel_error = fetch_http_status(vercel_canonical_url)', self.workflow_text)
+        self.assertIn('restore_site = True', self.workflow_text)
+        self.assertIn('if restore_site or (is_manual and restore_site_on_skip):', self.workflow_text)
+
     def test_schedule_skip_blocks_calculation_and_deploy(self):
         self.assertIn('write_output("should_run", "false")', self.workflow_text)
         self.assertIn("formal calculation, web data update, and Vercel deploy are skipped", self.workflow_text)

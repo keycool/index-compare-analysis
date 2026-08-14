@@ -293,8 +293,11 @@ jobs:
 
           for attempt in range(1, attempts + 1):
               deployed_latest_date, fetch_error = fetch_deployed_latest_date()
+              vercel_status, vercel_error = fetch_http_status(vercel_canonical_url)
+              if vercel_status != "200":
+                  restore_site = True
+                  reason = f"vercel_unhealthy_{vercel_status or 'unknown'}_restore_site"
               if not is_manual and deployed_latest_date and deployed_latest_date >= latest_trade_date:
-                  vercel_status, vercel_error = fetch_http_status(vercel_canonical_url)
                   should_run = False
                   if vercel_status == "200":
                       reason = "no_new_tushare_data"
@@ -340,7 +343,7 @@ jobs:
                   missing_reasons.append(f"all_a_daily_rows_below_{min_all_a_rows}")
               reason = ",".join(missing_reasons)
               write_output("should_run", "false")
-              if is_manual and restore_site_on_skip:
+              if restore_site or (is_manual and restore_site_on_skip):
                   write_output("restore_site", "true")
               write_output("reason", reason)
               write_output("latest_trade_date", target_trade_date_text if not missing_index_codes else "none")
@@ -359,10 +362,10 @@ jobs:
                   f"- All-A daily rows: `{all_a_daily_rows}`",
                   f"- All-A minimum rows: `{min_all_a_rows}`",
                   f"- Attempts: `{attempts}`",
-                  f"- Decision: `{'restore_site' if is_manual and restore_site_on_skip else 'skip'}`",
+                  f"- Decision: `{'restore_site' if restore_site or (is_manual and restore_site_on_skip) else 'skip'}`",
                   f"- Reason: `{reason}`",
                   "- Effect: formal calculation and web data update are skipped; existing committed site data is redeployed."
-                  if is_manual and restore_site_on_skip
+                  if restore_site or (is_manual and restore_site_on_skip)
                   else "- Effect: formal calculation, web data update, and Vercel deploy are skipped.",
               ])
               raise SystemExit(0)

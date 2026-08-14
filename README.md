@@ -310,7 +310,7 @@ For manual ERP runs, the current ERP-tagged Feishu holdings can also be archived
 
 - 自动运行：周一至周五北京时间 `23:18`。
 - 自动运行前会检查上交所交易日、全 A 日线至少 `5,000` 条、8 个 A 股决策指数和 `HSI` / `HKTECH` 港股指数均已更新；数据未就绪时最多再检查 2 次，每次间隔 10 分钟。
-- 非交易日或数据仍未就绪时，本次正式计算、网页数据更新和 Vercel / GitHub Pages 部署都会跳过。
+- 非交易日或数据仍未就绪时，本次正式计算和网页数据更新会跳过；如果 Vercel 检查返回非 `200`，则复用已提交的报告数据恢复站点，不用等待新数据。
 - 代码 `push` 不再触发该生产 workflow，避免提交覆盖正在等待数据的定时任务。需要立即更新或恢复网站时，请在 GitHub Actions 手动运行 `erp-relative-master-scheduler`；手动运行可选择在预检跳过时恢复已有页面。
 
 主调度 workflow 以当前仓库为入口，并在运行时额外 checkout `Equity Risk Premium` 仓库，然后顺序执行：

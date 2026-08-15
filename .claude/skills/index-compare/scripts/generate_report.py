@@ -14,6 +14,7 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from xml.etree import ElementTree
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -321,6 +322,123 @@ def fetch_us10y_monthly_history() -> Optional[pd.DataFrame]:
     return df.reset_index(drop=True)
 
 
+def fetch_us10y_daily_history(start_date: pd.Timestamp, end_date: pd.Timestamp) -> Optional[pd.DataFrame]:
+    """Fetch daily 10Y Treasury rates from the official Treasury XML feed."""
+    rows = []
+    data_ns = 'http://schemas.microsoft.com/ado/2007/08/dataservices'
+    metadata_ns = 'http://schemas.microsoft.com/ado/2007/08/dataservices/metadata'
+    for year in range(start_date.year, end_date.year + 1):
+        url = (
+            'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml'
+            f'?data=daily_treasury_yield_curve&field_tdr_date_value={year}'
+        )
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            root = ElementTree.fromstring(response.content)
+        except Exception:
+            return None
+
+        for properties in root.iter(f'{{{metadata_ns}}}properties'):
+            date_node = properties.find(f'{{{data_ns}}}NEW_DATE')
+            rate_node = properties.find(f'{{{data_ns}}}BC_10YEAR')
+            if date_node is None or rate_node is None or not date_node.text or not rate_node.text:
+                continue
+            try:
+                rate_date = pd.Timestamp(date_node.text[:10])
+                rate = float(rate_node.text)
+            except (TypeError, ValueError):
+                continue
+            if start_date <= rate_date <= end_date and rate > 0:
+                rows.append({'date': rate_date, 'us10y': rate})
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows).drop_duplicates('date').sort_values('date').reset_index(drop=True)
+
+
+def build_hsi_erp_daily_display_history(
+    index_df: Optional[pd.DataFrame],
+    monthly_payload: Optional[Tuple[pd.DataFrame, Dict[str, Any]]],
+) -> Optional[Tuple[pd.DataFrame, Dict[str, Any]]]:
+    """Build a six-month daily display series without changing the monthly signal."""
+    official_pe = fetch_official_hsi_monthly_pe_recent()
+    if official_pe is None or official_pe.empty or index_df is None or 'HSI' not in index_df.columns:
+        return None
+
+    hsi = index_df[['HSI']].reset_index()
+    hsi.columns = ['date', 'HSI']
+    hsi['date'] = pd.to_datetime(hsi['date'], errors='coerce')
+    hsi['HSI'] = pd.to_numeric(hsi['HSI'], errors='coerce')
+    hsi = hsi.dropna().sort_values('date').reset_index(drop=True)
+    if hsi.empty:
+        return None
+
+    end_date = hsi['date'].iloc[-1]
+    start_date = end_date - pd.DateOffset(months=6)
+    display_hsi = hsi[hsi['date'] >= start_date].copy()
+    if display_hsi.empty:
+        return None
+
+    official_pe = official_pe.copy()
+    official_pe['date'] = pd.to_datetime(official_pe['date'], errors='coerce')
+    official_pe['hsi_pe'] = pd.to_numeric(official_pe['hsi_pe'], errors='coerce')
+    official_pe = official_pe.dropna().sort_values('date')
+    display_hsi = pd.merge_asof(
+        display_hsi,
+        official_pe[['date', 'hsi_pe']].rename(columns={'date': 'anchor_date'}),
+        left_on='date',
+        right_on='anchor_date',
+        direction='backward',
+    )
+    display_hsi = display_hsi.dropna(subset=['anchor_date', 'hsi_pe'])
+    if display_hsi.empty:
+        return None
+
+    anchor_prices = hsi[['date', 'HSI']].rename(columns={'date': 'anchor_price_date', 'HSI': 'anchor_price'})
+    display_hsi = pd.merge_asof(
+        display_hsi.sort_values('anchor_date'),
+        anchor_prices.sort_values('anchor_price_date'),
+        left_on='anchor_date',
+        right_on='anchor_price_date',
+        direction='backward',
+    )
+    display_hsi = display_hsi.dropna(subset=['anchor_price'])
+    display_hsi['hsi_pe'] = display_hsi['HSI'] / (display_hsi['anchor_price'] / display_hsi['hsi_pe'])
+
+    rates = fetch_us10y_daily_history(start_date, end_date)
+    if rates is None or rates.empty:
+        return None
+    display_hsi = pd.merge_asof(
+        display_hsi.sort_values('date'),
+        rates.sort_values('date'),
+        on='date',
+        direction='backward',
+    )
+    display_hsi = display_hsi.dropna(subset=['us10y']).sort_values('date').reset_index(drop=True)
+    if display_hsi.empty:
+        return None
+
+    display_hsi['earnings_yield'] = 100.0 / display_hsi['hsi_pe']
+    display_hsi['hsi_erp'] = display_hsi['earnings_yield'] - display_hsi['us10y']
+    display_hsi['date'] = pd.to_datetime(display_hsi['date'])
+
+    base_summary = dict(monthly_payload[1]) if monthly_payload else {}
+    latest = display_hsi.iloc[-1]
+    base_summary.update({
+        'date': latest['date'].strftime('%Y-%m-%d'),
+        'latest_value': float(latest['hsi_erp']),
+        'hsi_pe': float(latest['hsi_pe']),
+        'hsi_index': float(latest['HSI']),
+        'earnings_yield': float(latest['earnings_yield']),
+        'us10y': float(latest['us10y']),
+        'display_historical_mean': float(display_hsi['hsi_erp'].mean()),
+        'display_sample_count': int(len(display_hsi)),
+        'display_methodology': 'official monthly HSI PE anchor + daily HSI close + official daily US 10Y',
+    })
+    return display_hsi, base_summary
+
+
 def build_hsi_erp_history(index_df: Optional[pd.DataFrame] = None) -> Optional[Tuple[pd.DataFrame, Dict[str, Any]]]:
     """构建恒生 ERP 月度历史序列。"""
     pe_df = fetch_hsi_monthly_pe_history()
@@ -409,17 +527,18 @@ def create_hsi_erp_history_chart(history_df: pd.DataFrame, summary: Dict[str, An
             secondary_y=True,
         )
 
+    display_mean = summary.get('display_historical_mean', summary['historical_mean'])
     fig.add_hline(
-        y=summary['historical_mean'],
+        y=display_mean,
         line_dash='dash',
         line_color='rgba(75,75,75,0.55)',
-        annotation_text=f"历史均值: {summary['historical_mean']:.2f}",
+        annotation_text=f"展示区间均值: {display_mean:.2f}",
         annotation_position='right',
     )
 
     fig.update_layout(
         title=dict(
-            text='恒生股权溢价指数参考版',
+            text='恒生股权溢价指数（最近半年日频展示）',
             x=0.5,
             font=dict(size=15, color='#334155'),
         ),
@@ -472,7 +591,7 @@ def create_hsi_erp_history_chart(history_df: pd.DataFrame, summary: Dict[str, An
 
 
 def generate_hsi_erp_history_html(payload: Optional[Tuple[pd.DataFrame, Dict[str, Any]]]) -> str:
-    """生成恒生 ERP 月度历史模块。"""
+    """生成恒生 ERP 历史模块。"""
     if not payload:
         return ''
 
@@ -494,6 +613,11 @@ def generate_hsi_erp_history_html(payload: Optional[Tuple[pd.DataFrame, Dict[str
         f"{summary['date']}，恒生 ERP 最新值 {summary['latest_value']:.2f}，"
         f"历史均值 {summary['historical_mean']:.2f}，位于历史 {summary['percentile']:.2f}% 分位。"
     )
+    display_note = (
+        f"图表展示最近半年 {summary.get('display_sample_count', len(history_df))} 个交易日；"
+        "使用官方月末 HSI PE 锚点、恒指日收盘价和官方日度美债收益率。"
+        "历史分位与 ERP 执行信号仍保持原月频口径。"
+    )
     return f"""
         <div class="charts-section overview-section">
             <div class="section-header">
@@ -506,7 +630,7 @@ def generate_hsi_erp_history_html(payload: Optional[Tuple[pd.DataFrame, Dict[str
                 </div>
             </div>
             <div class="overview-subtitle" style="margin:-4px 0 16px 42px;color:#64748b;">
-                值越大代表投资价值越大；当前采用月度口径。
+                {display_note}
             </div>
             <div class="chart-wrapper">{chart_html}</div>
             <div class="macro-kpi-bar">
@@ -1606,8 +1730,8 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     use_reference_chart_style = True
 
     # 创建价格走势图
-    price_chart = create_price_chart(df, indices_config, recent_days, light_theme=use_reference_chart_style)
-    price_chart_html = price_chart.to_html(full_html=False, include_plotlyjs='cdn')
+    # The standalone index-price panel is intentionally hidden from the page.
+    price_chart_html = ''
     price_summary_items = []
     for code in ['HS300', 'ZZ500', 'ZZ1000', 'ZZA500', 'SH50']:
         if code in df.columns:
@@ -1847,10 +1971,13 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
     external_ratio_html = ''.join([ratio_chart_blocks.get(code, '') for code in external_codes if code in ratio_chart_blocks])
 
     # 分组指标卡与分析
-    core_analysis_html = generate_analysis_html(conclusions, codes=core_codes)
-    feature_analysis_html = generate_analysis_html(conclusions, codes=feature_codes)
-    external_analysis_html = generate_analysis_html(conclusions, codes=external_codes)
-    hsi_erp_history_html = generate_hsi_erp_history_html(build_hsi_erp_history(df))
+    all_analysis_codes = core_codes + feature_codes + external_codes
+    all_analysis_html = generate_analysis_html(conclusions, codes=all_analysis_codes)
+    monthly_hsi_erp_payload = build_hsi_erp_history(df)
+    display_hsi_erp_payload = build_hsi_erp_daily_display_history(df, monthly_hsi_erp_payload)
+    hsi_erp_history_html = generate_hsi_erp_history_html(
+        display_hsi_erp_payload or monthly_hsi_erp_payload
+    )
     external_framework_html = generate_external_market_framework_html()
 
     # 组装完整HTML - 金融终端风格
@@ -2268,6 +2395,11 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             flex-wrap: wrap;
         }}
 
+        /* The standalone index-price panel is kept out of the production layout. */
+        .charts-section:has([data-price-range-toolbar]) {{
+            display: none;
+        }}
+
         .price-range-button {{
             appearance: none;
             border: 1px solid rgba(148,163,184,0.35);
@@ -2619,7 +2751,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="ratio-charts-grid">
                 {core_ratio_html}
             </div>
-            {core_analysis_html}
         </div>
 
         <!-- 特色指数对比 -->
@@ -2634,7 +2765,6 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="ratio-charts-grid">
                 {feature_ratio_html}
             </div>
-            {feature_analysis_html}
         </div>
 
         <!-- \u5916\u56f4\u80a1\u5e02\u6307\u6570 -->
@@ -2650,7 +2780,18 @@ def generate_html_report(df, conclusions, output_dir, mode='production'):
             <div class="ratio-charts-grid">
                 {external_ratio_html}
             </div>
-            {external_analysis_html}
+        </div>
+
+        <!-- Unified analysis cards -->
+        <div class="charts-section">
+            <div class="section-header">
+                <div class="section-title">
+                    <div class="section-icon">▣</div>
+                    <h2>全部比价分析</h2>
+                </div>
+            </div>
+            <div class="overview-subtitle" style="margin:-6px 0 16px 40px;color:#64748b;">主要指数、特色指数与外围市场的分析结论统一汇总于此。</div>
+            {all_analysis_html}
         </div>
 
         <div class="risk-banner">

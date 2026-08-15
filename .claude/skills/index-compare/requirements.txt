@@ -4,5 +4,6 @@ numpy
 plotly
 scipy
 requests
+xlrd==2.0.2
 openpyxl
 pypdf

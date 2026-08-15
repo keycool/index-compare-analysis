@@ -1,0 +1,4 @@
+pandas
+requests
+tushare
+xlrd==2.0.2
